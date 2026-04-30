@@ -677,11 +677,26 @@ Indexed files: 183
 
 ---
 
-# Ticket 8 — Implement important file reader
+# Ticket 8 — Implement prioritized important file reader
 
 ## Objective
 
-Read a curated set of important files to provide grounded context to the LLM.
+Read a curated, budgeted set of important files to provide grounded context to the LLM.
+
+The goal is not to duplicate stack detection. `detectStack` and `detectCommands` already infer framework, tooling, and commands.
+
+This reader should focus primarily on files that reveal:
+
+```txt
+codebase architecture
+application entry points
+domain/business logic
+models, schemas, and types
+data access patterns
+UI/component conventions
+testing patterns
+existing agent/developer instructions
+```
 
 ## Files
 
@@ -693,55 +708,372 @@ src/core/repo-scanner/read-important-files.ts
 
 ## Requirements
 
-Read files like:
+Implement:
+
+```ts
+export type ImportantFile = {
+  path: string;
+  reason: string;
+  content: string;
+};
+
+export async function readImportantFiles(
+  repoRoot: string,
+): Promise<ImportantFile[]>;
+```
+
+The reader should discover, prioritize, and read a small set of useful files from the repo.
+
+## Priority 1 — Existing agent/developer instructions
+
+Read if present:
+
+```txt
+AGENTS.md
+CLAUDE.md
+```
+
+Reason examples:
+
+```txt
+Existing agent instruction file
+Existing Claude instruction file
+```
+
+## Priority 2 — Product/project documentation
+
+Read if present, but keep capped:
 
 ```txt
 README.md
 docs/**/*.md
-AGENTS.md
-CLAUDE.md
-package.json
+```
+
+Reason examples:
+
+```txt
+Project README
+Project documentation
+```
+
+Documentation is useful for product intent, but may be stale or verbose. It should not consume most of the content budget.
+
+## Priority 3 — Application entry points
+
+Prioritize files that reveal routing, layouts, pages, and API boundaries:
+
+```txt
+app/layout.*
+app/page.*
+app/**/page.*
+app/**/layout.*
+app/**/route.*
+src/app/layout.*
+src/app/page.*
+src/app/**/page.*
+src/app/**/layout.*
+src/app/**/route.*
+pages/_app.*
+pages/index.*
+pages/api/**
+src/pages/**
+```
+
+Reason examples:
+
+```txt
+Application layout entry point
+Application page/route entry point
+API route entry point
+```
+
+## Priority 4 — Domain, model, schema, and data-access files
+
+Prioritize files that reveal business logic, data models, validation schemas, and persistence boundaries:
+
+```txt
+src/core/**
+src/domain/**
+src/domains/**
+src/models/**
+src/entities/**
+src/schemas/**
+src/types/**
+src/lib/**
+lib/**
+db/**
+src/db/**
+prisma/schema.prisma
+drizzle/**
+supabase/**
+```
+
+Reason examples:
+
+```txt
+Domain/business logic file
+Model/schema/type definition file
+Data access or persistence file
+Infrastructure/helper file
+```
+
+## Priority 5 — Representative UI/component files
+
+Read a representative sample from:
+
+```txt
+components/**
+src/components/**
+```
+
+Prefer:
+
+```txt
+components/ui/**
+src/components/ui/**
+components/layout/**
+src/components/layout/**
+components/navigation/**
+src/components/navigation/**
+```
+
+Reason examples:
+
+```txt
+Representative UI component file
+Representative layout/navigation component file
+```
+
+## Priority 6 — Representative tests
+
+Read a small sample from:
+
+```txt
+tests/**
+__tests__/**
+*.test.*
+*.spec.*
+```
+
+Reason examples:
+
+```txt
+Representative test file
+```
+
+## Priority 7 — Small supporting config files only
+
+Config files should be treated as supporting evidence, not core context.
+
+Consider only small files such as:
+
+```txt
+components.json
 tsconfig.json
 next.config.*
 tailwind.config.*
-components.json
+package.json
 ```
 
-Also read small representative files from:
+Reason examples:
 
 ```txt
-app/**
-src/**
-components/**
-lib/**
+Design system or component alias configuration
+TypeScript path alias configuration
+Framework configuration with possible repo-specific behavior
+Tailwind theme/configuration
+Package scripts and dependency manifest
 ```
 
-Limit file size per file.
+Do not include lockfiles.
 
-Suggested limits:
+Do not allow config files to dominate the context budget.
 
-```txt
-Max single file: 20 KB
-Max total selected content: 120 KB
-```
+## Budget rules
 
-Return:
+Use hard limits:
 
 ```ts
-type ImportantFile = {
-  path: string
-  reason: string
-  content: string
-}
+const MAX_SINGLE_FILE_BYTES = 20 * 1024;
+const MAX_TOTAL_CONTENT_BYTES = 120 * 1024;
+const MAX_CONFIG_TOTAL_BYTES = 20 * 1024;
+```
+
+Behavior:
+
+```txt
+Skip files larger than MAX_SINGLE_FILE_BYTES.
+Stop reading once MAX_TOTAL_CONTENT_BYTES would be exceeded.
+Stop reading config files once MAX_CONFIG_TOTAL_BYTES would be exceeded.
+Do not silently read huge files.
+```
+
+## Binary and noisy file rules
+
+Only read likely text/source files.
+
+Allowed extensions should include:
+
+```txt
+.ts
+.tsx
+.js
+.jsx
+.mjs
+.cjs
+.json
+.md
+.mdx
+.css
+.scss
+.sql
+.prisma
+.yaml
+.yml
+.toml
+```
+
+Skip binary/noisy files such as:
+
+```txt
+.png
+.jpg
+.jpeg
+.gif
+.webp
+.svg
+.ico
+.mp4
+.mov
+.woff
+.woff2
+.ttf
+.pdf
+.zip
+.tar
+.gz
+.sqlite
+.db
+```
+
+Also skip generated/noisy folders:
+
+```txt
+node_modules
+.next
+dist
+build
+coverage
+.git
+.bridger
+.agents
+```
+
+## Behavior
+
+The implementation should:
+
+```txt
+1. Discover candidate files using deterministic filesystem heuristics.
+2. Assign each candidate a priority and reason.
+3. Deduplicate candidates by path.
+4. Sort by priority, then by path.
+5. Read files as UTF-8 only if they are within size limits and allowed extensions.
+6. Track total content bytes.
+7. Track config content bytes separately.
+8. Return selected files with repo-relative paths.
+9. Handle missing files gracefully.
+10. Never call the LLM.
+```
+
+## Suggested internal candidate type
+
+```ts
+type ImportantFileCandidate = {
+  path: string;
+  reason: string;
+  priority: number;
+  category:
+    | "agent"
+    | "docs"
+    | "entrypoint"
+    | "domain"
+    | "component"
+    | "test"
+    | "config";
+};
 ```
 
 ## Acceptance criteria
 
 - Does not read huge files.
 - Does not read binary files.
-- Prioritizes README/package/config/docs.
+- Prioritizes code architecture, domain/model/schema files, app entry points, representative components, and tests over config files.
+- Includes existing agent/developer instructions when present.
+- Includes README/docs when present, but capped.
+- Includes only small supporting config files.
+- Caps total config content separately from total content.
+- Does not include lockfiles.
+- Does not include `.bridger` or `.agents` generated files.
 - Returns paths relative to repo root.
 - Handles missing files gracefully.
+- Does not call the LLM.
+- Add at least one Vitest test using a fixture repo.
+
+## Test expectations
+
+Create or update a fixture repo with files such as:
+
+```txt
+tests/fixtures/important-files-basic/
+  README.md
+  AGENTS.md
+  package.json
+  tsconfig.json
+  next.config.ts
+  pnpm-lock.yaml
+  src/
+    app/
+      layout.tsx
+      page.tsx
+      api/
+        health/
+          route.ts
+    domains/
+      billing/
+        schema.ts
+        service.ts
+    lib/
+      supabase.ts
+    components/
+      ui/
+        button.tsx
+      navigation/
+        sidebar.tsx
+    __tests__/
+      billing.test.ts
+  public/
+    logo.png
+  .bridger/
+    generated/
+      architecture.md
+  .agents/
+    skills/
+      generated-skill/
+        SKILL.md
+```
+
+Tests should verify:
+
+- Important files include `AGENTS.md`, `README.md`, app entry points, domain/schema/service files, lib files, representative components, and tests.
+- Important files do not include lockfiles.
+- Important files do not include binary files such as `public/logo.png`.
+- Important files do not include `.bridger` or `.agents` files.
+- Large files above `MAX_SINGLE_FILE_BYTES` are skipped.
+- Returned paths are relative to the repo root.
+- Config files are included only if small.
+- Config content does not exceed `MAX_CONFIG_TOTAL_BYTES`.
+- Total returned content does not exceed `MAX_TOTAL_CONTENT_BYTES`.
 
 ---
 
