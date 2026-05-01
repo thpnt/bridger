@@ -27,8 +27,10 @@ export const RepoContextImportantFileSchema = z.object({
 });
 
 export const RepoContextGeneratedDocsSchema = z.object({
+  repoAnalysisPath: RepoRelativePathSchema,
   architecturePath: RepoRelativePathSchema,
   conventionsPath: RepoRelativePathSchema,
+  businessLogicPath: RepoRelativePathSchema,
   testingPath: RepoRelativePathSchema,
   agentRulesPath: RepoRelativePathSchema,
   ticketTemplatePath: RepoRelativePathSchema,
