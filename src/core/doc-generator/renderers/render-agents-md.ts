@@ -1,4 +1,4 @@
-import { RepoContextSchema, type RepoContext } from "../models/repo-context";
+import { RepoContextSchema, type RepoContext } from "../../models/repo-context";
 
 export type RenderAgentsMdInput = {
   repoContext: RepoContext;

@@ -11,6 +11,7 @@ import {
 } from "../src/core/repo-scanner/important-file-rules";
 import { buildFileIndex } from "../src/core/repo-scanner/build-file-index";
 import { readImportantFiles } from "../src/core/repo-scanner/read-important-files";
+import { getGeneratedKnowledgeDocRelativePath } from "../src/core/models/generated-paths";
 
 let tempDir = "";
 
@@ -39,7 +40,10 @@ async function createFixtureRepo(): Promise<string> {
   await writeFixtureFile("src/components/navigation/sidebar.tsx", "export function Sidebar() {\n  return <nav>Sidebar</nav>;\n}\n");
   await writeFixtureFile("src/__tests__/billing.test.ts", "import { describe, expect, it } from 'vitest';\n\ndescribe('billing', () => {\n  it('works', () => {\n    expect(true).toBe(true);\n  });\n});\n");
   await writeFixtureFile("public/logo.png", Buffer.from([0, 1, 2, 3]));
-  await writeFixtureFile(".bridger/generated/architecture.md", "# Generated architecture\n");
+  await writeFixtureFile(
+    getGeneratedKnowledgeDocRelativePath("architecture"),
+    "# Generated architecture\n",
+  );
   await writeFixtureFile(".agents/skills/generated-skill/SKILL.md", "# Generated skill\n");
   await writeFixtureFile(
     "src/domains/large/huge-service.ts",
@@ -104,7 +108,9 @@ describe("readImportantFiles", () => {
     expect(paths).not.toEqual(expect.arrayContaining(["pnpm-lock.yaml"]));
     expect(paths).not.toEqual(expect.arrayContaining(["public/logo.png"]));
     expect(paths).not.toEqual(
-      expect.arrayContaining([".bridger/generated/architecture.md"]),
+      expect.arrayContaining([
+        getGeneratedKnowledgeDocRelativePath("architecture"),
+      ]),
     );
     expect(paths).not.toEqual(
       expect.arrayContaining([".agents/skills/generated-skill/SKILL.md"]),
@@ -118,5 +124,20 @@ describe("readImportantFiles", () => {
     expect(configContentBytes).toBeLessThanOrEqual(
       IMPORTANT_FILE_BUDGETS.maxConfigTotalBytes,
     );
+  });
+
+  it("skips files that disappear after indexing", async () => {
+    const fixtureRoot = await createFixtureRepo();
+    const fileIndex = await buildFileIndex(fixtureRoot);
+
+    await fs.remove(path.join(fixtureRoot, "README.md"));
+
+    const importantFiles = await readImportantFiles({
+      repoRoot: fixtureRoot,
+      fileIndex,
+    });
+
+    expect(importantFiles.some((entry) => entry.path === "README.md")).toBe(false);
+    expect(importantFiles.length).toBeGreaterThan(0);
   });
 });

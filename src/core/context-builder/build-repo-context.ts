@@ -2,40 +2,16 @@ import { buildFileIndex } from "../repo-scanner/build-file-index";
 import { detectCommands } from "../repo-scanner/detect-commands";
 import { detectStack } from "../repo-scanner/detect-stack";
 import { readImportantFiles } from "../repo-scanner/read-important-files";
-import { RepoRelativePathSchema } from "../models/paths";
-import type {
-  RepoContext,
-  RepoContextGeneratedDocs,
-} from "../models/repo-context";
+import {
+  buildGeneratedDocPaths,
+  getTicketTemplateRelativePath,
+} from "../models/generated-paths";
+import type { RepoContext } from "../models/repo-context";
 import { RepoContextSchema } from "../models/repo-context";
 import {
   RepoContextBuildArtifactsSchema,
   type RepoContextBuildArtifacts,
 } from "../models/repo-context-build";
-
-function getGeneratedDocPaths(): RepoContextGeneratedDocs {
-  return {
-    repoAnalysisPath: RepoRelativePathSchema.parse(
-      ".bridger/generated/repo-analysis.md",
-    ),
-    architecturePath: RepoRelativePathSchema.parse(
-      ".bridger/generated/architecture.md",
-    ),
-    conventionsPath: RepoRelativePathSchema.parse(
-      ".bridger/generated/conventions.md",
-    ),
-    businessLogicPath: RepoRelativePathSchema.parse(
-      ".bridger/generated/business-logic.md",
-    ),
-    testingPath: RepoRelativePathSchema.parse(".bridger/generated/testing.md"),
-    agentRulesPath: RepoRelativePathSchema.parse(
-      ".bridger/generated/agent-rules.md",
-    ),
-    ticketTemplatePath: RepoRelativePathSchema.parse(
-      ".bridger/generated/ticket-template.md",
-    ),
-  };
-}
 
 export async function buildRepoContextArtifacts(
   repoRoot: string,
@@ -57,7 +33,10 @@ export async function buildRepoContextArtifacts(
       path: file.path,
       reason: file.reason,
     })),
-    generatedDocs: getGeneratedDocPaths(),
+    generatedDocs: {
+      ...buildGeneratedDocPaths(),
+      ticketTemplatePath: getTicketTemplateRelativePath(),
+    },
   });
 
   return RepoContextBuildArtifactsSchema.parse({

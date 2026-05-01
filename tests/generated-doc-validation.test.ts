@@ -1,144 +1,77 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  assertAgentRulesDoc,
-  REQUIRED_AGENT_RULES_SECTIONS,
-} from "../src/core/context-builder/generate-agent-rules-doc";
-import {
-  assertArchitectureDoc,
-  REQUIRED_ARCHITECTURE_SECTIONS,
-} from "../src/core/context-builder/generate-architecture-doc";
-import {
-  assertBusinessLogicDoc,
-  REQUIRED_BUSINESS_LOGIC_SECTIONS,
-} from "../src/core/context-builder/generate-business-logic-doc";
-import {
-  assertConventionsDoc,
-  REQUIRED_CONVENTIONS_SECTIONS,
-} from "../src/core/context-builder/generate-conventions-doc";
-import {
-  assertRepoAnalysisDoc,
-  REQUIRED_REPO_ANALYSIS_SECTIONS,
-} from "../src/core/context-builder/generate-repo-analysis-doc";
-import {
-  assertTestingDoc,
-  REQUIRED_TESTING_SECTIONS,
-} from "../src/core/context-builder/generate-testing-doc";
+  validateMarkdownSections,
+} from "../src/core/doc-generator/validation/markdown-section-validation";
+import { KNOWLEDGE_DOC_SPECS } from "../src/core/doc-generator/doc-specs";
+
+const cases = [
+  {
+    name: "repo analysis",
+    displayName: KNOWLEDGE_DOC_SPECS.repoAnalysis.displayName,
+    requiredSections: KNOWLEDGE_DOC_SPECS.repoAnalysis.requiredSections,
+    missingSection: "## Unknowns",
+  },
+  {
+    name: "architecture",
+    displayName: KNOWLEDGE_DOC_SPECS.architecture.displayName,
+    requiredSections: KNOWLEDGE_DOC_SPECS.architecture.requiredSections,
+    missingSection: "## App structure",
+  },
+  {
+    name: "conventions",
+    displayName: KNOWLEDGE_DOC_SPECS.conventions.displayName,
+    requiredSections: KNOWLEDGE_DOC_SPECS.conventions.requiredSections,
+    missingSection: "## Things agents should avoid",
+  },
+  {
+    name: "business logic",
+    displayName: KNOWLEDGE_DOC_SPECS.businessLogic.displayName,
+    requiredSections: KNOWLEDGE_DOC_SPECS.businessLogic.requiredSections,
+    missingSection: "## Evidence map",
+  },
+  {
+    name: "testing",
+    displayName: KNOWLEDGE_DOC_SPECS.testing.displayName,
+    requiredSections: KNOWLEDGE_DOC_SPECS.testing.requiredSections,
+    missingSection: "## Testing gaps and unknowns",
+  },
+  {
+    name: "agent rules",
+    displayName: KNOWLEDGE_DOC_SPECS.agentRules.displayName,
+    requiredSections: KNOWLEDGE_DOC_SPECS.agentRules.requiredSections,
+    missingSection: "## Unknowns",
+  },
+] as const;
 
 describe("generated doc validation", () => {
-  it("accepts repo analysis markdown with all required sections", () => {
-    expect(() =>
-      assertRepoAnalysisDoc(buildMarkdown(REQUIRED_REPO_ANALYSIS_SECTIONS)),
-    ).not.toThrow();
-  });
+  for (const testCase of cases) {
+    it(`accepts ${testCase.name} markdown with all required sections`, () => {
+      expect(() =>
+        validateMarkdownSections({
+          markdown: buildMarkdown(testCase.requiredSections),
+          requiredSections: testCase.requiredSections,
+          documentName: testCase.displayName,
+        }),
+      ).not.toThrow();
+    });
 
-  it("rejects repo analysis markdown when Unknowns is missing", () => {
-    expect(() =>
-      assertRepoAnalysisDoc(
-        buildMarkdown(
-          REQUIRED_REPO_ANALYSIS_SECTIONS.filter(
-            (section) => section !== "## Unknowns",
+    it(`rejects ${testCase.name} markdown when ${testCase.missingSection} is missing`, () => {
+      expect(() =>
+        validateMarkdownSections({
+          markdown: buildMarkdown(
+            testCase.requiredSections.filter(
+              (section) => section !== testCase.missingSection,
+            ),
           ),
-        ),
-      ),
-    ).toThrow("Repo analysis doc is missing required sections: ## Unknowns");
-  });
-
-  it("accepts architecture markdown with all required sections", () => {
-    expect(() =>
-      assertArchitectureDoc(buildMarkdown(REQUIRED_ARCHITECTURE_SECTIONS)),
-    ).not.toThrow();
-  });
-
-  it("rejects architecture markdown when App structure is missing", () => {
-    expect(() =>
-      assertArchitectureDoc(
-        buildMarkdown(
-          REQUIRED_ARCHITECTURE_SECTIONS.filter(
-            (section) => section !== "## App structure",
-          ),
-        ),
-      ),
-    ).toThrow("Architecture doc is missing required sections: ## App structure");
-  });
-
-  it("accepts conventions markdown with all required sections", () => {
-    expect(() =>
-      assertConventionsDoc(buildMarkdown(REQUIRED_CONVENTIONS_SECTIONS)),
-    ).not.toThrow();
-  });
-
-  it("rejects conventions markdown when Things agents should avoid is missing", () => {
-    expect(() =>
-      assertConventionsDoc(
-        buildMarkdown(
-          REQUIRED_CONVENTIONS_SECTIONS.filter(
-            (section) => section !== "## Things agents should avoid",
-          ),
-        ),
-      ),
-    ).toThrow(
-      "Conventions doc is missing required sections: ## Things agents should avoid",
-    );
-  });
-
-  it("accepts business logic markdown with all required sections", () => {
-    expect(() =>
-      assertBusinessLogicDoc(buildMarkdown(REQUIRED_BUSINESS_LOGIC_SECTIONS)),
-    ).not.toThrow();
-  });
-
-  it("rejects business logic markdown when Evidence map is missing", () => {
-    expect(() =>
-      assertBusinessLogicDoc(
-        buildMarkdown(
-          REQUIRED_BUSINESS_LOGIC_SECTIONS.filter(
-            (section) => section !== "## Evidence map",
-          ),
-        ),
-      ),
-    ).toThrow(
-      "Business logic doc is missing required sections: ## Evidence map",
-    );
-  });
-
-  it("accepts testing markdown with all required sections", () => {
-    expect(() =>
-      assertTestingDoc(buildMarkdown(REQUIRED_TESTING_SECTIONS)),
-    ).not.toThrow();
-  });
-
-  it("rejects testing markdown when Testing gaps and unknowns is missing", () => {
-    expect(() =>
-      assertTestingDoc(
-        buildMarkdown(
-          REQUIRED_TESTING_SECTIONS.filter(
-            (section) => section !== "## Testing gaps and unknowns",
-          ),
-        ),
-      ),
-    ).toThrow(
-      "Testing doc is missing required sections: ## Testing gaps and unknowns",
-    );
-  });
-
-  it("accepts agent rules markdown with all required sections", () => {
-    expect(() =>
-      assertAgentRulesDoc(buildMarkdown(REQUIRED_AGENT_RULES_SECTIONS)),
-    ).not.toThrow();
-  });
-
-  it("rejects agent rules markdown when Unknowns is missing", () => {
-    expect(() =>
-      assertAgentRulesDoc(
-        buildMarkdown(
-          REQUIRED_AGENT_RULES_SECTIONS.filter(
-            (section) => section !== "## Unknowns",
-          ),
-        ),
-      ),
-    ).toThrow("Agent rules doc is missing required sections: ## Unknowns");
-  });
+          requiredSections: testCase.requiredSections,
+          documentName: testCase.displayName,
+        }),
+      ).toThrow(
+        `${testCase.displayName} is missing required sections: ${testCase.missingSection}`,
+      );
+    });
+  }
 });
 
 function buildMarkdown(sections: readonly string[]): string {

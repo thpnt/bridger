@@ -8,7 +8,11 @@ import { ensureOutputDirs } from "../../../src/core/output/ensure-output-dirs";
 import { writeJson } from "../../../src/core/output/write-json";
 import { writeMarkdown } from "../../../src/core/output/write-markdown";
 import { readJsonFile } from "../../../src/core/utils/read-json";
-import { getAgentReadyDir, getGeneratedDir, getTicketsDir } from "../../../src/core/utils/paths";
+import {
+  getBridgerDir,
+  getGeneratedDir,
+  getTicketsDir,
+} from "../../../src/core/utils/paths";
 
 let tempDir = "";
 
@@ -25,7 +29,7 @@ describe("output helpers", () => {
 
     await ensureOutputDirs(tempDir);
 
-    expect((await fs.stat(getAgentReadyDir(tempDir))).isDirectory()).toBe(true);
+    expect((await fs.stat(getBridgerDir(tempDir))).isDirectory()).toBe(true);
     expect((await fs.stat(getGeneratedDir(tempDir))).isDirectory()).toBe(true);
     expect((await fs.stat(getTicketsDir(tempDir))).isDirectory()).toBe(true);
   });

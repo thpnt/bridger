@@ -1,4 +1,4 @@
-export function assertMarkdownSections(input: {
+export function validateMarkdownSections(input: {
   markdown: string;
   requiredSections: readonly string[];
   documentName: string;
@@ -13,3 +13,5 @@ export function assertMarkdownSections(input: {
     );
   }
 }
+
+export const assertMarkdownSections = validateMarkdownSections;

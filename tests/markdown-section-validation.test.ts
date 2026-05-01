@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assertMarkdownSections } from "../src/core/context-builder/markdown-section-validation";
+import { assertMarkdownSections } from "../src/core/doc-generator/validation/markdown-section-validation";
 
 describe("assertMarkdownSections", () => {
   it("does not throw when all required sections are present", () => {

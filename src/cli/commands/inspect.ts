@@ -1,7 +1,7 @@
 import { detectCommands } from "../../core/repo-scanner/detect-commands";
 import { detectStack } from "../../core/repo-scanner/detect-stack";
 import { buildFileIndex } from "../../core/repo-scanner/build-file-index";
-import { logger } from "../../core/utils/logger";
+import { logger } from "../../shared/logger";
 import { resolveRepoRoot } from "../../core/utils/paths";
 import type { RepoContextCommands, RepoContextStack } from "../../core/models/repo-context";
 import { Command } from "commander";
