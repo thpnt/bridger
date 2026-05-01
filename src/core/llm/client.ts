@@ -4,12 +4,12 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
-const DEFAULT_MODEL = "gpt-5.5-thinking";
+const DEFAULT_MODEL = "gpt-5.4-mini";
 
 let cachedClient: OpenAI | null = null;
 
 function getModel(): string {
-  return process.env.AGENT_READY_MODEL || DEFAULT_MODEL;
+  return process.env.BRIDGER_MODEL || DEFAULT_MODEL;
 }
 
 function getOpenAIClient(): OpenAI {
@@ -110,9 +110,7 @@ export async function generateJson<T>(input: {
 }
 
 function normalizeSchemaName(schemaName: string): string {
-  const normalized = schemaName
-    .replace(/[^a-zA-Z0-9_-]/g, "_")
-    .slice(0, 64);
+  const normalized = schemaName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 
   return normalized || "structured_response";
 }
