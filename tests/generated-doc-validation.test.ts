@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertAgentRulesDoc,
+  REQUIRED_AGENT_RULES_SECTIONS,
+} from "../src/core/context-builder/generate-agent-rules-doc";
+import {
   assertArchitectureDoc,
   REQUIRED_ARCHITECTURE_SECTIONS,
 } from "../src/core/context-builder/generate-architecture-doc";
@@ -116,6 +120,24 @@ describe("generated doc validation", () => {
     ).toThrow(
       "Testing doc is missing required sections: ## Testing gaps and unknowns",
     );
+  });
+
+  it("accepts agent rules markdown with all required sections", () => {
+    expect(() =>
+      assertAgentRulesDoc(buildMarkdown(REQUIRED_AGENT_RULES_SECTIONS)),
+    ).not.toThrow();
+  });
+
+  it("rejects agent rules markdown when Unknowns is missing", () => {
+    expect(() =>
+      assertAgentRulesDoc(
+        buildMarkdown(
+          REQUIRED_AGENT_RULES_SECTIONS.filter(
+            (section) => section !== "## Unknowns",
+          ),
+        ),
+      ),
+    ).toThrow("Agent rules doc is missing required sections: ## Unknowns");
   });
 });
 
