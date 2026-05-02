@@ -5,6 +5,9 @@ import type {
   RepoContextImportantFile,
   RepoContextStack,
 } from "../../../models/repo-context";
+import type { GenerateAgentRulesDocInput } from "../../../models/agent-rules-doc";
+import { GenerateAgentRulesDocInputSchema } from "../../../models/agent-rules-doc";
+import { KNOWLEDGE_DOC_SPECS } from "../../../doc-generator/doc-specs";
 
 export function formatBulletList(
   items: readonly string[],
@@ -140,9 +143,7 @@ export function formatMarkdownOutputRules(): string {
   ]);
 }
 
-export function formatRequiredSections(
-  sections: readonly string[],
-): string {
+export function formatRequiredSections(sections: readonly string[]): string {
   return formatBulletList([...sections]);
 }
 
@@ -180,4 +181,46 @@ function normalizeText(value: string | undefined | null): string | undefined {
   }
 
   return normalizedValue;
+}
+
+function formatRepoContext(
+  repoContext: GenerateAgentRulesDocInput["repoContext"],
+): string {
+  return [
+    "## Repo root",
+    repoContext.repoRoot,
+    "",
+    "## Generated at",
+    repoContext.generatedAt,
+    "",
+    "## Detected stack",
+    formatDetectedStack(repoContext.stack),
+    "",
+    "## Commands",
+    formatCommands(repoContext.commands),
+    "",
+    "## Important files",
+    formatImportantFiles(repoContext.importantFiles),
+  ].join("\n");
+}
+
+function formatGeneratedDocs(
+  generatedDocs: GenerateAgentRulesDocInput["generatedDocs"],
+): string {
+  return [
+    `## ${KNOWLEDGE_DOC_SPECS.repoAnalysis.filename}`,
+    generatedDocs.repoAnalysis,
+    "",
+    `## ${KNOWLEDGE_DOC_SPECS.architecture.filename}`,
+    generatedDocs.architecture,
+    "",
+    `## ${KNOWLEDGE_DOC_SPECS.conventions.filename}`,
+    generatedDocs.conventions,
+    "",
+    `## ${KNOWLEDGE_DOC_SPECS.businessLogic.filename}`,
+    generatedDocs.businessLogic,
+    "",
+    `## ${KNOWLEDGE_DOC_SPECS.testing.filename}`,
+    generatedDocs.testing,
+  ].join("\n");
 }
