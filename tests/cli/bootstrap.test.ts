@@ -20,5 +20,20 @@ describe("cli bootstrap", () => {
     expect(
       initCommand?.options.some((option) => option.long === "--repo"),
     ).toBe(true);
+    expect(
+      program.commands.find((command) => command.name() === "inspect")?.options.some(
+        (option) => option.long === "--context",
+      ),
+    ).toBe(true);
+    expect(
+      program.commands.find((command) => command.name() === "inspect")?.options.some(
+        (option) => option.long === "--important-files",
+      ),
+    ).toBe(true);
+    expect(
+      program.commands.find((command) => command.name() === "inspect")?.options.some(
+        (option) => option.long === "--json",
+      ),
+    ).toBe(true);
   });
 });

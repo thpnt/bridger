@@ -1,13 +1,19 @@
-import { detectCommands } from "../../core/repo-scanner/detect-commands";
-import { detectStack } from "../../core/repo-scanner/detect-stack";
-import { buildFileIndex } from "../../core/repo-scanner/build-file-index";
+import { buildRepoContextArtifacts } from "../../core/context-builder/build-repo-context";
 import { logger } from "../../shared/logger";
 import { resolveRepoRoot } from "../../core/utils/paths";
-import type { RepoContextCommands, RepoContextStack } from "../../core/models/repo-context";
+import type { FileIndex, FileIndexEntry } from "../../core/models/file-index";
+import type {
+  RepoContext,
+  RepoContextCommands,
+  RepoContextStack,
+} from "../../core/models/repo-context";
 import { Command } from "commander";
 
-export interface InspectOptions {
+export interface InspectCommandOptions {
   repo?: string;
+  context?: boolean;
+  importantFiles?: boolean;
+  json?: boolean;
 }
 
 interface InspectSummaryInput {
@@ -15,6 +21,24 @@ interface InspectSummaryInput {
   stack: RepoContextStack;
   commands: RepoContextCommands;
   indexedFileCount: number;
+}
+
+export interface ImportantFileInspection {
+  path: string;
+  reason: string;
+  sizeBytes?: number;
+  tags?: string[];
+}
+
+export interface InspectResult {
+  repoContext: RepoContext;
+  fileIndex: FileIndex;
+  inspection: {
+    indexedFileCount: number;
+    importantFileCount: number;
+    estimatedImportantFilesSizeBytes?: number;
+    importantFiles: ImportantFileInspection[];
+  };
 }
 
 const COMMAND_ORDER = [
@@ -33,6 +57,67 @@ function formatList(values: string[]): string {
 
 function formatCommandValue(value: string | undefined): string {
   return value !== undefined ? value : "none";
+}
+
+export function formatBytes(bytes: number | undefined): string {
+  if (bytes === undefined) {
+    return "unknown";
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const units = ["KB", "MB", "GB"] as const;
+  let value = bytes / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function buildImportantFileInspection(
+  importantFile: RepoContext["importantFiles"][number],
+  fileByPath: Map<string, FileIndexEntry>,
+): ImportantFileInspection {
+  const indexedFile = fileByPath.get(importantFile.path);
+
+  return {
+    path: importantFile.path,
+    reason: importantFile.reason,
+    sizeBytes: indexedFile?.sizeBytes,
+    tags: indexedFile?.tags,
+  };
+}
+
+export async function buildInspectResult(
+  repoRoot: string,
+): Promise<InspectResult> {
+  const { repoContext, fileIndex } = await buildRepoContextArtifacts(repoRoot);
+  const fileByPath = new Map(fileIndex.files.map((file) => [file.path, file]));
+
+  const importantFiles = repoContext.importantFiles.map((importantFile) =>
+    buildImportantFileInspection(importantFile, fileByPath),
+  );
+
+  const estimatedImportantFilesSizeBytes = importantFiles.reduce((total, file) => {
+    return total + (file.sizeBytes ?? 0);
+  }, 0);
+
+  return {
+    repoContext,
+    fileIndex,
+    inspection: {
+      indexedFileCount: fileIndex.files.length,
+      importantFileCount: importantFiles.length,
+      estimatedImportantFilesSizeBytes,
+      importantFiles,
+    },
+  };
 }
 
 export function formatInspectSummary(input: InspectSummaryInput): string {
@@ -73,21 +158,103 @@ export function formatInspectSummary(input: InspectSummaryInput): string {
   return lines.join("\n");
 }
 
-export async function runInspectCommand(options?: InspectOptions): Promise<void> {
+function formatImportantFileInspectionLines(
+  importantFile: ImportantFileInspection,
+): string[] {
+  const lines = [`- ${importantFile.path}`, `  Reason: ${importantFile.reason}`];
+
+  if (importantFile.sizeBytes !== undefined) {
+    lines.push(`  Size: ${formatBytes(importantFile.sizeBytes)}`);
+  }
+
+  return lines;
+}
+
+function formatImportantFileList(result: InspectResult): string {
+  if (result.inspection.importantFiles.length === 0) {
+    return "- none";
+  }
+
+  const lines: string[] = [];
+
+  for (const importantFile of result.inspection.importantFiles) {
+    lines.push(...formatImportantFileInspectionLines(importantFile));
+    lines.push("");
+  }
+
+  lines.pop();
+
+  return lines.join("\n");
+}
+
+function formatImportantFilesSection(result: InspectResult): string {
+  return [
+    `Important files: ${result.inspection.importantFileCount}`,
+    "",
+    formatImportantFileList(result),
+  ].join("\n");
+}
+
+function formatContextPreview(result: InspectResult): string {
+  const estimatedSelectedContextSize =
+    result.inspection.estimatedImportantFilesSizeBytes !== undefined
+      ? formatBytes(result.inspection.estimatedImportantFilesSizeBytes)
+      : "unknown";
+
+  return [
+    "Context preview",
+    "",
+    `Indexed files: ${result.inspection.indexedFileCount}`,
+    `Important files: ${result.inspection.importantFileCount}`,
+    `Estimated selected context size: ${estimatedSelectedContextSize}`,
+    "",
+    "Important files:",
+    "",
+    formatImportantFileList(result),
+  ].join("\n");
+}
+
+function printSummary(result: InspectResult): void {
+  logger.info(
+    formatInspectSummary({
+      repoRoot: result.repoContext.repoRoot,
+      stack: result.repoContext.stack,
+      commands: result.repoContext.commands,
+      indexedFileCount: result.inspection.indexedFileCount,
+    }),
+  );
+}
+
+function printImportantFiles(result: InspectResult): void {
+  logger.info(formatImportantFilesSection(result));
+}
+
+function printContextPreview(result: InspectResult): void {
+  logger.info(formatContextPreview(result));
+}
+
+export async function runInspectCommand(
+  options?: InspectCommandOptions,
+): Promise<void> {
   try {
     const repoRoot = resolveRepoRoot(options?.repo);
-    const stack = await detectStack(repoRoot);
-    const commands = await detectCommands(repoRoot, stack.packageManager);
-    const fileIndex = await buildFileIndex(repoRoot);
+    const result = await buildInspectResult(repoRoot);
 
-    logger.info(
-      formatInspectSummary({
-        repoRoot,
-        stack,
-        commands,
-        indexedFileCount: fileIndex.files.length,
-      }),
-    );
+    if (options?.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    printSummary(result);
+
+    if (options?.context) {
+      printContextPreview(result);
+      return;
+    }
+
+    if (options?.importantFiles) {
+      printImportantFiles(result);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error(`Failed to inspect repository: ${message}`);
@@ -98,6 +265,9 @@ export async function runInspectCommand(options?: InspectOptions): Promise<void>
 export const inspectCommand = new Command("inspect")
   .description("Inspect the current repository without using the LLM")
   .option("--repo <path>", "Path to the repository to inspect")
-  .action(async (options: InspectOptions) => {
+  .option("--context", "Show deterministic context preview before LLM generation")
+  .option("--important-files", "Show selected important files and selection reasons")
+  .option("--json", "Print inspect result as JSON")
+  .action(async (options: InspectCommandOptions) => {
     await runInspectCommand(options);
   });

@@ -122,22 +122,23 @@ export function formatFileIndexSummary(
 export function formatGroundingRules(): string {
   return formatBulletList([
     "Use only the provided repo context, file index summary, important files, and generated docs included in the prompt.",
-    "Do not invent architecture, commands, dependencies, folders, workflows, or business behavior.",
-    "Distinguish observed facts from assumptions.",
-    formatUnknownsRule(),
-    "Prefer concise, practical guidance over generic filler.",
+    "Do not invent architecture, commands, dependencies, folders, workflows, conventions, integrations, or business behavior.",
+    "Treat source files and selected excerpts as stronger evidence than README/docs when they conflict.",
+    "When evidence is weak, use cautious language and preserve the uncertainty instead of guessing.",
+    "Prefer synthesized, practical guidance over evidence logs, file inventories, or generic filler.",
   ]);
 }
 
 export function formatUnknownsRule(): string {
-  return "If information is missing or weakly supported, put it in an Unknowns section instead of guessing.";
+  return "If information is missing or weakly supported, state the uncertainty clearly instead of guessing.";
 }
 
 export function formatMarkdownOutputRules(): string {
   return formatBulletList([
     "Return Markdown only.",
-    "Use clear H2 sections.",
-    "Keep sections concise and practical.",
+    "Use simple headings to make the document easy to scan.",
+    "Keep the document concise, practical, and human-readable.",
+    "Avoid decorative formatting, excessive bullets, and evidence-log style output.",
     "Do not wrap the full answer in a code block.",
     "Do not include JSON.",
   ]);
