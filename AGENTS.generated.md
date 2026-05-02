@@ -17,172 +17,180 @@ This file is intended to provide additional repository-specific instructions for
 
 ## Project overview
 
-- **Observed:** `bridger` is a TypeScript CLI/tooling repo that scans a target repository, builds repo context, detects stack/commands, and generates markdown knowledge docs for AI coding agents.
-- **Evidence:** `src/core/context-builder/build-repo-context.ts`, `src/core/doc-generator/generators/generate-repo-analysis-doc.ts`, `src/core/doc-generator/generators/generate-agent-rules-doc.ts`, `src/core/doc-generator/renderers/render-agents-md.ts`, `src/cli/cli.ts`.
-- **Observed:** The repo’s main outputs appear to be generated markdown docs and repo-local artifacts under `.bridger/`, plus `AGENTS.md` / `AGENTS.generated.md`.
-- **Evidence:** `src/core/models/generated-paths.ts`, `tests/core/utils/paths.test.ts`, `tests/core/models/generated-paths.test.ts`, `AGENTS.md`.
-- **Unknown:** No external end-user product domain is evidenced beyond repository analysis and doc generation.
+Bridger is a TypeScript CLI/tooling repository that scans repositories, builds repo context, and generates markdown docs for AI coding agents.
+
+Evidence:
+- Core flow lives in `src/core/context-builder/`, `src/core/repo-scanner/`, and `src/core/doc-generator/`.
+- CLI entrypoints are in `src/cli/`.
+- Generated artifacts include repo-analysis, architecture, business-logic, conventions, testing, and `AGENTS.md`-related outputs.
 
 ## Commands
 
-Use only these detected commands:
+Use only the commands detected in `package.json` and repo context:
 
 - `pnpm install` — install dependencies.
-- `pnpm dev` — run the CLI in development mode; use for iterative CLI changes.
-- `pnpm build` — build the package; use before checking built/runtime behavior.
-- `pnpm typecheck` — run TypeScript type checking; use after model, schema, or API-shape changes.
-- `pnpm test` — run the Vitest suite; use for behavioral verification.
-- `pnpm check` — run typecheck and tests together; use as a broad local gate.
-- `pnpm local` — build then run `node dist/cli.js`; use to exercise built output.
-- `pnpm test:llm` — run `tsx scripts/test-llm.ts`; use only when touching the LLM script path or generation behavior.
+- `pnpm dev` — run the CLI in development mode.
+- `pnpm build` — build/package the project.
+- `pnpm typecheck` — run TypeScript type checking.
+- `pnpm test` — run the Vitest suite.
+- `pnpm check` — run both typecheck and tests.
+- `pnpm local` — run a local built CLI flow.
+- `pnpm test:llm` — run the LLM-related script (`tsx scripts/test-llm.ts`).
 
-**Not detected:** separate lint or format commands.
+Not detected:
+- lint
+- format
 
 ## Rules for agents
 
-- **Rule:** Inspect the relevant source and test files before editing, especially `src/core/context-builder/build-repo-context.ts`, `src/core/doc-generator/*`, `src/core/llm/client.ts`, and matching tests under `tests/`.
-- **Rule:** Keep repo-context construction schema-validated; the core pipeline parses validated models before continuing.
-  - **Evidence:** `RepoContextSchema.parse(...)` in `src/core/context-builder/build-repo-context.ts`.
-- **Rule:** Preserve required markdown-section validation when changing generated docs.
-  - **Evidence:** `src/core/doc-generator/doc-specs.ts`, `src/core/doc-generator/validation/markdown-section-validation.ts`, `src/core/doc-generator/generators/generate-knowledge-doc.ts`.
-- **Rule:** Treat `.bridger/` output paths and generated doc filenames as stable conventions.
-  - **Evidence:** `tests/core/utils/paths.test.ts`, `tests/core/models/generated-paths.test.ts`.
-- **Rule:** Prefer small, boundary-focused changes; avoid broad refactors in core pipeline files unless explicitly requested.
-  - **Evidence:** the repo is organized around a layered analysis → generation → output flow.
-- **Rule:** Keep file/path logic centralized in helpers rather than duplicating literals across modules.
-  - **Evidence:** `src/core/models/generated-paths.ts`, `tests/core/utils/paths.test.ts`.
-- **Rule:** Use existing error-message style for validation/config failures instead of silent fallback behavior.
-  - **Evidence:** `src/core/llm/client.ts`, `src/core/doc-generator/generators/generate-knowledge-doc.ts`.
-- **Rule:** If a change touches LLM output, validate both non-empty output and required section presence.
-  - **Evidence:** `src/core/doc-generator/generators/generate-knowledge-doc.ts`.
-- **Rule:** If an output or command behavior changes, add or update Vitest coverage in `tests/`.
-- **Rule:** Document assumptions explicitly when a domain boundary is unclear, especially around UI, persistence, or external integrations.
+- Rule: Read `AGENTS.md` before making changes; it is an existing agent instruction file and may contain repo-specific constraints.
+- Rule: Keep changes surgical; avoid adjacent refactors or unrelated cleanup.
+- Rule: Treat `src/core/context-builder/build-repo-context.ts` as a central orchestration boundary; inspect it before changing repo-context behavior.
+- Rule: Treat `src/core/repo-scanner/*` as repo-inspection logic; change scanner behavior only when the intended repo-shape impact is understood.
+- Rule: Treat `src/core/doc-generator/*` as the document-generation pipeline; verify downstream doc effects before changing it.
+- Rule: Use the existing Zod validation boundaries in `src/core/models/*` and generator entrypoints rather than bypassing validation.
+- Rule: Keep generated-doc filenames and section expectations centralized in `src/core/doc-generator/doc-filenames.ts` and `src/core/doc-generator/doc-specs.ts`.
+- Rule: Do not assume web-app/framework conventions from fixtures; this repo is primarily CLI/core code.
+- Rule: Use repo-local path helpers for `.bridger/` and `AGENTS.md` outputs instead of hardcoding paths.
+- Rule: When changing LLM-related code, treat `src/core/llm/client.ts` as an external-service boundary and expect environment-dependent behavior.
+- Rule: Prefer adding or updating tests near the behavior changed, especially for pathing, validation, output writing, and CLI wiring.
 
 ## Coding conventions
 
-- **TypeScript**
-  - Observed: explicit return types are common.
-  - Observed: `type` aliases and `interface` are both used; no repo-wide preference is fully evidenced.
-  - Observed: Zod schemas are parsed at boundaries before use.
-  - **Evidence:** `src/core/doc-generator/doc-types.ts`, `src/core/doc-generator/knowledge-doc-input.ts`, `src/core/llm/client.ts`, `src/core/context-builder/build-repo-context.ts`.
-
-- **Validation**
-  - Observed: runtime validation is a normal part of the architecture.
-  - Observed: invalid LLM output is rejected explicitly.
-  - **Evidence:** `src/core/llm/client.ts`, `src/core/doc-generator/validation/markdown-section-validation.ts`.
-
-- **Naming**
-  - Observed: core files use descriptive kebab-case names; schema/model names often end with `Schema`.
-  - **Evidence:** `src/core/models/repo-context.ts`, `src/core/models/generated-paths.ts`, `src/core/doc-generator/doc-specs.ts`.
-
-- **Styling/component conventions**
-  - **Unknown:** the main repo’s styling system and component conventions are not evidenced.
-  - **Evidence:** only fixture React/shadcn-like files appear in `tests/fixtures/`.
-
-- **Server/client boundary**
-  - Observed: the visible source is primarily CLI/core tooling, not a confirmed app-router or client/server web app structure.
-  - **Recommendation:** do not assume web-app boundary conventions unless the actual touched files show them.
-  - **Evidence:** `src/cli/`, `src/core/`, and no confirmed app framework in the main repo context.
-
-- **Data access**
-  - Observed: visible persistence is filesystem-based output, not a clearly evidenced database layer.
-  - **Evidence:** `src/core/output/*`, `.bridger/` paths in tests.
-  - **Unknown:** database conventions are not evidenced.
-
-- **Testing**
-  - Observed: Vitest is the testing framework.
-  - Observed: tests are behavior-focused and often assert exact paths/outputs/errors.
-  - **Evidence:** `tests/build-repo-context.test.ts`, `tests/core/output/write-files.test.ts`, `tests/cli/inspect.test.ts`.
+- TypeScript:
+  - Observed: types and schemas are kept close to the feature, especially under `src/core/models/`.
+  - Observed: functions often have explicit parameter/return types.
+  - Observed: runtime validation is commonly paired with exported types/schemas and `.parse(...)` at module boundaries.
+- Validation:
+  - Observed: Zod is the primary visible validation mechanism.
+  - Observed: validation errors are surfaced as `Error`s with context.
+  - Observed: markdown section validation exists in `src/core/doc-generator/validation/markdown-section-validation.ts`, but one call site in `generate-knowledge-doc.ts` is commented out.
+- Naming:
+  - Observed: core files use descriptive lowercase hyphenated names.
+  - Observed: generated docs use fixed lowercase hyphenated filenames.
+  - Observed: exported schemas/types use PascalCase names such as `RepoContextSchema`.
+- Data access:
+  - Observed: file-based helpers and path utilities are used for repo analysis/output.
+  - Observed: `.bridger/` paths are centralized in helpers rather than duplicated.
+- Server/client boundary:
+  - Observed: the repo is a Node/CLI tool; no confirmed browser/server-app boundary is visible in the main source.
+- Styling:
+  - Unknown: styling conventions are not evidenced in the main repo source.
+- Component conventions:
+  - Unknown: component conventions are only visible in fixtures, not the primary codebase.
+- Testing:
+  - Observed: tests use Vitest and focus on deterministic helpers, filesystem behavior, and CLI wiring.
 
 ## Business logic boundaries
 
-- **Treat repository context as core business logic.**
-  - Includes detected stack, commands, file index, important files, generated paths, and timestamps.
-  - **Evidence:** `src/core/models/repo-context.ts`, `src/core/context-builder/build-repo-context.ts`.
-- **Treat file-index and important-file selection as sensitive logic.**
-  - Changes here can cascade into summaries, prompts, and generated docs.
-  - **Evidence:** `src/core/repo-scanner/build-file-index.ts`, `src/core/repo-scanner/read-important-files.ts`, `src/core/context-builder/file-index-summary.ts`.
-- **Treat generated knowledge docs as business rules, not presentation-only text.**
-  - Required sections are enforced.
-  - **Evidence:** `src/core/doc-generator/doc-specs.ts`, `src/core/doc-generator/validation/markdown-section-validation.ts`.
-- **Treat agent rules rendering as a protected boundary.**
-  - `AGENTS.md` composition depends on non-empty agent-rules markdown.
-  - **Evidence:** `src/core/doc-generator/renderers/render-agents-md.ts`.
-- **Avoid changing business/domain behavior unless explicitly requested.**
-  - This especially applies to stack detection, command detection, doc section requirements, and output path conventions.
-- **Unknown:** no product domain beyond repository-analysis tooling is evidenced.
+- Treat repository context as a core domain object:
+  - Evidence: `src/core/models/repo-context.ts`, `src/core/context-builder/build-repo-context.ts`.
+- Treat file index and important-file selection as domain logic:
+  - Evidence: `src/core/models/file-index.ts`, `src/core/repo-scanner/build-file-index.ts`, `src/core/repo-scanner/read-important-files.ts`, `src/core/repo-scanner/important-file-rules.ts`.
+- Treat detected commands and stack as part of the repo-analysis model:
+  - Evidence: `src/core/repo-scanner/detect-commands.ts`, `src/core/repo-scanner/detect-stack.ts`, `tests/cli/inspect.test.ts`.
+- Treat generated docs as business outputs, not generic markdown:
+  - Evidence: `src/core/doc-generator/doc-specs.ts`, `src/core/doc-generator/generators/generate-business-logic-doc.ts`, `src/core/doc-generator/renderers/render-agents-md.ts`.
+- Treat `AGENTS.md` generation as a special output path:
+  - Evidence: `src/core/doc-generator/renderers/render-agents-md.ts`, `AGENTS.md`.
+- Avoid changing business logic unless explicitly requested:
+  - repo context assembly
+  - important-file selection
+  - command detection
+  - generated-doc structure
+  - LLM prompt/generation flow
+- Unknown: the exact meaning and lifecycle of `ticket` is not fully visible; treat `src/core/models/ticket.ts` and `src/cli/commands/enrich-ticket.ts` carefully.
 
 ## Testing expectations
 
-- **Use `pnpm typecheck`** after edits that affect types, schemas, prompt input/output shapes, or shared models.
-- **Use `pnpm test`** after edits to repo scanning, generation, output writing, or CLI wiring.
-- **Use `pnpm build`** when verifying packaged/runtime behavior, especially before `pnpm local`.
-- **Use `pnpm local`** when you need to exercise the built CLI end-to-end from `dist/cli.js`.
-- **Use `pnpm test:llm`** only for changes tied to `scripts/test-llm.ts` or LLM behavior that script covers.
-- **Add tests near the touched behavior.**
-  - Unit tests for pure helpers, validators, schemas, path helpers.
-  - Integration-style tests for multi-step flows, filesystem behavior, CLI flows, or generator pipelines.
-- **Prefer regression tests** when fixing output-format, validation, or path-stability bugs.
-- **Unknown:** no evidence of UI/component test conventions, DB integration tests, or live-network LLM tests.
+- Use `pnpm test` to verify changes that affect behavior.
+- Use `pnpm typecheck` for schema, type, and boundary changes.
+- Use `pnpm check` when a change crosses multiple core modules.
+- Use `pnpm build` or `pnpm local` when changing CLI packaging/runtime behavior.
+- Add or update tests when changing:
+  - path helpers
+  - generated output
+  - Zod schemas
+  - repo scanning
+  - CLI command wiring
+  - markdown generation/validation
+- Prefer unit tests for deterministic helpers and validation logic.
+- Prefer integration-style tests for repo scanning, context building, and output writing.
+- Use fixture repos under `tests/fixtures/` when behavior depends on repository shape or `package.json` contents.
+- Mock external boundaries such as the LLM client instead of relying on live calls in ordinary tests.
+- Manual QA is appropriate for generated files and CLI output, especially under `.bridger/`.
 
 ## Risky areas
 
 - `src/core/llm/client.ts`
-  - **Why risky:** central external integration; missing API key or schema mismatch affects generation broadly.
-- `src/core/doc-generator/generators/generate-knowledge-doc.ts`
-  - **Why risky:** enforces non-empty output and markdown section validation.
+  - Why risky: external API boundary, environment-dependent, requires `OPENAI_API_KEY`, and can fail at runtime.
+- `src/core/doc-generator/generators/*`
+  - Why risky: changes here affect generated docs broadly.
 - `src/core/doc-generator/validation/markdown-section-validation.ts`
-  - **Why risky:** strict section checks can break generated docs with small formatting changes.
+  - Why risky: markdown structure validation exists, but one call site is currently commented out.
 - `src/core/context-builder/build-repo-context.ts`
-  - **Why risky:** orchestrates the core analysis pipeline and validates the final context.
+  - Why risky: central assembly point for stack, commands, file index, and important files.
 - `src/core/repo-scanner/*`
-  - **Why risky:** stack detection, command detection, and file-index logic drive downstream docs and summaries.
+  - Why risky: scanner behavior defines what the tool “sees.”
 - `src/core/models/*`
-  - **Why risky:** schema/model changes can cascade across generation and output.
+  - Why risky: schemas define contracts across scanning, generation, and output.
 - `src/core/output/*`
-  - **Why risky:** writes repo-local artifacts and manages generated markdown blocks.
+  - Why risky: writes generated artifacts and can alter repository files.
 - `AGENTS.md`
-  - **Why risky:** existing agent instructions are explicitly important and should not be edited casually.
+  - Why risky: existing agent instruction file; changes may have broad effects.
 - `tests/fixtures/*`
-  - **Why risky:** fixtures anchor detection behavior and expected outputs.
+  - Why risky: useful for behavior evidence, but not production code.
 
 ## Task scoping rules
 
-- **Rule:** Limit edits to the smallest set of files needed for the requested behavior.
-- **Rule:** Read the relevant source, nearby helpers, and at least the matching tests before changing anything.
-- **Rule:** Do not add unrelated refactors, new abstractions, or dependency changes when a narrow fix is enough.
-- **Rule:** Preserve existing path conventions, generated-doc names, and validation behavior unless the request explicitly changes them.
-- **Rule:** When a change crosses analysis → generation → output boundaries, update each affected layer intentionally rather than patching only one layer.
-- **Rule:** Add tests for the exact behavior changed; avoid broad rewrites of unrelated test cases.
-- **Rule:** If you cannot determine a boundary from the visible source, stop and ask for clarification or mark the assumption explicitly.
-- **Rule:** Be cautious with central files and only touch them when the task clearly requires it: `src/core/context-builder/build-repo-context.ts`, `src/core/doc-generator/*`, `src/core/llm/client.ts`, `src/core/models/*`, `src/core/output/*`.
+- Inspect the smallest relevant set of files before editing.
+- Confirm the existing pattern in the nearest feature module before adding new logic.
+- Keep changes limited to the intended repo-analysis, generation, or output path.
+- Avoid unrelated refactors, formatting-only churn, or dependency changes.
+- Preserve existing path/filename conventions; do not hardcode new output locations.
+- Preserve existing validation boundaries; do not weaken schemas just to make a test pass.
+- Add tests that match the affected layer:
+  - helper change → unit test
+  - scanner/context/output change → integration-style test
+  - CLI wiring change → command-level test
+- If behavior depends on an assumption that is not evidenced in the repo, state it explicitly and stop for clarification.
+- Ask for clarification when the change would alter:
+  - generated-doc structure
+  - repo context shape
+  - command detection behavior
+  - important-file selection
+  - LLM prompt/output contracts
+  - `AGENTS.md` rendering
 
 ## Files/folders to avoid unless explicitly requested
 
 - `AGENTS.md`
-  - **Why:** existing agent-instructions file; changes here can alter repo-wide operating guidance.
+  - Why: existing agent instruction file; changing it can affect operating guidance broadly.
+- `src/core/doc-generator/renderers/render-agents-md.ts`
+  - Why: central `AGENTS.md` composition logic.
+- `src/core/doc-generator/doc-specs.ts`
+  - Why: central source of generated-doc types and required sections.
+- `src/core/doc-generator/doc-filenames.ts`
+  - Why: central generated-doc naming contract.
 - `src/core/llm/client.ts`
-  - **Why:** central external dependency and validation boundary; changes are high impact.
-- `src/core/context-builder/build-repo-context.ts`
-  - **Why:** orchestrates repo-analysis assembly and schema validation.
-- `src/core/doc-generator/*`
-  - **Why:** controls generated docs and required markdown structure.
+  - Why: external API boundary and environment-sensitive behavior.
 - `src/core/models/*`
-  - **Why:** schema and contract layer for the pipeline.
+  - Why: shared schemas/contracts; changes propagate widely.
+- `src/core/repo-scanner/*`
+  - Why: repo-analysis behavior is foundational to all downstream output.
 - `src/core/output/*`
-  - **Why:** writes generated files and manages markdown block updates.
+  - Why: writes generated artifacts and can affect repository contents.
 - `tests/fixtures/*`
-  - **Why:** fixture repos underpin detection behavior; changing them can reshape expectations.
-- **Unknown:** no additional avoid-list paths are strongly evidenced.
+  - Why: test-only repositories; edit only if the change is specifically about fixture behavior.
 
 ## Unknowns
 
-- **Unknown:** The repo’s end-user business domain is not visible beyond repository analysis/document generation.
-- **Unknown:** Styling and component conventions are not confirmed for the main repo; fixture-only React/shadcn evidence should not be treated as repo-wide fact.
-- **Unknown:** Database and persistence conventions are not evidenced in the main source tree.
-- **Unknown:** Lint and format commands were not detected.
-- **Unknown:** Full command-detection and stack-detection rules are not visible; avoid assuming their behavior beyond tests and call sites.
-- **Unknown:** Whether `AGENTS.md` is generated, manually maintained, or merged from generated output is not fully evidenced.
-- **Unknown:** Exact deployment/runtime expectations for the CLI beyond `pnpm dev`, `pnpm build`, and `pnpm local` are not fully shown.
-- **Unknown:** Live-network LLM testing and CI coverage expectations are not evidenced.
-- **Unknown:** Any frontend/server-app architecture beyond the CLI/core tooling layers is not confirmed by the provided context.
+- Unknown: The exact intended user workflow beyond the detected CLI scripts and tests.
+- Unknown: Whether the repository has any database layer; none is confirmed in the main source.
+- Unknown: Whether there is a browser/UI app in the main repo; fixtures mention framework-like files, but production source does not confirm one.
+- Unknown: Styling conventions are not evidenced in the main source.
+- Unknown: The exact shape and lifecycle of `ticket`-related data is unclear.
+- Unknown: Whether markdown section validation is meant to be enforced, since one call site is commented out.
+- Unknown: The canonicality of `AGENTS.md` vs `AGENTS.generated.md` is not explicit from the provided context.
+- Unknown: The repo’s lint/format commands were not detected.
+- Unknown: The exact write timing and overwrite policy for `.bridger/` outputs is not fully visible.

@@ -1,3 +1,11 @@
+function isDebugLoggingEnabled(): boolean {
+  if (process.env.DEBUG === "bridger") {
+    return true;
+  }
+
+  return process.env.npm_lifecycle_event === "dev";
+}
+
 export const logger = {
   info(message: string): void {
     console.log(message);
@@ -12,7 +20,7 @@ export const logger = {
   },
 
   debug(message: string): void {
-    if (process.env.DEBUG === "bridger") {
+    if (isDebugLoggingEnabled()) {
       console.log(message);
     }
   },

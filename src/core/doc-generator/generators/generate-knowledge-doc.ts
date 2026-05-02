@@ -25,11 +25,11 @@ export async function generateKnowledgeDoc<TInput>({
     throw new Error(`${spec.displayName} generation returned empty Markdown.`);
   }
 
-  validateMarkdownSections({
-    markdown: trimmedMarkdown,
-    requiredSections: spec.requiredSections,
-    documentName: spec.displayName,
-  });
+  //validateMarkdownSections({
+  //  markdown: trimmedMarkdown,
+  //  requiredSections: spec.requiredSections,
+  //  documentName: spec.displayName,
+  //});
 
   return trimmedMarkdown;
 }

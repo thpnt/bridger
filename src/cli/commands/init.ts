@@ -48,6 +48,10 @@ interface InitSummaryInput {
 const BRIDGER_GENERATED_START_MARKER = "<!-- BRIDGER GENERATED START -->";
 const BRIDGER_GENERATED_END_MARKER = "<!-- BRIDGER GENERATED END -->";
 
+function logInitStep(message: string): void {
+  logger.debug(`bridger init: ${message}`);
+}
+
 async function generateDocs(input: {
   repoContext: Awaited<ReturnType<typeof buildRepoContextArtifacts>>["repoContext"];
   fileIndex: Awaited<ReturnType<typeof buildRepoContextArtifacts>>["fileIndex"];
@@ -118,7 +122,7 @@ async function writeGeneratedDocs(input: {
 
 function formatInitSummary(input: InitSummaryInput): string {
   const lines: string[] = [
-    "bridger init complete",
+    "SUCCESS: bridger init complete",
     "",
     `Repo: ${input.repoRoot}`,
     `Indexed files: ${input.indexedFileCount}`,
@@ -166,20 +170,32 @@ export async function runInitCommand(
   const repoRoot = resolveRepoRoot(options.repo);
 
   try {
+    logInitStep(`starting for ${repoRoot}`);
+    logInitStep("ensuring output directories");
     await ensureOutputDirs(repoRoot);
+    logInitStep("output directories ready");
 
+    logInitStep("building repo context");
     const { repoContext, fileIndex, importantFiles } =
       await buildRepoContextArtifacts(repoRoot);
+    logInitStep(
+      `repo context ready (${fileIndex.files.length} indexed files, ${importantFiles.length} important files)`,
+    );
 
+    logInitStep("writing context artifacts");
     await writeJson(getRepoContextPath(repoRoot), repoContext);
     await writeJson(getFileIndexPath(repoRoot), fileIndex);
+    logInitStep("context artifacts written");
 
+    logInitStep("generating documentation");
     const generatedDocs = await generateDocs({
       repoContext,
       fileIndex,
       importantFiles,
     });
+    logInitStep("documentation generated");
 
+    logInitStep("writing generated files");
     await writeGeneratedDocs({
       repoRoot,
       generatedDocs,
@@ -191,14 +207,17 @@ export async function runInitCommand(
     });
 
     await writeMarkdown(getAgentsGeneratedPath(repoRoot), agentsMarkdown);
+    logInitStep("generated files written");
 
     if (options.writeAgentsMd) {
+      logInitStep("updating AGENTS.md");
       await upsertGeneratedMarkdownBlock({
         filePath: getAgentsMdPath(repoRoot),
         content: agentsMarkdown,
         startMarker: BRIDGER_GENERATED_START_MARKER,
         endMarker: BRIDGER_GENERATED_END_MARKER,
       });
+      logInitStep("AGENTS.md updated");
     }
 
     const generatedFiles = getGeneratedFilePaths(repoRoot, Boolean(options.writeAgentsMd));
