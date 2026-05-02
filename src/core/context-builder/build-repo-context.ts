@@ -42,6 +42,7 @@ export async function buildRepoContextArtifacts(
   return RepoContextBuildArtifactsSchema.parse({
     repoContext,
     fileIndex,
+    importantFiles,
   });
 }
 

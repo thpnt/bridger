@@ -106,7 +106,7 @@ describe("prompt builders", () => {
 
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
-    expect(result.prompt).toContain("# Analysis guidance");
+    expect(result.prompt).toContain("Generate `repo-analysis.md` for this repository.");
     expect(result.prompt).toContain("## File and folder evidence");
     expect(result.prompt).toContain("## Observed structure");
     expect(result.prompt).toContain("## Unknowns");
@@ -117,7 +117,7 @@ describe("prompt builders", () => {
 
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
-    expect(result.prompt).toContain("# Architecture guidance");
+    expect(result.prompt).toContain("Generate `architecture.md` for this repository.");
     expect(result.prompt).toContain("## App structure");
     expect(result.prompt).toContain("## Data flow assumptions");
     expect(result.prompt).toContain("## Risky areas");
@@ -129,7 +129,7 @@ describe("prompt builders", () => {
 
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
-    expect(result.prompt).toContain("# Conventions guidance");
+    expect(result.prompt).toContain("Generate `conventions.md` for this repository.");
     expect(result.prompt).toContain("## Things agents should avoid");
   });
 
@@ -138,7 +138,7 @@ describe("prompt builders", () => {
 
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
-    expect(result.prompt).toContain("# Business logic guidance");
+    expect(result.prompt).toContain("Generate `business-logic.md` for this repository.");
     expect(result.prompt).toContain("## Evidence map");
   });
 
@@ -147,7 +147,7 @@ describe("prompt builders", () => {
 
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
-    expect(result.prompt).toContain("# Testing guidance");
+    expect(result.prompt).toContain("Generate a grounded testing document for this repository.");
     expect(result.prompt).toContain("## Testing philosophy");
     expect(result.prompt).toContain("## Test types and when to use them");
     expect(result.prompt).toContain("## Unit testing conventions");
@@ -183,7 +183,7 @@ describe("prompt builders", () => {
     expect(result.prompt).toEqual(expect.any(String));
     expect(result.system).not.toContain("TODO");
     expect(result.prompt).not.toContain("TODO");
-    expect(result.prompt).toContain("# Agent guidance");
+    expect(result.prompt).toContain("Generate practical, repo-specific rules for coding agents.");
     expect(result.prompt).toContain("# Repo context");
     expect(result.prompt).toContain("# Generated docs");
     expect(result.prompt).toContain(
