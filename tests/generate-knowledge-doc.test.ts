@@ -67,7 +67,7 @@ describe("generateKnowledgeDoc", () => {
     ).rejects.toThrow("Architecture generation returned empty Markdown.");
   });
 
-  it("validates required markdown sections", async () => {
+  it("returns trimmed markdown even when required sections are absent", async () => {
     mockedGenerateText.mockResolvedValueOnce("# Doc\n\n## Overview\n");
 
     await expect(
@@ -76,8 +76,6 @@ describe("generateKnowledgeDoc", () => {
         generationInput,
         buildPrompt: () => ({ system: "system", prompt: "prompt" }),
       }),
-    ).rejects.toThrow(
-      "Architecture is missing required sections: ## Unknowns",
-    );
+    ).resolves.toBe("# Doc\n\n## Overview");
   });
 });

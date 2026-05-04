@@ -1,4 +1,9 @@
 import { buildRepoContextArtifacts } from "../../core/context-builder/build-repo-context";
+import { buildGraphSummary } from "../../core/repo-graph/build-graph-summary";
+import { buildRepoGraph } from "../../core/repo-graph/build-repo-graph";
+import type { GraphSummary, GraphSummaryRankedFile } from "../../core/repo-graph/models/graph-summary";
+import type { RepoGraph } from "../../core/repo-graph/models/repo-graph";
+import { buildFileIndex } from "../../core/repo-scanner/build-file-index";
 import { logger } from "../../shared/logger";
 import { resolveRepoRoot } from "../../core/utils/paths";
 import type { FileIndex, FileIndexEntry } from "../../core/models/file-index";
@@ -13,6 +18,7 @@ export interface InspectCommandOptions {
   repo?: string;
   context?: boolean;
   importantFiles?: boolean;
+  graph?: boolean;
   json?: boolean;
 }
 
@@ -158,6 +164,71 @@ export function formatInspectSummary(input: InspectSummaryInput): string {
   return lines.join("\n");
 }
 
+export function formatGraphInspectOutput(input: {
+  graph: RepoGraph;
+  summary: GraphSummary;
+}): string {
+  const { graph, summary } = input;
+
+  return [
+    "Repo graph",
+    "",
+    "Stats",
+    `- Files: ${graph.stats.fileCount}`,
+    `- Directories: ${graph.stats.directoryCount}`,
+    `- Contains edges: ${graph.stats.containsEdgeCount}`,
+    `- Import edges: ${graph.stats.importEdgeCount}`,
+    `- Unresolved imports: ${graph.stats.unresolvedImportCount}`,
+    `- Supported language files: ${graph.stats.supportedLanguageFileCount}`,
+    `- Diagnostics: ${graph.diagnostics.length}`,
+    "",
+    "Entrypoint candidates",
+    formatPathList(summary.entrypoints),
+    "",
+    "Top high fan-in files",
+    formatRankedFiles(summary.highFanInFiles, "incoming"),
+    "",
+    "Top high fan-out files",
+    formatRankedFiles(summary.highFanOutFiles, "outgoing"),
+    "",
+    "Architecture-first order preview",
+    formatOrderedPreview(summary.architectureFirstOrder.slice(0, 10)),
+  ].join("\n");
+}
+
+function formatPathList(paths: string[]): string {
+  if (paths.length === 0) {
+    return "- None";
+  }
+
+  return paths.map((path) => `- ${path}`).join("\n");
+}
+
+function formatRankedFiles(
+  files: GraphSummaryRankedFile[],
+  label: "incoming" | "outgoing",
+): string {
+  if (files.length === 0) {
+    return "- None";
+  }
+
+  return files
+    .slice(0, 10)
+    .map(
+      (file) =>
+        `- ${file.path} - ${file.count} ${label} import${file.count === 1 ? "" : "s"}`,
+    )
+    .join("\n");
+}
+
+function formatOrderedPreview(paths: string[]): string {
+  if (paths.length === 0) {
+    return "- None";
+  }
+
+  return paths.map((path, index) => `${index + 1}. ${path}`).join("\n");
+}
+
 function formatImportantFileInspectionLines(
   importantFile: ImportantFileInspection,
 ): string[] {
@@ -233,11 +304,43 @@ function printContextPreview(result: InspectResult): void {
   logger.info(formatContextPreview(result));
 }
 
+async function buildGraphInspectArtifacts(repoRoot: string): Promise<{
+  graph: RepoGraph;
+  summary: GraphSummary;
+}> {
+  const fileIndex = await buildFileIndex(repoRoot);
+  const graph = await buildRepoGraph({
+    repoRoot,
+    fileIndex,
+  });
+  const summary = buildGraphSummary(graph);
+
+  return {
+    graph,
+    summary,
+  };
+}
+
+function printGraphInspectOutput(input: {
+  graph: RepoGraph;
+  summary: GraphSummary;
+}): void {
+  logger.info(formatGraphInspectOutput(input));
+}
+
 export async function runInspectCommand(
   options?: InspectCommandOptions,
 ): Promise<void> {
   try {
     const repoRoot = resolveRepoRoot(options?.repo);
+
+    if (options?.graph) {
+      const graphResult = await buildGraphInspectArtifacts(repoRoot);
+
+      printGraphInspectOutput(graphResult);
+      return;
+    }
+
     const result = await buildInspectResult(repoRoot);
 
     if (options?.json) {
@@ -267,6 +370,7 @@ export const inspectCommand = new Command("inspect")
   .option("--repo <path>", "Path to the repository to inspect")
   .option("--context", "Show deterministic context preview before LLM generation")
   .option("--important-files", "Show selected important files and selection reasons")
+  .option("--graph", "Print repo graph inspection output")
   .option("--json", "Print inspect result as JSON")
   .action(async (options: InspectCommandOptions) => {
     await runInspectCommand(options);

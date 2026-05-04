@@ -31,6 +31,14 @@ export function getFileIndexPath(repoRoot: string): string {
   return path.join(getBridgerDir(repoRoot), "file-index.json");
 }
 
+export function getRepoGraphPath(repoRoot: string): string {
+  return path.join(getBridgerDir(repoRoot), "repo-graph.json");
+}
+
+export function getGraphSummaryPath(repoRoot: string): string {
+  return path.join(getBridgerDir(repoRoot), "graph-summary.json");
+}
+
 export function getGeneratedDocPath(
   repoRoot: string,
   filename: string,

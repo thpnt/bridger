@@ -6,9 +6,11 @@ import {
   getAgentsGeneratedPath,
   getAgentsMdPath,
   getBridgerDir,
+  getGraphSummaryPath,
   getFileIndexPath,
   getGeneratedKnowledgeDocPath,
   getRepoContextPath,
+  getRepoGraphPath,
   resolveRepoRoot,
 } from "../../../src/core/utils/paths";
 
@@ -32,6 +34,12 @@ describe("bridger path helpers", () => {
     );
     expect(getFileIndexPath(repoRoot)).toBe(
       path.join(repoRoot, ".bridger", "file-index.json"),
+    );
+    expect(getRepoGraphPath(repoRoot)).toBe(
+      path.join(repoRoot, ".bridger", "repo-graph.json"),
+    );
+    expect(getGraphSummaryPath(repoRoot)).toBe(
+      path.join(repoRoot, ".bridger", "graph-summary.json"),
     );
     expect(getGeneratedKnowledgeDocPath(repoRoot, "architecture")).toBe(
       path.join(repoRoot, ".bridger", "generated", "architecture.md"),

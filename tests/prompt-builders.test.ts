@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { GENERATED_DOC_FILENAMES } from "../src/core/doc-generator/doc-filenames";
+import { buildKnowledgeDocGenerationInput } from "../src/core/doc-generator/knowledge-doc-input";
 import { buildAgentRulesPrompt } from "../src/core/llm/prompts/docs/agent-rules-prompt";
 import { buildArchitecturePrompt } from "../src/core/llm/prompts/docs/architecture-prompt";
 import { buildBusinessLogicPrompt } from "../src/core/llm/prompts/docs/business-logic-prompt";
 import { buildConventionsPrompt } from "../src/core/llm/prompts/docs/conventions-prompt";
 import { buildRepoAnalysisPrompt } from "../src/core/llm/prompts/docs/repo-analysis-prompt";
 import { buildTestingPrompt } from "../src/core/llm/prompts/docs/testing-prompt";
-import { GENERATED_DOC_FILENAMES } from "../src/core/doc-generator/doc-filenames";
-import { buildKnowledgeDocGenerationInput } from "../src/core/doc-generator/knowledge-doc-input";
 import {
   GenerateAgentRulesDocInputSchema,
   type GenerateAgentRulesDocInput,
@@ -107,9 +107,9 @@ describe("prompt builders", () => {
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
     expect(result.prompt).toContain("Generate `repo-analysis.md` for this repository.");
-    expect(result.prompt).toContain("## File and folder evidence");
-    expect(result.prompt).toContain("## Observed structure");
-    expect(result.prompt).toContain("## Unknowns");
+    expect(result.prompt).toContain("## High-signal context");
+    expect(result.prompt).toContain("## Visible structure and likely boundaries");
+    expect(result.prompt).toContain("## What needs more context");
   });
 
   it("builds the architecture prompt scaffold", () => {
@@ -118,10 +118,10 @@ describe("prompt builders", () => {
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
     expect(result.prompt).toContain("Generate `architecture.md` for this repository.");
-    expect(result.prompt).toContain("## App structure");
-    expect(result.prompt).toContain("## Data flow assumptions");
-    expect(result.prompt).toContain("## Risky areas");
-    expect(result.prompt).toContain("## Unknowns");
+    expect(result.prompt).toContain("## Architectural overview");
+    expect(result.prompt).toContain("## Main entry points and execution paths");
+    expect(result.prompt).toContain("## Central and risky areas");
+    expect(result.prompt).toContain("## Architectural unknowns");
   });
 
   it("builds the conventions prompt scaffold", () => {
@@ -130,7 +130,9 @@ describe("prompt builders", () => {
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
     expect(result.prompt).toContain("Generate `conventions.md` for this repository.");
-    expect(result.prompt).toContain("## Things agents should avoid");
+    expect(result.prompt).toContain("## Patterns to copy");
+    expect(result.prompt).toContain("## What agents should avoid");
+    expect(result.prompt).toContain("## Unknowns and weak signals");
   });
 
   it("builds the business logic prompt scaffold", () => {
@@ -139,7 +141,9 @@ describe("prompt builders", () => {
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
     expect(result.prompt).toContain("Generate `business-logic.md` for this repository.");
-    expect(result.prompt).toContain("## Evidence map");
+    expect(result.prompt).toContain("## Product and domain model");
+    expect(result.prompt).toContain("## Business rules and invariants");
+    expect(result.prompt).toContain("## Unknowns and risks");
   });
 
   it("builds the testing prompt scaffold", () => {
@@ -147,12 +151,12 @@ describe("prompt builders", () => {
 
     assertPromptScaffold(result);
     expect(result.system).not.toContain("TODO");
-    expect(result.prompt).toContain("Generate a grounded testing document for this repository.");
-    expect(result.prompt).toContain("## Testing philosophy");
-    expect(result.prompt).toContain("## Test types and when to use them");
-    expect(result.prompt).toContain("## Unit testing conventions");
-    expect(result.prompt).toContain("## Testing gaps and unknowns");
-    expect(result.prompt).toContain("## Things agents should avoid");
+    expect(result.prompt).toContain("Generate `testing.md` for this repository.");
+    expect(result.prompt).toContain("## Verification overview");
+    expect(result.prompt).toContain("## Commands agents can run");
+    expect(result.prompt).toContain("## Existing testing patterns to copy");
+    expect(result.prompt).toContain("## Testing gaps and unsafe assumptions");
+    expect(result.prompt).toContain("## Testing mistakes to avoid");
     expect(result.prompt).toContain("test: pnpm test");
     expect(result.prompt).toContain("Testing: vitest");
   });
@@ -170,7 +174,7 @@ describe("prompt builders", () => {
       },
     });
 
-    expect(result.prompt).toContain("## Testing philosophy");
+    expect(result.prompt).toContain("## Verification overview");
     expect(result.prompt).toContain("- Unknown");
     expect(result.prompt).toContain("Testing: unknown");
     expect(result.prompt).not.toContain("pnpm test");
@@ -183,36 +187,26 @@ describe("prompt builders", () => {
     expect(result.prompt).toEqual(expect.any(String));
     expect(result.system).not.toContain("TODO");
     expect(result.prompt).not.toContain("TODO");
-    expect(result.prompt).toContain("Generate practical, repo-specific rules for coding agents.");
+    expect(result.prompt).toContain("Generate `agent-rules.md` for this repository.");
     expect(result.prompt).toContain("# Repo context");
     expect(result.prompt).toContain("# Generated docs");
-    expect(result.prompt).toContain(
-      GENERATED_DOC_FILENAMES.repoAnalysis,
-    );
-    expect(result.prompt).toContain(
-      GENERATED_DOC_FILENAMES.architecture,
-    );
-    expect(result.prompt).toContain(
-      GENERATED_DOC_FILENAMES.conventions,
-    );
-    expect(result.prompt).toContain(
-      GENERATED_DOC_FILENAMES.businessLogic,
-    );
+    expect(result.prompt).toContain(GENERATED_DOC_FILENAMES.repoAnalysis);
+    expect(result.prompt).toContain(GENERATED_DOC_FILENAMES.architecture);
+    expect(result.prompt).toContain(GENERATED_DOC_FILENAMES.conventions);
+    expect(result.prompt).toContain(GENERATED_DOC_FILENAMES.businessLogic);
     expect(result.prompt).toContain(GENERATED_DOC_FILENAMES.testing);
-    expect(result.prompt).toContain("## Project overview");
-    expect(result.prompt).toContain("## Rules for agents");
-    expect(result.prompt).toContain("## Business logic boundaries");
-    expect(result.prompt).toContain(
-      "## Files/folders to avoid unless explicitly requested",
-    );
-    expect(result.prompt).toContain("## Unknowns");
+    expect(result.prompt).toContain("## Agent operating principles");
+    expect(result.prompt).toContain("## Repo-specific change boundaries");
+    expect(result.prompt).toContain("## Business logic and side-effect rules");
+    expect(result.prompt).toContain("## Risky changes and avoid-rules");
+    expect(result.prompt).toContain("## Unknowns agents must preserve");
   });
 });
 
 function assertPromptScaffold(result: { system: string; prompt: string }): void {
   expect(result.system).toEqual(expect.any(String));
   expect(result.prompt).toEqual(expect.any(String));
-  expect(result.prompt).toContain("# Required sections");
+  expect(result.prompt).toContain("# Output shape");
   expect(result.prompt).toContain("# Grounding rules");
   expect(result.prompt).toContain("# Output rules");
   expect(result.prompt).toContain("# Repo context");

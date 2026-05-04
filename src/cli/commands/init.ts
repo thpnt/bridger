@@ -14,11 +14,18 @@ import { ensureOutputDirs } from "../../core/output/ensure-output-dirs";
 import { upsertGeneratedMarkdownBlock } from "../../core/output/upsert-generated-markdown-block";
 import { writeJson } from "../../core/output/write-json";
 import { writeMarkdown } from "../../core/output/write-markdown";
+import { buildGraphSummary } from "../../core/repo-graph/build-graph-summary";
+import { buildRepoGraph } from "../../core/repo-graph/build-repo-graph";
+import { readGraphOrderedFiles } from "../../core/repo-graph/read-graph-ordered-files";
+import { writeRepoGraphArtifacts } from "../../core/repo-graph/write-repo-graph";
+import { IMPORTANT_FILE_BUDGETS } from "../../core/repo-scanner/important-file-rules";
 import {
   getAgentsGeneratedPath,
   getAgentsMdPath,
   getFileIndexPath,
+  getGraphSummaryPath,
   getGeneratedKnowledgeDocPath,
+  getRepoGraphPath,
   getRepoContextPath,
   resolveRepoRoot,
 } from "../../core/utils/paths";
@@ -47,6 +54,11 @@ interface InitSummaryInput {
 
 const BRIDGER_GENERATED_START_MARKER = "<!-- BRIDGER GENERATED START -->";
 const BRIDGER_GENERATED_END_MARKER = "<!-- BRIDGER GENERATED END -->";
+const INIT_GRAPH_CONTEXT_MAX_FILES = 40;
+const INIT_GRAPH_CONTEXT_MAX_SINGLE_FILE_BYTES =
+  IMPORTANT_FILE_BUDGETS.maxSingleFileBytes;
+const INIT_GRAPH_CONTEXT_MAX_TOTAL_BYTES =
+  IMPORTANT_FILE_BUDGETS.maxTotalContentBytes;
 
 function logInitStep(message: string): void {
   logger.debug(`bridger init: ${message}`);
@@ -148,6 +160,8 @@ function getGeneratedFilePaths(repoRoot: string, writeAgentsMd: boolean): string
   const filePaths = [
     getRepoContextPath(repoRoot),
     getFileIndexPath(repoRoot),
+    getRepoGraphPath(repoRoot),
+    getGraphSummaryPath(repoRoot),
     getGeneratedKnowledgeDocPath(repoRoot, "architecture"),
     getGeneratedKnowledgeDocPath(repoRoot, "repoAnalysis"),
     getGeneratedKnowledgeDocPath(repoRoot, "conventions"),
@@ -182,16 +196,53 @@ export async function runInitCommand(
       `repo context ready (${fileIndex.files.length} indexed files, ${importantFiles.length} important files)`,
     );
 
-    logInitStep("writing context artifacts");
+    logInitStep("building repo graph");
+    const graph = await buildRepoGraph({
+      repoRoot,
+      fileIndex,
+    });
+    const graphSummary = buildGraphSummary(graph);
+    logInitStep("repo graph ready");
+
+    logInitStep("writing deterministic artifacts");
     await writeJson(getRepoContextPath(repoRoot), repoContext);
     await writeJson(getFileIndexPath(repoRoot), fileIndex);
-    logInitStep("context artifacts written");
+    await writeRepoGraphArtifacts({
+      repoRoot,
+      graph,
+      summary: graphSummary,
+    });
+    logInitStep("deterministic artifacts written");
+
+    logInitStep("reading graph-ordered file context");
+    const graphOrderedFileContext = await readGraphOrderedFiles({
+      repoRoot,
+      graph,
+      summary: graphSummary,
+      mode: "architecture-first",
+      maxFiles: INIT_GRAPH_CONTEXT_MAX_FILES,
+      maxSingleFileBytes: INIT_GRAPH_CONTEXT_MAX_SINGLE_FILE_BYTES,
+      maxTotalBytes: INIT_GRAPH_CONTEXT_MAX_TOTAL_BYTES,
+    });
+    logInitStep(
+      `graph-ordered file context ready (${graphOrderedFileContext.files.length} files)`,
+    );
+
+    if (graphOrderedFileContext.diagnostics.length > 0) {
+      logger.warn(
+        `Skipped ${graphOrderedFileContext.diagnostics.length} graph-ordered context files.`,
+      );
+    }
 
     logInitStep("generating documentation");
     const generatedDocs = await generateDocs({
       repoContext,
       fileIndex,
-      importantFiles,
+      importantFiles: graphOrderedFileContext.files.map((file) => ({
+        path: file.path,
+        reason: file.reason,
+        content: file.content,
+      })),
     });
     logInitStep("documentation generated");
 

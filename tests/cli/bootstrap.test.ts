@@ -32,6 +32,11 @@ describe("cli bootstrap", () => {
     ).toBe(true);
     expect(
       program.commands.find((command) => command.name() === "inspect")?.options.some(
+        (option) => option.long === "--graph",
+      ),
+    ).toBe(true);
+    expect(
+      program.commands.find((command) => command.name() === "inspect")?.options.some(
         (option) => option.long === "--json",
       ),
     ).toBe(true);

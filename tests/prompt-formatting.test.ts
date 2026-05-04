@@ -108,7 +108,9 @@ describe("prompt formatting helpers", () => {
     expect(formatGroundingRules()).toContain(
       "Use only the provided repo context, file index summary, important files, and generated docs included in the prompt.",
     );
-    expect(formatGroundingRules()).toContain("Unknowns section");
+    expect(formatGroundingRules()).toContain(
+      "When evidence is weak, use cautious language and preserve the uncertainty instead of guessing.",
+    );
     expect(formatMarkdownOutputRules()).toContain("Return Markdown only.");
   });
 
