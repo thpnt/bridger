@@ -1228,22 +1228,180 @@ Prefer concise, practical guidance.
 
 ---
 
-# Ticket 12 — Add conventions prompt
+# Ticket 12 — Add repo knowledge generation workflows
 
 ## Objective
 
-Generate practical coding conventions from repo structure and selected files.
+Generate practical, repo-grounded Markdown documentation from repo structure, file index, important files, and selected source evidence.
+
+This ticket introduces three single-pass documentation workflows:
+
+``txt
+architecture workflow -> architecture.md
+coding conventions workflow -> conventions.md
+business logic workflow -> business-logic.md
+``
+
+The goal is not to build the dynamic knowledge base yet. That will be implemented in Milestone 2.
+
+For now, these workflows should use the same generation pattern:
+
+``txt
+RepoContext
+FileIndex
+FileIndexSummary
+ImportantFiles
+Prompt instructions
+LLM generateText
+Markdown section validation
+``
+
+Each workflow should have its own prompt and output file.
 
 ## Files
 
-Create:
+Create or update:
+
+``txt
+src/core/llm/prompts/repo-analysis-prompt.ts
+src/core/llm/prompts/conventions-prompt.ts
+src/core/llm/prompts/business-logic-prompt.ts
+
+src/core/context-builder/generate-architecture-doc.ts
+src/core/context-builder/generate-conventions-doc.ts
+src/core/context-builder/generate-business-logic-doc.ts
+``
+
+If not already created by Ticket 11, also create:
+
+``txt
+src/core/context-builder/file-index-summary.ts
+``
+
+## Generated outputs
+
+Later, the `init` command should write:
+
+```txt
+.bridger/generated/architecture.md
+.bridger/generated/conventions.md
+.bridger/generated/business-logic.md
+```
+
+## Shared input shape
+
+Each generator should accept the same kind of input:
+
+```ts
+type GenerateRepoKnowledgeDocInput = {
+  repoContext: RepoContext;
+  fileIndex: FileIndex;
+  importantFiles: ImportantFile[];
+};
+```
+
+The exact type can be duplicated per generator or shared if useful.
+
+## Shared rules
+
+All workflows must follow these rules:
+
+```txt
+Use only provided context.
+Do not invent architecture, conventions, domains, workflows, APIs, or business rules.
+Reference real files and folders from the repo.
+Distinguish observed facts from assumptions.
+Mark missing or weak evidence as Unknown.
+Prefer concise, practical guidance.
+Avoid generic filler.
+Do not generate tickets or implementation plans.
+Output Markdown.
+```
+
+## Workflow 1 — Architecture documentation
+
+Generate:
+
+```txt
+.bridger/generated/architecture.md
+```
+
+Prompt file:
+
+```txt
+src/core/llm/prompts/repo-analysis-prompt.ts
+```
+
+Generator file:
+
+```txt
+src/core/context-builder/generate-architecture-doc.ts
+```
+
+Required sections:
+
+```txt
+Project overview
+Detected stack
+App structure
+Core domains
+Important folders
+Data flow assumptions
+Commands
+Risky areas
+Unknowns
+```
+
+Purpose:
+
+```txt
+Give agents and developers a compact, evidence-based understanding of the repo structure.
+```
+
+The document should focus on:
+
+```txt
+repo purpose
+detected stack
+routing/application structure
+important folders
+visible domain boundaries
+data flow assumptions
+commands
+risky or ambiguous areas
+unknowns
+```
+
+Acceptance criteria:
+
+- Produces Markdown.
+- References real files/folders from the repo.
+- Includes an `Unknowns` section.
+- Avoids confident claims without evidence.
+- Does not call the LLM directly outside the shared LLM client.
+- Does not write files directly.
+
+## Workflow 2 — Coding conventions documentation
+
+Generate:
+
+```txt
+.bridger/generated/conventions.md
+```
+
+Prompt file:
 
 ```txt
 src/core/llm/prompts/conventions-prompt.ts
+```
+
+Generator file:
+
+```txt
 src/core/context-builder/generate-conventions-doc.ts
 ```
 
-## Required sections
+Required sections:
 
 ```txt
 TypeScript conventions
@@ -1257,16 +1415,230 @@ Naming conventions
 Observed conventions
 Recommended conventions
 Things agents should avoid
+Unknowns
 ```
+
+Purpose:
+
+```txt
+Extract practical coding conventions from the actual codebase so future agents follow existing patterns instead of introducing inconsistent ones.
+```
+
+The document should focus on:
+
+```txt
+how TypeScript is used
+component structure and composition
+server/client boundaries
+validation/schema patterns
+styling patterns
+data access patterns
+test patterns
+naming conventions
+repo-specific do/don't rules
+```
+
+The document must separate:
+
+```txt
+Observed conventions
+Recommended conventions
+Unknowns
+```
+
+Acceptance criteria:
+
+- Produces Markdown.
+- Separates observed conventions from recommendations.
+- Mentions uncertainty when patterns are weak.
+- References real source files when describing conventions.
+- Avoids generic filler.
+- Includes `Things agents should avoid`.
+- Includes `Unknowns`.
+- Does not call the LLM directly outside the shared LLM client.
+- Does not write files directly.
+
+## Workflow 3 — Business logic documentation
+
+Generate:
+
+```txt
+.bridger/generated/business-logic.md
+```
+
+Prompt file:
+
+```txt
+src/core/llm/prompts/business-logic-prompt.ts
+```
+
+Generator file:
+
+```txt
+src/core/context-builder/generate-business-logic-doc.ts
+```
+
+Required sections:
+
+```txt
+Product/domain overview
+Observed domain concepts
+Observed entities and models
+Observed business rules
+Observed workflows
+Data ownership and persistence
+External integrations
+Assumptions
+Unknowns
+Evidence map
+```
+
+Purpose:
+
+```txt
+Extract the real-world concepts and business meaning represented in the codebase.
+```
+
+The document should focus on:
+
+```txt
+business/domain concepts
+entities and models
+schemas and validation rules
+real-world objects represented in code
+business rules and invariants
+workflow states and lifecycle concepts
+data persistence and ownership
+external integrations
+unknown or ambiguous business logic
+```
+
+The document must distinguish:
+
+```txt
+Observed facts
+Assumptions
+Unknowns
+```
+
+The document must not invent business logic.
+
+Examples of valid claims:
+
+```txt
+Observed: `src/domains/billing/schema.ts` defines a `Subscription` schema.
+Assumption: This likely represents a customer's billing plan relationship.
+Unknown: The subscription lifecycle is not clear from the selected files.
+```
+
+Examples of invalid claims:
+
+```txt
+The app charges customers monthly through Stripe.
+Users receive invoices after every payment.
+The onboarding workflow has three steps.
+```
+
+unless these claims are supported by provided source files.
+
+Acceptance criteria:
+
+- Produces Markdown.
+- Identifies business/domain concepts only when supported by source evidence.
+- References real files/folders from the repo.
+- Separates observed facts, assumptions, and unknowns.
+- Includes an `Evidence map`.
+- Avoids invented product behavior.
+- Avoids generic filler.
+- Does not call the LLM directly outside the shared LLM client.
+- Does not write files directly.
+
+## Shared implementation requirements
+
+Each generator should:
+
+```txt
+1. Build its prompt from RepoContext, FileIndexSummary, and ImportantFiles.
+2. Call generateText from the LLM client.
+3. Validate that required Markdown sections are present.
+4. Return the Markdown string.
+```
+
+Each generator should not:
+
+```txt
+write files
+create folders
+call OpenAI SDK directly
+read the filesystem
+modify RepoContext
+perform dynamic knowledge-base discovery
+```
+
+## Prompt requirements
+
+Each prompt should:
+
+```txt
+include repo context JSON
+include compact file index summary
+include important file excerpts
+state required output sections
+state evidence and uncertainty rules
+forbid hallucinated claims
+require real file references
+```
+
+## Section validation
+
+Each generated document should have a lightweight assertion helper.
+
+Examples:
+
+```ts
+assertArchitectureDoc(markdown: string): void
+assertConventionsDoc(markdown: string): void
+assertBusinessLogicDoc(markdown: string): void
+```
+
+Each assertion should verify that the required sections are present.
+
+If required sections are missing, throw a useful error listing missing sections.
+
+## RepoContext generated docs update
+
+Update the generated docs schema to include:
+
+```txt
+businessLogicPath
+```
+
+Expected generated doc paths:
+
+```txt
+architecturePath: ".bridger/generated/architecture.md"
+conventionsPath: ".bridger/generated/conventions.md"
+businessLogicPath: ".bridger/generated/business-logic.md"
+testingPath: ".bridger/generated/testing.md"
+agentRulesPath: ".bridger/generated/agent-rules.md"
+ticketTemplatePath: ".bridger/generated/ticket-template.md"
+```
+
+Update any builder/helper that returns generated doc paths.
 
 ## Acceptance criteria
 
-- Separates observed conventions from recommendations.
-- Mentions uncertainty when patterns are weak.
-- Avoids generic filler.
-- Outputs Markdown.
-
----
+- `generateArchitectureDoc` exists and returns Markdown.
+- `generateConventionsDoc` exists and returns Markdown.
+- `generateBusinessLogicDoc` exists and returns Markdown.
+- Each generator uses `generateText` from the shared LLM client.
+- No generator writes files directly.
+- No generator calls the OpenAI SDK directly.
+- Each prompt includes repo context, file index summary, and important file excerpts.
+- Each generated document has required section validation.
+- `RepoContextGeneratedDocsSchema` includes `businessLogicPath`.
+- Stable generated doc paths are repo-relative.
+- No dynamic knowledge-base workflow is implemented in this ticket.
 
 # Ticket 13 — Add testing profile prompt
 
@@ -1951,3 +2323,737 @@ AGENTS.generated.md
 ```
 
 Do not continue to integrations until this local flow is genuinely useful.
+
+
+
+# Milestone 2 — Dynamic repo knowledge base compiler
+
+## Goal
+
+Build the first version of Bridger’s persistent repo knowledge base.
+
+The v0 POC generates one-shot repo artifacts:
+
+``txt
+.bridger/generated/architecture.md
+.bridger/generated/conventions.md
+.bridger/generated/business-logic.md
+.bridger/generated/testing.md
+.bridger/generated/agent-rules.md
+``
+
+Milestone 2 introduces a more durable knowledge layer:
+
+``txt
+.bridger/knowledge/
+  manifest.json
+  conventions/
+    overview.md
+    typescript.md
+    components.md
+    validation.md
+    data-access.md
+    testing.md
+  domain/
+    overview.md
+    concepts/
+      <concept>.md
+    workflows/
+      <workflow>.md
+  evidence/
+    claims.json
+    source-map.json
+``
+
+This knowledge base should be compiled from repo files and maintained as Markdown so it remains readable by humans, Codex, Claude Code, and future agent workflows.
+
+The first milestone should only build the initial knowledge base. It should not implement automatic update-on-change yet.
+
+---
+
+# Ticket KB-1 — Define knowledge base architecture and schemas
+
+## Objective
+
+Define the structure, manifest, page types, and evidence model for Bridger’s repo knowledge base.
+
+## Scope
+
+Create schemas/models for:
+
+``txt
+Knowledge base manifest
+Knowledge source files
+Knowledge pages
+Knowledge page kinds
+Evidence claims
+Source references
+Confidence levels
+Workflow run metadata
+``
+
+## Expected outputs
+
+The system should be able to represent:
+
+``txt
+- convention pages
+- business/domain concept pages
+- workflow pages
+- overview pages
+- evidence references back to source files
+- unresolved unknowns
+- confidence levels
+``
+
+## Notes
+
+This ticket should keep the model simple enough for the POC extension.
+
+The knowledge base should be file-based and Markdown-first.
+
+Do not introduce vector databases, graph databases, SaaS storage, or background synchronization yet.
+
+---
+
+# Ticket KB-2 — Define knowledge base folder structure and page templates
+
+## Objective
+
+Create the static folder layout and Markdown templates used by the knowledge compiler.
+
+## Scope
+
+Define templates for:
+
+``txt
+conventions/overview.md
+conventions/typescript.md
+conventions/components.md
+conventions/validation.md
+conventions/data-access.md
+conventions/testing.md
+
+domain/overview.md
+domain/concepts/<concept>.md
+domain/workflows/<workflow>.md
+
+evidence/claims.json
+evidence/source-map.json
+manifest.json
+``
+
+## Page requirements
+
+Each knowledge page should include:
+
+``txt
+Title
+Purpose
+Observed facts
+Assumptions
+Unknowns
+Source files
+Related pages
+Last generated metadata
+``
+
+Domain concept pages should additionally include:
+
+``txt
+Definition
+Real-world meaning
+Code representation
+Fields / attributes
+Lifecycle / states
+Business rules
+Related concepts
+Evidence
+Open questions
+``
+
+Convention pages should additionally include:
+
+``txt
+Observed patterns
+Examples from source files
+Recommended agent behavior
+Things agents should avoid
+Confidence level
+``
+
+## Notes
+
+The templates should be explicit enough that an LLM agent can update them consistently later.
+
+---
+
+# Ticket KB-3 — Implement knowledge source selection
+
+## Objective
+
+Select the source files that should be used to compile the knowledge base.
+
+## Scope
+
+Reuse existing POC artifacts:
+
+``txt
+FileIndex
+RepoContext
+ImportantFile reader
+File index summary
+``
+
+The source selector should prioritize:
+
+``txt
+domain/business logic files
+models, schemas, and types
+data access files
+app entry points
+API routes
+representative components
+representative tests
+existing docs and agent instructions
+``
+
+## Expected behavior
+
+The selector should produce a bounded set of source files for knowledge compilation.
+
+It should preserve evidence metadata:
+
+``txt
+path
+reason
+category
+size
+tags
+selected_for
+``
+
+## Notes
+
+This ticket should reuse the FileIndex. It should not rediscover files from scratch.
+
+---
+
+# Ticket KB-4 — Implement file relationship discovery graph
+
+## Objective
+
+Build a lightweight file relationship graph to support guided source expansion.
+
+## Scope
+
+Create a deterministic graph of relationships between source files.
+
+Relationship types may include:
+
+``txt
+imports
+exports
+same folder
+same domain folder
+schema-to-service proximity
+test-to-source proximity
+route-to-component proximity
+config-to-convention relevance
+``
+
+## Expected output
+
+For a selected source file, Bridger should be able to find likely related files.
+
+Example:
+
+``txt
+src/domains/billing/service.ts
+  imports -> src/domains/billing/schema.ts
+  related_test -> src/domains/billing/service.test.ts
+  same_domain -> src/domains/billing/repository.ts
+``
+
+## Notes
+
+This does not need a full AST engine in v1.
+
+Start with simple import parsing and path heuristics.
+
+The purpose is to guide the LLM toward relevant neighboring files instead of relying only on a flat file list.
+
+---
+
+# Ticket KB-5 — Design the knowledge compiler agent loop
+
+## Objective
+
+Define the reusable agentic workflow used to compile knowledge pages from source files.
+
+## Scope
+
+Design a bounded, tool-driven loop that can:
+
+``txt
+read selected source files
+request related files from the graph
+inspect existing knowledge pages
+propose knowledge page changes
+record evidence
+write or update Markdown pages
+record unresolved unknowns
+``
+
+## Required constraints
+
+The loop must be bounded by:
+
+``txt
+max iterations
+max files read
+max total content read
+max pages written
+max LLM calls
+``
+
+## Notes
+
+This ticket is design/scaffolding first.
+
+Do not implement automatic continuous updates yet.
+
+Do not let the agent write arbitrary repo files.
+
+The agent should only write under:
+
+``txt
+.bridger/knowledge/
+``
+
+---
+
+# Ticket KB-6 — Define LLM tool interface for knowledge compilation
+
+## Objective
+
+Define the internal tools available to the knowledge compiler agent.
+
+## Candidate tools
+
+``txt
+list_source_files
+read_source_file
+find_related_files
+read_knowledge_page
+write_knowledge_page
+append_evidence_claim
+list_unknowns
+finalize_compilation
+``
+
+## Tool rules
+
+Tools should be deterministic and permissioned.
+
+The agent should not directly access the filesystem.
+
+All source reads should go through tool wrappers that enforce:
+
+``txt
+repo-relative paths
+allowed file index entries
+size limits
+read budgets
+``
+
+All writes should be restricted to:
+
+``txt
+.bridger/knowledge/
+``
+
+## Notes
+
+This ticket should define the tool contracts and safety model.
+
+Implementation can come later.
+
+---
+
+# Ticket KB-7 — Implement convention knowledge workflow
+
+## Objective
+
+Implement the first knowledge compiler workflow for coding conventions.
+
+## Input
+
+``txt
+RepoContext
+FileIndex
+ImportantFiles
+File relationship graph
+Existing knowledge pages if present
+``
+
+## Output
+
+``txt
+.bridger/knowledge/conventions/overview.md
+.bridger/knowledge/conventions/typescript.md
+.bridger/knowledge/conventions/components.md
+.bridger/knowledge/conventions/validation.md
+.bridger/knowledge/conventions/data-access.md
+.bridger/knowledge/conventions/testing.md
+``
+
+## The workflow should extract
+
+``txt
+TypeScript conventions
+component conventions
+server/client boundaries
+validation patterns
+styling conventions
+data access conventions
+testing patterns
+naming conventions
+agent-safe implementation rules
+things agents should avoid
+``
+
+## Notes
+
+This should go deeper than the v0 `conventions.md`.
+
+The generated one-shot `conventions.md` can later be rendered from this knowledge base.
+
+---
+
+# Ticket KB-8 — Implement business logic knowledge workflow
+
+## Objective
+
+Implement the knowledge compiler workflow for business/domain understanding.
+
+## Input
+
+``txt
+RepoContext
+FileIndex
+ImportantFiles
+File relationship graph
+Existing knowledge pages if present
+``
+
+## Output
+
+``txt
+.bridger/knowledge/domain/overview.md
+.bridger/knowledge/domain/concepts/<concept>.md
+.bridger/knowledge/domain/workflows/<workflow>.md
+``
+
+## The workflow should extract
+
+``txt
+real-world concepts represented in code
+domain entities
+business objects
+schemas and data models
+lifecycle states
+business rules
+domain workflows
+permissions and access rules
+external integrations
+data transformations
+unknown or ambiguous business logic
+``
+
+## Notes
+
+A concept page should only be created when there is concrete file evidence.
+
+The workflow must distinguish:
+
+``txt
+Observed facts
+Assumptions
+Unknowns
+``
+
+The goal is to make future ticket enrichment more grounded in business meaning, not only code structure.
+
+---
+
+# Ticket KB-9 — Implement evidence and provenance tracking
+
+## Objective
+
+Track which source files support which knowledge claims.
+
+## Scope
+
+Create a lightweight evidence layer under:
+
+``txt
+.bridger/knowledge/evidence/
+  claims.json
+  source-map.json
+``
+
+## Each evidence claim should capture
+
+``txt
+claim
+claim type
+source files
+source excerpts or line references if available
+confidence
+knowledge page path
+created_at
+``
+
+## Notes
+
+This is critical for trust.
+
+Bridger should avoid writing knowledge that cannot be traced back to source files.
+
+Line references are optional in the first version.
+
+---
+
+# Ticket KB-10 — Implement knowledge base writer
+
+## Objective
+
+Write the generated knowledge pages and manifest to disk.
+
+## Scope
+
+The writer should create:
+
+``txt
+.bridger/knowledge/
+.bridger/knowledge/manifest.json
+.bridger/knowledge/conventions/*
+.bridger/knowledge/domain/*
+.bridger/knowledge/evidence/*
+``
+
+## Requirements
+
+The writer should:
+
+``txt
+create parent directories
+write Markdown with stable formatting
+write JSON with stable pretty formatting
+avoid writing outside .bridger/knowledge
+preserve deterministic paths
+``
+
+## Notes
+
+The writer should reuse existing output utilities where possible.
+
+---
+
+# Ticket KB-11 — Implement knowledge base initialization command flow
+
+## Objective
+
+Add a command or init option to compile the knowledge base.
+
+## Candidate command
+
+``txt
+bridger init --knowledge
+``
+
+or:
+
+``txt
+bridger build-knowledge
+``
+
+## Expected behavior
+
+The command should:
+
+``txt
+build repo context
+build file index
+select knowledge source files
+build file relationship graph
+run convention knowledge workflow
+run business logic knowledge workflow
+write knowledge pages
+write manifest and evidence files
+print summary
+``
+
+## Notes
+
+For the first version, prefer an explicit command or flag.
+
+Do not make knowledge compilation automatic until the basic POC flow is stable.
+
+---
+
+# Ticket KB-12 — Render generated docs from knowledge base
+
+## Objective
+
+Use the knowledge base to improve one-shot generated docs.
+
+## Scope
+
+Generate or regenerate:
+
+``txt
+.bridger/generated/conventions.md
+.bridger/generated/business-logic.md
+.bridger/generated/agent-rules.md
+``
+
+from the compiled knowledge base.
+
+## Notes
+
+This creates a clean separation:
+
+``txt
+.bridger/knowledge/* = durable compiled repo memory
+.bridger/generated/* = compact artifacts for agents and humans
+``
+
+The generated docs should become summaries of the knowledge base, not the knowledge base itself.
+
+---
+
+# Ticket KB-13 — Add manual evaluation checklist for knowledge base quality
+
+## Objective
+
+Create a manual evaluation checklist for the compiled knowledge base.
+
+## File
+
+``txt
+docs/knowledge-evaluation.md
+``
+
+## Evaluation questions
+
+``txt
+Did the compiler identify real domain concepts?
+Did it avoid invented business logic?
+Are claims linked to source files?
+Are coding conventions specific to the repo?
+Are unknowns useful?
+Would this help a coding agent implement a ticket?
+Would this help a new developer understand the repo?
+Did it overfit to config/docs instead of code?
+Did it miss important folders?
+``
+
+## Scoring
+
+Use:
+
+``txt
+1 = poor
+2 = weak
+3 = acceptable
+4 = good
+5 = excellent
+``
+
+Score:
+
+``txt
+Domain concept quality
+Convention specificity
+Evidence quality
+Unknowns quality
+Agent usefulness
+Hallucination control
+Overall value
+``
+
+---
+
+# Ticket KB-14 — Smoke test knowledge compiler on one real repo
+
+## Objective
+
+Run the knowledge compiler on one real Next.js/TypeScript repo and evaluate output quality.
+
+## Steps
+
+Run:
+
+``txt
+bridger inspect
+bridger init
+bridger build-knowledge
+``
+
+Inspect:
+
+``txt
+.bridger/knowledge/manifest.json
+.bridger/knowledge/conventions/*
+.bridger/knowledge/domain/*
+.bridger/knowledge/evidence/*
+.bridger/generated/conventions.md
+.bridger/generated/business-logic.md
+``
+
+## Acceptance criteria
+
+``txt
+Knowledge pages are generated.
+Pages reference real source files.
+Domain concepts are not hallucinated.
+Coding conventions are repo-specific.
+Unknowns are explicit.
+At least 3 improvement ideas are documented.
+``
+
+---
+
+# Milestone 2 cut line
+
+The minimum useful knowledge-base milestone is:
+
+``txt
+bridger build-knowledge
+``
+
+with outputs:
+
+``txt
+.bridger/knowledge/manifest.json
+.bridger/knowledge/conventions/overview.md
+.bridger/knowledge/domain/overview.md
+.bridger/knowledge/evidence/claims.json
+``
+
+If time is short, stop after:
+
+``txt
+KB-1
+KB-2
+KB-3
+KB-4
+KB-7
+KB-8
+KB-10
+KB-13
+``
+
+Do not implement automatic updates until the first knowledge compilation workflow is useful.

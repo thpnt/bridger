@@ -1,12 +1,15 @@
+import fs from "fs-extra";
+import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { FileIndexSchema } from "../src/core/models/file-index";
 import {
   RepoContextCommandsSchema,
   RepoContextStackSchema,
 } from "../src/core/models/repo-context";
+import { getGeneratedKnowledgeDocRelativePath } from "../src/core/models/generated-paths";
 import { detectCommands } from "../src/core/repo-scanner/detect-commands";
 import { buildFileIndex } from "../src/core/repo-scanner/build-file-index";
 import { detectStack } from "../src/core/repo-scanner/detect-stack";
@@ -23,6 +26,14 @@ const commandsBunFixtureRoot = path.resolve("tests/fixtures/commands-bun");
 const commandsPackageManagerFixtureRoot = path.resolve(
   "tests/fixtures/commands-package-manager",
 );
+let tempDir = "";
+
+afterEach(async () => {
+  if (tempDir) {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    tempDir = "";
+  }
+});
 
 describe("repo scanner", () => {
   it("builds a deterministic, gitignore-aware file index", async () => {
@@ -43,7 +54,11 @@ describe("repo scanner", () => {
     expect(index.files.some((entry) => entry.path === ".next/ignored.js")).toBe(false);
     expect(index.files.some((entry) => entry.path === "ignored/generated.ts")).toBe(false);
     expect(index.files.some((entry) => entry.path === "public/logo.png")).toBe(false);
-    expect(index.files.some((entry) => entry.path === ".bridger/generated/architecture.md")).toBe(false);
+    expect(
+      index.files.some(
+        (entry) => entry.path === getGeneratedKnowledgeDocRelativePath("architecture"),
+      ),
+    ).toBe(false);
     expect(index.files.some((entry) => entry.path === ".agents/skills/generated-skill/SKILL.md")).toBe(false);
 
     const readme = index.files.find((entry) => entry.path === "README.md");
@@ -96,6 +111,49 @@ describe("repo scanner", () => {
     expect(stack.testFramework).toEqual([]);
   });
 
+  it("detects the package manager from common lockfiles", async () => {
+    const cases = [
+      ["pnpm-lock.yaml", "pnpm"],
+      ["package-lock.json", "npm"],
+      ["yarn.lock", "yarn"],
+      ["bun.lock", "bun"],
+      ["bun.lockb", "bun"],
+    ] as const;
+
+    for (const [lockfileName, expectedPackageManager] of cases) {
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridger-stack-"));
+      await fs.outputFile(
+        path.join(tempDir, "package.json"),
+        '{\n  "name": "fixture"\n}\n',
+      );
+      await fs.outputFile(path.join(tempDir, lockfileName), "");
+
+      const stack = await detectStack(tempDir);
+
+      expect(stack.packageManager).toBe(expectedPackageManager);
+
+      await fs.rm(tempDir, { recursive: true, force: true });
+      tempDir = "";
+    }
+  });
+
+  it("detects Next.js from config and app structure even without a next dependency", async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridger-stack-"));
+    await fs.outputFile(
+      path.join(tempDir, "package.json"),
+      '{\n  "name": "fixture"\n}\n',
+    );
+    await fs.outputFile(path.join(tempDir, "next.config.ts"), "export default {};\n");
+    await fs.outputFile(
+      path.join(tempDir, "src/app/page.tsx"),
+      "export default function Page() { return null; }\n",
+    );
+
+    const stack = await detectStack(tempDir);
+
+    expect(stack.framework).toBe("Next.js");
+  });
+
   it("detects commands from package scripts using the provided package manager", async () => {
     const commands = await detectCommands(commandsPnpmFixtureRoot, "pnpm");
 
@@ -138,6 +196,27 @@ describe("repo scanner", () => {
     expect(RepoContextCommandsSchema.parse(commands)).toEqual(commands);
     expect(commands.install).toBe("bun install");
     expect(commands.dev).toBe("bun run dev");
+  });
+
+  it("formats commands for yarn and falls back to install when scripts are missing", async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridger-commands-"));
+    await fs.outputFile(
+      path.join(tempDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "fixture",
+          packageManager: "yarn@4.0.0",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const commands = await detectCommands(tempDir, "yarn");
+
+    expect(commands).toEqual({
+      install: "yarn install",
+    });
   });
 
   it("returns an empty command object when package.json is missing", async () => {

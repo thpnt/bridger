@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx src/cli/cli.ts",
+    "test:llm": "tsx scripts/test-llm.ts",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest",

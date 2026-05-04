@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { AbsolutePathSchema, RepoRelativePathSchema } from "./paths";
+
+import {
+  RepoRelativePathSchema,
+  type RepoRelativePath,
+  type GeneratedDocPaths,
+} from "./generated-paths";
 
 export const RepoContextStackSchema = z.object({
   framework: z.string(),
@@ -27,8 +32,10 @@ export const RepoContextImportantFileSchema = z.object({
 });
 
 export const RepoContextGeneratedDocsSchema = z.object({
+  repoAnalysisPath: RepoRelativePathSchema,
   architecturePath: RepoRelativePathSchema,
   conventionsPath: RepoRelativePathSchema,
+  businessLogicPath: RepoRelativePathSchema,
   testingPath: RepoRelativePathSchema,
   agentRulesPath: RepoRelativePathSchema,
   ticketTemplatePath: RepoRelativePathSchema,
@@ -48,7 +55,7 @@ export type RepoContextCommands = z.infer<typeof RepoContextCommandsSchema>;
 export type RepoContextImportantFile = z.infer<
   typeof RepoContextImportantFileSchema
 >;
-export type RepoContextGeneratedDocs = z.infer<
-  typeof RepoContextGeneratedDocsSchema
->;
+export type RepoContextGeneratedDocs = GeneratedDocPaths & {
+  ticketTemplatePath: RepoRelativePath;
+};
 export type RepoContext = z.infer<typeof RepoContextSchema>;

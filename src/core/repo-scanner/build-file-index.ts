@@ -3,7 +3,7 @@ import fs from "fs-extra";
 import path from "node:path";
 
 import { FileIndexSchema } from "../models/file-index";
-import { RepoRelativePathSchema } from "../models/paths";
+import { RepoRelativePathSchema } from "../models/generated-paths";
 import type { FileIndex } from "../models/file-index";
 import { createGitignoreFilter } from "./gitignore";
 

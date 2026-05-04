@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RepoRelativePathSchema } from "./paths";
+import { RepoRelativePathSchema } from "./generated-paths";
 
 export const SkillTriggerSchema = z.object({
   description: z.string(),
@@ -74,13 +74,13 @@ export const GeneratedSkillSchema = z.object({
 export const SkillGenerationRequestSchema = z.object({
   sourceRequest: z.string(),
   repoRoot: z.string(),
-  generatedAt: z.string().datetime(),
+  generatedAt: z.iso.datetime(),
   maxSkills: z.number().int().min(1).max(10).default(3),
 });
 
 export const SkillGenerationPlanSchema = z.object({
   sourceRequest: z.string(),
-  generatedAt: z.string().datetime(),
+  generatedAt: z.iso.datetime(),
 
   summary: z.string(),
 
@@ -104,7 +104,7 @@ export const SkillMetadataSchema = z.object({
   title: z.string(),
   description: z.string(),
   targetUseCase: z.string(),
-  generatedAt: z.string().datetime(),
+  generatedAt: z.iso.datetime(),
   sourceRequest: z.string(),
   relevantFiles: z.array(
     z.object({
