@@ -10,7 +10,9 @@ import { generateConventionsDoc } from "../../core/doc-generator/generators/gene
 import { generateRepoAnalysisDoc } from "../../core/doc-generator/generators/generate-repo-analysis-doc";
 import { generateTestingDoc } from "../../core/doc-generator/generators/generate-testing-doc";
 import { renderAgentsMd } from "../../core/doc-generator/renderers/render-agents-md";
+import { createBridgerConfig } from "../../core/project/create-bridger-config";
 import { ensureOutputDirs } from "../../core/output/ensure-output-dirs";
+import { writeBridgerConfig } from "../../core/project/write-bridger-config";
 import { upsertGeneratedMarkdownBlock } from "../../core/output/upsert-generated-markdown-block";
 import { writeJson } from "../../core/output/write-json";
 import { writeMarkdown } from "../../core/output/write-markdown";
@@ -22,11 +24,13 @@ import { IMPORTANT_FILE_BUDGETS } from "../../core/repo-scanner/important-file-r
 import {
   getAgentsGeneratedPath,
   getAgentsMdPath,
+  getBridgerConfigPath,
   getFileIndexPath,
   getGraphSummaryPath,
   getGeneratedKnowledgeDocPath,
   getRepoGraphPath,
   getRepoContextPath,
+  getTicketTemplatePath,
   resolveRepoRoot,
 } from "../../core/utils/paths";
 import { logger } from "../../shared/logger";
@@ -149,8 +153,12 @@ function formatInitSummary(input: InitSummaryInput): string {
   lines.push("");
   lines.push("Skipped:");
 
-  for (const filePath of input.skippedFiles) {
-    lines.push(`- ${filePath}`);
+  if (input.skippedFiles.length === 0) {
+    lines.push("- none");
+  } else {
+    for (const filePath of input.skippedFiles) {
+      lines.push(`- ${filePath}`);
+    }
   }
 
   return lines.join("\n");
@@ -158,6 +166,7 @@ function formatInitSummary(input: InitSummaryInput): string {
 
 function getGeneratedFilePaths(repoRoot: string, writeAgentsMd: boolean): string[] {
   const filePaths = [
+    getBridgerConfigPath(repoRoot),
     getRepoContextPath(repoRoot),
     getFileIndexPath(repoRoot),
     getRepoGraphPath(repoRoot),
@@ -168,6 +177,7 @@ function getGeneratedFilePaths(repoRoot: string, writeAgentsMd: boolean): string
     getGeneratedKnowledgeDocPath(repoRoot, "businessLogic"),
     getGeneratedKnowledgeDocPath(repoRoot, "testing"),
     getGeneratedKnowledgeDocPath(repoRoot, "agentRules"),
+    getTicketTemplatePath(repoRoot),
     getAgentsGeneratedPath(repoRoot),
   ];
 
@@ -176,6 +186,19 @@ function getGeneratedFilePaths(repoRoot: string, writeAgentsMd: boolean): string
   }
 
   return filePaths.map((filePath) => path.relative(repoRoot, filePath));
+}
+
+function getDetectedStackNames(
+  stack: Awaited<ReturnType<typeof buildRepoContextArtifacts>>["repoContext"]["stack"],
+): string[] {
+  return [
+    stack.framework,
+    stack.language,
+    ...stack.styling,
+    ...stack.validation,
+    ...stack.database,
+    ...stack.testFramework,
+  ].filter((value) => value.length > 0 && value !== "unknown");
 }
 
 export async function runInitCommand(
@@ -195,6 +218,19 @@ export async function runInitCommand(
     logInitStep(
       `repo context ready (${fileIndex.files.length} indexed files, ${importantFiles.length} important files)`,
     );
+
+    logInitStep("writing project config");
+    await writeBridgerConfig(
+      repoRoot,
+      createBridgerConfig({
+        repoRoot,
+        mode: fileIndex.files.length > 0 ? "existing" : "unknown",
+        detectedStack: getDetectedStackNames(repoContext.stack),
+        packageManager: repoContext.stack.packageManager || undefined,
+        writeRootAgentsFile: Boolean(options.writeAgentsMd),
+      }),
+    );
+    logInitStep("project config written");
 
     logInitStep("building repo graph");
     const graph = await buildRepoGraph({
@@ -273,10 +309,9 @@ export async function runInitCommand(
 
     const generatedFiles = getGeneratedFilePaths(repoRoot, Boolean(options.writeAgentsMd));
     const skippedFiles = options.writeAgentsMd
-      ? [".bridger/generated/ticket-template.md not generated in this ticket."]
+      ? []
       : [
           "AGENTS.md unchanged. Run `bridger init --write-agents-md` to append/update the generated Bridger section.",
-          ".bridger/generated/ticket-template.md not generated in this ticket.",
         ];
 
     logger.info(

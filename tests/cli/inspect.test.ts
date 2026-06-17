@@ -1,6 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
-import { RepoRelativePathSchema } from "../../src/core/models/generated-paths";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { RepoRelativePathSchema } from "../../src/core/models/path";
+import { createBridgerConfig } from "../../src/core/project/create-bridger-config";
+import { ensureBridgerLayout } from "../../src/core/project/ensure-bridger-layout";
+import {
+  getAgentsGeneratedExportPath,
+  getFileIndexPath,
+  getGraphSummaryPath,
+  getRepoContextPath,
+  getRepoGraphPath,
+} from "../../src/core/project/bridger-paths";
+import { writeBridgerConfig } from "../../src/core/project/write-bridger-config";
 
 vi.mock("../../src/core/context-builder/build-repo-context", () => ({
   buildRepoContextArtifacts: vi.fn(),
@@ -53,6 +67,7 @@ const mockedBuildRepoGraph = vi.mocked(buildRepoGraph);
 const mockedBuildFileIndex = vi.mocked(buildFileIndex);
 const mockedResolveRepoRoot = vi.mocked(resolveRepoRoot);
 const mockedLogger = vi.mocked(logger);
+let tempDir = "";
 
 const artifacts = {
   repoContext: {
@@ -87,13 +102,13 @@ const artifacts = {
       },
     ],
     generatedDocs: {
-      repoAnalysisPath: ".bridger/generated/repo-analysis.md",
-      architecturePath: ".bridger/generated/architecture.md",
-      conventionsPath: ".bridger/generated/conventions.md",
-      businessLogicPath: ".bridger/generated/business-logic.md",
-      testingPath: ".bridger/generated/testing.md",
-      agentRulesPath: ".bridger/generated/agent-rules.md",
-      ticketTemplatePath: ".bridger/tickets/template.md",
+      repoAnalysisPath: ".bridger/memory/repo-analysis.md",
+      architecturePath: ".bridger/memory/architecture.md",
+      conventionsPath: ".bridger/memory/conventions.md",
+      businessLogicPath: ".bridger/memory/business-logic.md",
+      testingPath: ".bridger/memory/testing.md",
+      agentRulesPath: ".bridger/memory/agent-rules.md",
+      ticketTemplatePath: ".bridger/templates/ticket-template.md",
     },
   },
   fileIndex: {
@@ -191,6 +206,13 @@ beforeEach(() => {
   process.exitCode = undefined;
 });
 
+afterEach(async () => {
+  if (tempDir.length > 0) {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    tempDir = "";
+  }
+});
+
 function getMockedBuildResult() {
   mockedBuildRepoContextArtifacts.mockResolvedValue(artifacts as never);
 }
@@ -279,6 +301,18 @@ describe("buildInspectResult", () => {
 
     expect(result.repoContext).toEqual(artifacts.repoContext);
     expect(result.fileIndex).toEqual(artifacts.fileIndex);
+    expect(result.projectState).toEqual(
+      expect.objectContaining({
+        status: "uninitialized",
+        reason: "missing-bridger-dir",
+        configPath: "/repo/.bridger/config.json",
+        artifactsDir: "/repo/.bridger/artifacts",
+        memoryDir: "/repo/.bridger/memory",
+        skillsDir: "/repo/.bridger/skills",
+        templatesDir: "/repo/.bridger/templates",
+        exportsDir: "/repo/.bridger/exports",
+      }),
+    );
     expect(result.inspection.indexedFileCount).toBe(2);
     expect(result.inspection.importantFileCount).toBe(2);
     expect(result.inspection.estimatedImportantFilesSizeBytes).toBe(3072);
@@ -312,6 +346,87 @@ describe("runInspectCommand", () => {
     expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Repo: /repo");
     expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Framework: Next.js");
     expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Indexed files: 2");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Project state:");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Status: uninitialized");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Skills dir:");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Templates dir:");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Canonical artifact files:");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("- file-index.json: missing");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Canonical memory files:");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("- repo-analysis.md: missing");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain(
+      "Canonical skills/templates/exports:",
+    );
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain(
+      "- ticket-template.md: missing",
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("prints initialized project state with canonical directories and files", async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridger-inspect-"));
+    await ensureBridgerLayout(tempDir);
+    await writeBridgerConfig(
+      tempDir,
+      createBridgerConfig({
+        repoRoot: tempDir,
+        mode: "existing",
+        projectName: "demo",
+        detectedStack: ["Next.js", "TypeScript"],
+        packageManager: "pnpm",
+        now: new Date("2026-05-01T00:00:00.000Z"),
+      }),
+    );
+    await fs.writeFile(getFileIndexPath(tempDir), "{}\n", "utf8");
+    await fs.writeFile(getRepoContextPath(tempDir), "{}\n", "utf8");
+    await fs.writeFile(getRepoGraphPath(tempDir), "{}\n", "utf8");
+    await fs.writeFile(getGraphSummaryPath(tempDir), "{}\n", "utf8");
+    await fs.writeFile(getAgentsGeneratedExportPath(tempDir), "# Agents\n", "utf8");
+
+    mockedResolveRepoRoot.mockReturnValue(tempDir);
+    getMockedBuildResult();
+
+    await runInspectCommand({ repo: "." });
+
+    const output = String(mockedLogger.info.mock.calls[0]?.[0]);
+    expect(output).toContain("Status: initialized");
+    expect(output).toContain("- Project name: demo");
+    expect(output).toContain("- Project mode: existing");
+    expect(output).toContain("- Config detected stack: Next.js, TypeScript");
+    expect(output).toContain("- Config package manager: pnpm");
+    expect(output).toContain(`- Config: ${path.join(tempDir, ".bridger", "config.json")} (exists)`);
+    expect(output).toContain(`- Artifacts dir: ${path.join(tempDir, ".bridger", "artifacts")} (exists)`);
+    expect(output).toContain(`- Memory dir: ${path.join(tempDir, ".bridger", "memory")} (exists)`);
+    expect(output).toContain(`- Skills dir: ${path.join(tempDir, ".bridger", "skills")} (exists)`);
+    expect(output).toContain(`- Templates dir: ${path.join(tempDir, ".bridger", "templates")} (exists)`);
+    expect(output).toContain(`- Exports dir: ${path.join(tempDir, ".bridger", "exports")} (exists)`);
+    expect(output).toContain("- file-index.json: exists");
+    expect(output).toContain("- repo-context.json: exists");
+    expect(output).toContain("- repo-graph.json: exists");
+    expect(output).toContain("- graph-summary.json: exists");
+    expect(output).toContain("- codebase-map.json: missing");
+    expect(output).toContain("- reading-plans.json: missing");
+    expect(output).toContain("- ticket-template.md: exists");
+    expect(output).toContain("- AGENTS.generated.md: exists");
+    expect(output).toContain("- CLAUDE.generated.md: missing");
+    expect(output).toContain("- root AGENTS.md: missing");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("prints invalid config state as a clear diagnostic", async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridger-inspect-"));
+    await fs.mkdir(path.join(tempDir, ".bridger"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, ".bridger", "config.json"), "{", "utf8");
+
+    mockedResolveRepoRoot.mockReturnValue(tempDir);
+    getMockedBuildResult();
+
+    await runInspectCommand({ repo: "." });
+
+    const output = String(mockedLogger.info.mock.calls[0]?.[0]);
+    expect(output).toContain("Status: invalid");
+    expect(output).toContain("Reason: invalid-config");
+    expect(output).toContain("Message:");
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -411,12 +526,19 @@ describe("runInspectCommand", () => {
   it("sets a non-zero exit code only on real errors", async () => {
     mockedResolveRepoRoot.mockReturnValue("/repo");
     mockedBuildRepoContextArtifacts.mockRejectedValue(new Error("bad repo"));
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
 
-    await runInspectCommand({ repo: "." });
+    try {
+      await runInspectCommand({ repo: "." });
 
-    expect(mockedLogger.error).toHaveBeenCalledWith(
-      "Failed to inspect repository: bad repo",
-    );
-    expect(process.exitCode).toBe(1);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "bridger inspect failed: bad repo",
+      );
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });

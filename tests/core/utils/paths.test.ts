@@ -5,10 +5,13 @@ import { describe, expect, it } from "vitest";
 import {
   getAgentsGeneratedPath,
   getAgentsMdPath,
+  getArtifactsDir,
   getBridgerDir,
+  getExportsDir,
   getGraphSummaryPath,
   getFileIndexPath,
   getGeneratedKnowledgeDocPath,
+  getMemoryDir,
   getRepoContextPath,
   getRepoGraphPath,
   resolveRepoRoot,
@@ -30,22 +33,31 @@ describe("bridger path helpers", () => {
 
     expect(getBridgerDir(repoRoot)).toBe(path.join(repoRoot, ".bridger"));
     expect(getRepoContextPath(repoRoot)).toBe(
-      path.join(repoRoot, ".bridger", "repo-context.json"),
+      path.join(repoRoot, ".bridger", "artifacts", "repo-context.json"),
     );
     expect(getFileIndexPath(repoRoot)).toBe(
-      path.join(repoRoot, ".bridger", "file-index.json"),
+      path.join(repoRoot, ".bridger", "artifacts", "file-index.json"),
     );
     expect(getRepoGraphPath(repoRoot)).toBe(
-      path.join(repoRoot, ".bridger", "repo-graph.json"),
+      path.join(repoRoot, ".bridger", "artifacts", "repo-graph.json"),
     );
     expect(getGraphSummaryPath(repoRoot)).toBe(
-      path.join(repoRoot, ".bridger", "graph-summary.json"),
+      path.join(repoRoot, ".bridger", "artifacts", "graph-summary.json"),
+    );
+    expect(getArtifactsDir(repoRoot)).toBe(
+      path.join(repoRoot, ".bridger", "artifacts"),
+    );
+    expect(getMemoryDir(repoRoot)).toBe(
+      path.join(repoRoot, ".bridger", "memory"),
+    );
+    expect(getExportsDir(repoRoot)).toBe(
+      path.join(repoRoot, ".bridger", "exports"),
     );
     expect(getGeneratedKnowledgeDocPath(repoRoot, "architecture")).toBe(
-      path.join(repoRoot, ".bridger", "generated", "architecture.md"),
+      path.join(repoRoot, ".bridger", "memory", "architecture.md"),
     );
     expect(getAgentsGeneratedPath(repoRoot)).toBe(
-      path.join(repoRoot, "AGENTS.generated.md"),
+      path.join(repoRoot, ".bridger", "exports", "AGENTS.generated.md"),
     );
     expect(getAgentsMdPath(repoRoot)).toBe(path.join(repoRoot, "AGENTS.md"));
   });

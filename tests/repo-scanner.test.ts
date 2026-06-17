@@ -9,7 +9,7 @@ import {
   RepoContextCommandsSchema,
   RepoContextStackSchema,
 } from "../src/core/models/repo-context";
-import { getGeneratedKnowledgeDocRelativePath } from "../src/core/models/generated-paths";
+import { getGeneratedKnowledgeDocRelativePath } from "../src/core/project/bridger-paths";
 import { detectCommands } from "../src/core/repo-scanner/detect-commands";
 import { buildFileIndex } from "../src/core/repo-scanner/build-file-index";
 import { detectStack } from "../src/core/repo-scanner/detect-stack";

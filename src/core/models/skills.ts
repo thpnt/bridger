@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RepoRelativePathSchema } from "./generated-paths";
+import { RepoRelativePathSchema } from "./path";
 
 export const SkillTriggerSchema = z.object({
   description: z.string(),

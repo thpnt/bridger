@@ -1,4 +1,32 @@
+import fs from "node:fs/promises";
+
+import { Command } from "commander";
+
 import { buildRepoContextArtifacts } from "../../core/context-builder/build-repo-context";
+import {
+  getAgentsGeneratedExportPath,
+  getArtifactsDir,
+  getBridgerConfigPath,
+  getClaudeGeneratedExportPath,
+  getCodebaseMapPath,
+  getExportsDir,
+  getFileIndexPath,
+  getGeneratedKnowledgeDocPath,
+  getGraphSummaryPath,
+  getMemoryDir,
+  getReadingPlansPath,
+  getRepoContextPath,
+  getRepoGraphPath,
+  getRootAgentsPath,
+  getSelectedSkillsPath,
+  getSkillsDir,
+  getTemplatesDir,
+  getTicketTemplatePath,
+} from "../../core/project/bridger-paths";
+import {
+  loadBridgerProject,
+  type LoadBridgerProjectResult,
+} from "../../core/project/load-bridger-project";
 import { buildGraphSummary } from "../../core/repo-graph/build-graph-summary";
 import { buildRepoGraph } from "../../core/repo-graph/build-repo-graph";
 import type { GraphSummary, GraphSummaryRankedFile } from "../../core/repo-graph/models/graph-summary";
@@ -12,7 +40,6 @@ import type {
   RepoContextCommands,
   RepoContextStack,
 } from "../../core/models/repo-context";
-import { Command } from "commander";
 
 export interface InspectCommandOptions {
   repo?: string;
@@ -39,12 +66,46 @@ export interface ImportantFileInspection {
 export interface InspectResult {
   repoContext: RepoContext;
   fileIndex: FileIndex;
+  projectState: ProjectStateInspection;
   inspection: {
     indexedFileCount: number;
     importantFileCount: number;
     estimatedImportantFilesSizeBytes?: number;
     importantFiles: ImportantFileInspection[];
   };
+}
+
+export interface ProjectStateInspection {
+  status: LoadBridgerProjectResult["status"];
+  reason?: string;
+  message?: string;
+  configPath: string;
+  projectName?: string;
+  projectMode?: string;
+  detectedStack?: string[];
+  packageManager?: string;
+  artifactsDir: string;
+  memoryDir: string;
+  skillsDir: string;
+  templatesDir: string;
+  exportsDir: string;
+  artifactFiles: CanonicalFileInspection[];
+  memoryFiles: CanonicalFileInspection[];
+  supportFiles: CanonicalFileInspection[];
+  exists: {
+    config: boolean;
+    artifactsDir: boolean;
+    memoryDir: boolean;
+    skillsDir: boolean;
+    templatesDir: boolean;
+    exportsDir: boolean;
+  };
+}
+
+export interface CanonicalFileInspection {
+  label: string;
+  path: string;
+  exists: boolean;
 }
 
 const COMMAND_ORDER = [
@@ -104,6 +165,7 @@ export async function buildInspectResult(
   repoRoot: string,
 ): Promise<InspectResult> {
   const { repoContext, fileIndex } = await buildRepoContextArtifacts(repoRoot);
+  const projectState = await buildProjectStateInspection(repoRoot);
   const fileByPath = new Map(fileIndex.files.map((file) => [file.path, file]));
 
   const importantFiles = repoContext.importantFiles.map((importantFile) =>
@@ -117,11 +179,80 @@ export async function buildInspectResult(
   return {
     repoContext,
     fileIndex,
+    projectState,
     inspection: {
       indexedFileCount: fileIndex.files.length,
       importantFileCount: importantFiles.length,
       estimatedImportantFilesSizeBytes,
       importantFiles,
+    },
+  };
+}
+
+async function buildProjectStateInspection(
+  repoRoot: string,
+): Promise<ProjectStateInspection> {
+  const project = await loadBridgerProject(repoRoot);
+  const configPath = getBridgerConfigPath(repoRoot);
+  const artifactsDir = getArtifactsDir(repoRoot);
+  const memoryDir = getMemoryDir(repoRoot);
+  const skillsDir = getSkillsDir(repoRoot);
+  const templatesDir = getTemplatesDir(repoRoot);
+  const exportsDir = getExportsDir(repoRoot);
+  const artifactFiles = await buildFileInspections([
+    ["file-index.json", getFileIndexPath(repoRoot)],
+    ["repo-context.json", getRepoContextPath(repoRoot)],
+    ["repo-graph.json", getRepoGraphPath(repoRoot)],
+    ["graph-summary.json", getGraphSummaryPath(repoRoot)],
+    ["codebase-map.json", getCodebaseMapPath(repoRoot)],
+    ["reading-plans.json", getReadingPlansPath(repoRoot)],
+  ]);
+  const memoryFiles = await buildFileInspections([
+    ["repo-analysis.md", getGeneratedKnowledgeDocPath(repoRoot, "repoAnalysis")],
+    ["architecture.md", getGeneratedKnowledgeDocPath(repoRoot, "architecture")],
+    ["business-logic.md", getGeneratedKnowledgeDocPath(repoRoot, "businessLogic")],
+    ["conventions.md", getGeneratedKnowledgeDocPath(repoRoot, "conventions")],
+    ["testing.md", getGeneratedKnowledgeDocPath(repoRoot, "testing")],
+    ["agent-rules.md", getGeneratedKnowledgeDocPath(repoRoot, "agentRules")],
+  ]);
+  const supportFiles = await buildFileInspections([
+    ["selected-skills.json", getSelectedSkillsPath(repoRoot)],
+    ["ticket-template.md", getTicketTemplatePath(repoRoot)],
+    ["AGENTS.generated.md", getAgentsGeneratedExportPath(repoRoot)],
+    ["CLAUDE.generated.md", getClaudeGeneratedExportPath(repoRoot)],
+    ["root AGENTS.md", getRootAgentsPath(repoRoot)],
+  ]);
+
+  return {
+    status: project.status,
+    reason: project.status === "initialized" ? undefined : project.reason,
+    message: project.status === "invalid" ? project.message : undefined,
+    configPath,
+    projectName:
+      project.status === "initialized" ? project.config.project.name : undefined,
+    projectMode:
+      project.status === "initialized" ? project.config.project.mode : undefined,
+    detectedStack:
+      project.status === "initialized" ? project.config.detected.stack : undefined,
+    packageManager:
+      project.status === "initialized"
+        ? project.config.detected.packageManager
+        : undefined,
+    artifactsDir,
+    memoryDir,
+    skillsDir,
+    templatesDir,
+    exportsDir,
+    artifactFiles,
+    memoryFiles,
+    supportFiles,
+    exists: {
+      config: await pathExists(configPath),
+      artifactsDir: await pathExists(artifactsDir),
+      memoryDir: await pathExists(memoryDir),
+      skillsDir: await pathExists(skillsDir),
+      templatesDir: await pathExists(templatesDir),
+      exportsDir: await pathExists(exportsDir),
     },
   };
 }
@@ -162,6 +293,78 @@ export function formatInspectSummary(input: InspectSummaryInput): string {
   lines.push(`Indexed files: ${input.indexedFileCount}`);
 
   return lines.join("\n");
+}
+
+function formatProjectStateSection(projectState: ProjectStateInspection): string {
+  const lines = [
+    "Project state:",
+    `- Status: ${projectState.status}`,
+    `- Config: ${projectState.configPath} (${formatExists(projectState.exists.config)})`,
+    `- Artifacts dir: ${projectState.artifactsDir} (${formatExists(projectState.exists.artifactsDir)})`,
+    `- Memory dir: ${projectState.memoryDir} (${formatExists(projectState.exists.memoryDir)})`,
+    `- Skills dir: ${projectState.skillsDir} (${formatExists(projectState.exists.skillsDir)})`,
+    `- Templates dir: ${projectState.templatesDir} (${formatExists(projectState.exists.templatesDir)})`,
+    `- Exports dir: ${projectState.exportsDir} (${formatExists(projectState.exists.exportsDir)})`,
+    "",
+    "Canonical artifact files:",
+    ...formatCanonicalFileLines(projectState.artifactFiles),
+    "",
+    "Canonical memory files:",
+    ...formatCanonicalFileLines(projectState.memoryFiles),
+    "",
+    "Canonical skills/templates/exports:",
+    ...formatCanonicalFileLines(projectState.supportFiles),
+  ];
+
+  if (projectState.packageManager !== undefined) {
+    lines.splice(2, 0, `- Config package manager: ${projectState.packageManager}`);
+  }
+
+  if (projectState.detectedStack !== undefined) {
+    lines.splice(2, 0, `- Config detected stack: ${formatList(projectState.detectedStack)}`);
+  }
+
+  if (projectState.projectMode !== undefined) {
+    lines.splice(2, 0, `- Project mode: ${projectState.projectMode}`);
+  }
+
+  if (projectState.projectName !== undefined) {
+    lines.splice(2, 0, `- Project name: ${projectState.projectName}`);
+  }
+
+  if (projectState.reason !== undefined) {
+    lines.push(`- Reason: ${projectState.reason}`);
+  }
+
+  if (projectState.message !== undefined) {
+    lines.push(`- Message: ${projectState.message}`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatExists(exists: boolean): string {
+  return exists ? "exists" : "missing";
+}
+
+function formatCanonicalFileLines(files: CanonicalFileInspection[]): string[] {
+  return files.map((file) => `- ${file.label}: ${formatExists(file.exists)}`);
+}
+
+async function buildFileInspections(
+  files: Array<[label: string, filePath: string]>,
+): Promise<CanonicalFileInspection[]> {
+  const inspections: CanonicalFileInspection[] = [];
+
+  for (const [label, filePath] of files) {
+    inspections.push({
+      label,
+      path: filePath,
+      exists: await pathExists(filePath),
+    });
+  }
+
+  return inspections;
 }
 
 export function formatGraphInspectOutput(input: {
@@ -287,12 +490,16 @@ function formatContextPreview(result: InspectResult): string {
 
 function printSummary(result: InspectResult): void {
   logger.info(
-    formatInspectSummary({
-      repoRoot: result.repoContext.repoRoot,
-      stack: result.repoContext.stack,
-      commands: result.repoContext.commands,
-      indexedFileCount: result.inspection.indexedFileCount,
-    }),
+    [
+      formatInspectSummary({
+        repoRoot: result.repoContext.repoRoot,
+        stack: result.repoContext.stack,
+        commands: result.repoContext.commands,
+        indexedFileCount: result.inspection.indexedFileCount,
+      }),
+      "",
+      formatProjectStateSection(result.projectState),
+    ].join("\n"),
   );
 }
 
@@ -360,8 +567,17 @@ export async function runInspectCommand(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.error(`Failed to inspect repository: ${message}`);
+    console.error(`bridger inspect failed: ${message}`);
     process.exitCode = 1;
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
   }
 }
 

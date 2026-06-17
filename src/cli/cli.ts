@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { pathToFileURL } from "node:url";
-import { enrichTicketCommand } from "./commands/enrich-ticket";
 import { inspectCommand } from "./commands/inspect";
 import { initCommand } from "./commands/init";
 
@@ -14,7 +13,6 @@ export function buildCliProgram(): Command {
 
   program.addCommand(initCommand);
   program.addCommand(inspectCommand);
-  program.addCommand(enrichTicketCommand);
 
   return program;
 }

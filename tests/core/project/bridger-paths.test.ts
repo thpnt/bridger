@@ -6,26 +6,26 @@ import {
   buildGeneratedDocPaths,
   getGeneratedKnowledgeDocRelativePath,
   getTicketTemplateRelativePath,
-} from "../../../src/core/models/generated-paths";
+} from "../../../src/core/project/bridger-paths";
 
 describe("generated paths", () => {
   it("builds stable relative generated doc paths", () => {
     expect(buildGeneratedDocPaths()).toEqual({
-      repoAnalysisPath: ".bridger/generated/repo-analysis.md",
-      architecturePath: ".bridger/generated/architecture.md",
-      businessLogicPath: ".bridger/generated/business-logic.md",
-      conventionsPath: ".bridger/generated/conventions.md",
-      testingPath: ".bridger/generated/testing.md",
-      agentRulesPath: ".bridger/generated/agent-rules.md",
+      repoAnalysisPath: ".bridger/memory/repo-analysis.md",
+      architecturePath: ".bridger/memory/architecture.md",
+      businessLogicPath: ".bridger/memory/business-logic.md",
+      conventionsPath: ".bridger/memory/conventions.md",
+      testingPath: ".bridger/memory/testing.md",
+      agentRulesPath: ".bridger/memory/agent-rules.md",
     });
   });
 
   it("builds stable relative paths from the doc key", () => {
     expect(getGeneratedKnowledgeDocRelativePath("architecture")).toBe(
-      path.posix.join(".bridger", "generated", "architecture.md"),
+      path.posix.join(".bridger", "memory", "architecture.md"),
     );
     expect(getTicketTemplateRelativePath()).toBe(
-      path.posix.join(".bridger", "generated", "ticket-template.md"),
+      path.posix.join(".bridger", "templates", "ticket-template.md"),
     );
   });
 });

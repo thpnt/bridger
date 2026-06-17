@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { FileIndex } from "../src/core/models/file-index";
-import { RepoRelativePathSchema } from "../src/core/models/generated-paths";
+import { RepoRelativePathSchema } from "../src/core/models/path";
 import { buildRepoGraph } from "../src/core/repo-graph/build-repo-graph";
 import { RepoGraphSchema } from "../src/core/repo-graph/models/repo-graph";
 

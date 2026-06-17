@@ -37,10 +37,10 @@ describe("writeRepoGraphArtifacts", () => {
     tempDir = repoRoot;
 
     expect(getRepoGraphPath(repoRoot)).toBe(
-      path.join(repoRoot, ".bridger", "repo-graph.json"),
+      path.join(repoRoot, ".bridger", "artifacts", "repo-graph.json"),
     );
     expect(getGraphSummaryPath(repoRoot)).toBe(
-      path.join(repoRoot, ".bridger", "graph-summary.json"),
+      path.join(repoRoot, ".bridger", "artifacts", "graph-summary.json"),
     );
   });
 
@@ -60,9 +60,9 @@ describe("writeRepoGraphArtifacts", () => {
     expect(result.repoGraphPath).toBe(getRepoGraphPath(repoRoot));
     expect(result.graphSummaryPath).toBe(getGraphSummaryPath(repoRoot));
 
-    expect((await stat(path.join(repoRoot, ".bridger"))).isDirectory()).toBe(
-      true,
-    );
+    expect(
+      (await stat(path.join(repoRoot, ".bridger", "artifacts"))).isDirectory(),
+    ).toBe(true);
 
     const graphRaw = await readFile(result.repoGraphPath, "utf8");
     const summaryRaw = await readFile(result.graphSummaryPath, "utf8");

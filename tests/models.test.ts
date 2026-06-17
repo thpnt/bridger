@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { FileIndexSchema } from "../src/core/models/file-index";
-import { buildGeneratedDocPaths, getTicketTemplateRelativePath } from "../src/core/models/generated-paths";
+import {
+  buildGeneratedDocPaths,
+  getTicketTemplateRelativePath,
+} from "../src/core/project/bridger-paths";
 import { RepoContextSchema } from "../src/core/models/repo-context";
 import { EnrichedTicketSchema } from "../src/core/models/ticket";
 

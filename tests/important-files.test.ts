@@ -11,7 +11,7 @@ import {
 } from "../src/core/repo-scanner/important-file-rules";
 import { buildFileIndex } from "../src/core/repo-scanner/build-file-index";
 import { readImportantFiles } from "../src/core/repo-scanner/read-important-files";
-import { getGeneratedKnowledgeDocRelativePath } from "../src/core/models/generated-paths";
+import { getGeneratedKnowledgeDocRelativePath } from "../src/core/project/bridger-paths";
 
 let tempDir = "";
 

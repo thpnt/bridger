@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildFilesystemGraph } from "../src/core/repo-graph/build-filesystem-graph";
-import { RepoRelativePathSchema } from "../src/core/models/generated-paths";
+import { RepoRelativePathSchema } from "../src/core/models/path";
 import {
   RepoGraphEdgeSchema,
   RepoGraphNodeSchema,

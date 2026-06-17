@@ -11,7 +11,7 @@ import {
   RepoGraphEdgeSchema,
 } from "../src/core/repo-graph/models/repo-graph";
 import type { FileIndex } from "../src/core/models/file-index";
-import { RepoRelativePathSchema } from "../src/core/models/generated-paths";
+import { RepoRelativePathSchema } from "../src/core/models/path";
 
 let tempDir = "";
 

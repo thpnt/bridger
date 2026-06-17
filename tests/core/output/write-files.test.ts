@@ -10,9 +10,13 @@ import { writeJson } from "../../../src/core/output/write-json";
 import { writeMarkdown } from "../../../src/core/output/write-markdown";
 import { readJsonFile } from "../../../src/core/utils/read-json";
 import {
+  getArtifactsDir,
   getBridgerDir,
-  getGeneratedDir,
-  getTicketsDir,
+  getExportsDir,
+  getMemoryDir,
+  getSelectedSkillsPath,
+  getSkillsDir,
+  getTemplatesDir,
 } from "../../../src/core/utils/paths";
 
 let tempDir = "";
@@ -31,8 +35,15 @@ describe("output helpers", () => {
     await ensureOutputDirs(tempDir);
 
     expect((await fs.stat(getBridgerDir(tempDir))).isDirectory()).toBe(true);
-    expect((await fs.stat(getGeneratedDir(tempDir))).isDirectory()).toBe(true);
-    expect((await fs.stat(getTicketsDir(tempDir))).isDirectory()).toBe(true);
+    expect((await fs.stat(getMemoryDir(tempDir))).isDirectory()).toBe(true);
+    expect((await fs.stat(getArtifactsDir(tempDir))).isDirectory()).toBe(true);
+    expect((await fs.stat(getSkillsDir(tempDir))).isDirectory()).toBe(true);
+    expect((await fs.stat(getTemplatesDir(tempDir))).isDirectory()).toBe(true);
+    expect((await fs.stat(getExportsDir(tempDir))).isDirectory()).toBe(true);
+    await expect(readJsonFile(getSelectedSkillsPath(tempDir))).resolves.toEqual({
+      schemaVersion: 1,
+      selected: [],
+    });
   });
 
   it("writes and reads stable pretty json", async () => {
