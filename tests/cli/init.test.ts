@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildGeneratedDocPaths, getTicketTemplateRelativePath, RepoRelativePathSchema } from "../../src/core/models/generated-paths";
+import { RepoRelativePathSchema } from "../../src/core/models/path";
+import {
+  buildGeneratedDocPaths,
+  getTicketTemplateRelativePath,
+} from "../../src/core/project/bridger-paths";
 
 const logEntries = vi.hoisted(() => [] as string[]);
 const knowledgeDocCalls = vi.hoisted(
@@ -26,6 +30,10 @@ vi.mock("../../src/core/doc-generator/generators/generate-knowledge-doc", () => 
 
 vi.mock("../../src/core/output/ensure-output-dirs", () => ({
   ensureOutputDirs: vi.fn(),
+}));
+
+vi.mock("../../src/core/project/write-bridger-config", () => ({
+  writeBridgerConfig: vi.fn(),
 }));
 
 vi.mock("../../src/core/output/write-json", () => ({
@@ -88,6 +96,7 @@ import { runInitCommand } from "../../src/cli/commands/init";
 import { buildRepoContextArtifacts } from "../../src/core/context-builder/build-repo-context";
 import { generateKnowledgeDoc } from "../../src/core/doc-generator/generators/generate-knowledge-doc";
 import { ensureOutputDirs } from "../../src/core/output/ensure-output-dirs";
+import { writeBridgerConfig } from "../../src/core/project/write-bridger-config";
 import { upsertGeneratedMarkdownBlock } from "../../src/core/output/upsert-generated-markdown-block";
 import { writeJson } from "../../src/core/output/write-json";
 import { writeMarkdown } from "../../src/core/output/write-markdown";
@@ -101,6 +110,7 @@ import { logger } from "../../src/shared/logger";
 const mockedBuildRepoContextArtifacts = vi.mocked(buildRepoContextArtifacts);
 const mockedGenerateKnowledgeDoc = vi.mocked(generateKnowledgeDoc);
 const mockedEnsureOutputDirs = vi.mocked(ensureOutputDirs);
+const mockedWriteBridgerConfig = vi.mocked(writeBridgerConfig);
 const mockedWriteJson = vi.mocked(writeJson);
 const mockedWriteMarkdown = vi.mocked(writeMarkdown);
 const mockedUpsertGeneratedMarkdownBlock = vi.mocked(upsertGeneratedMarkdownBlock);
@@ -265,6 +275,7 @@ beforeEach(() => {
   mockedBuildRepoContextArtifacts.mockReset();
   mockedGenerateKnowledgeDoc.mockReset();
   mockedEnsureOutputDirs.mockReset();
+  mockedWriteBridgerConfig.mockReset();
   mockedWriteJson.mockReset();
   mockedWriteMarkdown.mockReset();
   mockedUpsertGeneratedMarkdownBlock.mockReset();
@@ -294,6 +305,7 @@ describe("runInitCommand", () => {
 
     mockedResolveRepoRoot.mockReturnValue("/repo");
     mockedEnsureOutputDirs.mockResolvedValue(undefined);
+    mockedWriteBridgerConfig.mockResolvedValue(undefined);
     mockedBuildRepoContextArtifacts.mockResolvedValue({
       repoContext,
       fileIndex,
@@ -308,8 +320,8 @@ describe("runInitCommand", () => {
     mockedBuildRepoGraph.mockResolvedValue(repoGraph);
     mockedBuildGraphSummary.mockReturnValue(graphSummary);
     mockedWriteRepoGraphArtifacts.mockResolvedValue({
-      repoGraphPath: "/repo/.bridger/repo-graph.json",
-      graphSummaryPath: "/repo/.bridger/graph-summary.json",
+      repoGraphPath: "/repo/.bridger/artifacts/repo-graph.json",
+      graphSummaryPath: "/repo/.bridger/artifacts/graph-summary.json",
     });
     mockedReadGraphOrderedFiles.mockResolvedValue(graphOrderedFileContext);
     mockedWriteJson.mockResolvedValue(undefined);
@@ -325,6 +337,20 @@ describe("runInitCommand", () => {
       fileIndex,
     });
     expect(mockedBuildGraphSummary).toHaveBeenCalledWith(repoGraph);
+    expect(mockedWriteBridgerConfig).toHaveBeenCalledWith(
+      "/repo",
+      expect.objectContaining({
+        schemaVersion: 1,
+        project: {
+          name: "repo",
+          mode: "existing",
+        },
+        detected: expect.objectContaining({
+          packageManager: "pnpm",
+          stack: expect.arrayContaining(["Next.js", "TypeScript", "Tailwind"]),
+        }),
+      }),
+    );
     expect(mockedWriteRepoGraphArtifacts).toHaveBeenCalledWith({
       repoRoot: "/repo",
       graph: repoGraph,
@@ -366,6 +392,8 @@ describe("runInitCommand", () => {
       "debug:bridger init: output directories ready",
       "debug:bridger init: building repo context",
       "debug:bridger init: repo context ready (2 indexed files, 1 important files)",
+      "debug:bridger init: writing project config",
+      "debug:bridger init: project config written",
       "debug:bridger init: building repo graph",
       "debug:bridger init: repo graph ready",
       "debug:bridger init: writing deterministic artifacts",
@@ -379,8 +407,11 @@ describe("runInitCommand", () => {
       "debug:bridger init: generated files written",
       expect.stringContaining("info:SUCCESS: bridger init complete"),
     ]);
-    expect(logEntries.at(-1)).toContain(".bridger/repo-graph.json");
-    expect(logEntries.at(-1)).toContain(".bridger/graph-summary.json");
+    expect(logEntries.at(-1)).toContain(".bridger/artifacts/repo-graph.json");
+    expect(logEntries.at(-1)).toContain(".bridger/artifacts/graph-summary.json");
+    expect(logEntries.at(-1)).toContain(".bridger/config.json");
+    expect(logEntries.at(-1)).toContain(".bridger/templates/ticket-template.md");
+    expect(logEntries.at(-1)).not.toContain("ticket-template.md not generated");
     expect(mockedLogger.error).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
   });
@@ -393,6 +424,7 @@ describe("runInitCommand", () => {
 
     mockedResolveRepoRoot.mockReturnValue("/repo");
     mockedEnsureOutputDirs.mockResolvedValue(undefined);
+    mockedWriteBridgerConfig.mockResolvedValue(undefined);
     mockedBuildRepoContextArtifacts.mockResolvedValue({
       repoContext,
       fileIndex,
@@ -407,8 +439,8 @@ describe("runInitCommand", () => {
     mockedBuildRepoGraph.mockResolvedValue(repoGraph);
     mockedBuildGraphSummary.mockReturnValue(graphSummary);
     mockedWriteRepoGraphArtifacts.mockResolvedValue({
-      repoGraphPath: "/repo/.bridger/repo-graph.json",
-      graphSummaryPath: "/repo/.bridger/graph-summary.json",
+      repoGraphPath: "/repo/.bridger/artifacts/repo-graph.json",
+      graphSummaryPath: "/repo/.bridger/artifacts/graph-summary.json",
     });
     mockedReadGraphOrderedFiles.mockResolvedValue({
       files: [
@@ -441,6 +473,7 @@ describe("runInitCommand", () => {
     expect(logEntries.at(-1)).toEqual(
       expect.stringContaining("info:SUCCESS: bridger init complete"),
     );
+    expect(logEntries.at(-1)).toContain("Skipped:\n- none");
   });
 
   it("writes graph artifacts before failing on missing LLM config", async () => {
@@ -455,6 +488,7 @@ describe("runInitCommand", () => {
     try {
       mockedResolveRepoRoot.mockReturnValue("/repo");
       mockedEnsureOutputDirs.mockResolvedValue(undefined);
+      mockedWriteBridgerConfig.mockResolvedValue(undefined);
       mockedBuildRepoContextArtifacts.mockResolvedValue({
         repoContext,
         fileIndex,
@@ -469,8 +503,8 @@ describe("runInitCommand", () => {
       mockedBuildRepoGraph.mockResolvedValue(repoGraph);
       mockedBuildGraphSummary.mockReturnValue(graphSummary);
       mockedWriteRepoGraphArtifacts.mockResolvedValue({
-        repoGraphPath: "/repo/.bridger/repo-graph.json",
-        graphSummaryPath: "/repo/.bridger/graph-summary.json",
+        repoGraphPath: "/repo/.bridger/artifacts/repo-graph.json",
+        graphSummaryPath: "/repo/.bridger/artifacts/graph-summary.json",
       });
       mockedReadGraphOrderedFiles.mockResolvedValue({
         files: [
@@ -492,6 +526,7 @@ describe("runInitCommand", () => {
       await runInitCommand({ repo: "." });
 
       expect(mockedWriteRepoGraphArtifacts).toHaveBeenCalledTimes(1);
+      expect(mockedWriteBridgerConfig).toHaveBeenCalledTimes(1);
       expect(
         mockedWriteRepoGraphArtifacts.mock.invocationCallOrder[0],
       ).toBeLessThan(mockedGenerateKnowledgeDoc.mock.invocationCallOrder[0]);

@@ -1,5 +1,5 @@
 import { writeJson } from "../output/write-json";
-import { getGraphSummaryPath, getRepoGraphPath } from "../utils/paths";
+import { getGraphSummaryPath, getRepoGraphPath } from "../project/bridger-paths";
 import {
   GraphSummarySchema,
   type GraphSummary,

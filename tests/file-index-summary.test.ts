@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { summarizeFileIndexForPrompt } from "../src/core/context-builder/file-index-summary";
 import type { FileIndex } from "../src/core/models/file-index";
-import { RepoRelativePathSchema } from "../src/core/models/generated-paths";
+import { RepoRelativePathSchema } from "../src/core/models/path";
 
 const fileIndex: FileIndex = {
   generatedAt: "2026-05-01T00:00:00.000Z",

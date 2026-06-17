@@ -13,7 +13,7 @@ import {
 import {
   buildGeneratedDocPaths,
   getTicketTemplateRelativePath,
-} from "../src/core/models/generated-paths";
+} from "../src/core/project/bridger-paths";
 
 const fixtureRoot = path.resolve("tests/fixtures/repo-context-basic");
 let tempDir = "";

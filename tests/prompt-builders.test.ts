@@ -15,8 +15,10 @@ import {
 import {
   buildGeneratedDocPaths,
   getTicketTemplateRelativePath,
+} from "../src/core/project/bridger-paths";
+import {
   RepoRelativePathSchema,
-} from "../src/core/models/generated-paths";
+} from "../src/core/models/path";
 
 const input = buildKnowledgeDocGenerationInput({
   repoContext: {

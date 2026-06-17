@@ -5,7 +5,7 @@ import { readImportantFiles } from "../repo-scanner/read-important-files";
 import {
   buildGeneratedDocPaths,
   getTicketTemplateRelativePath,
-} from "../models/generated-paths";
+} from "../project/bridger-paths";
 import type { RepoContext } from "../models/repo-context";
 import { RepoContextSchema } from "../models/repo-context";
 import {

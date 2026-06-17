@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AbsolutePathSchema, RepoRelativePathSchema } from "./generated-paths";
+import { RepoRelativePathSchema } from "./path";
 
 export const FileIndexEntrySchema = z.object({
   path: RepoRelativePathSchema,

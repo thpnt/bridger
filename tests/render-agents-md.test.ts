@@ -4,9 +4,9 @@ import { renderAgentsMd } from "../src/core/doc-generator/renderers/render-agent
 import {
   buildGeneratedDocPaths,
   getTicketTemplateRelativePath,
-} from "../src/core/models/generated-paths";
+} from "../src/core/project/bridger-paths";
 import { RepoContextSchema } from "../src/core/models/repo-context";
-import { RepoRelativePathSchema } from "../src/core/models/generated-paths";
+import { RepoRelativePathSchema } from "../src/core/models/path";
 
 const repoContext = RepoContextSchema.parse({
   repoRoot: "/repo",

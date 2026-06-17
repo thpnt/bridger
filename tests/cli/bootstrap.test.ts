@@ -11,7 +11,8 @@ describe("cli bootstrap", () => {
     );
 
     expect(program.name()).toBe("bridger");
-    expect(commands).toEqual(["init", "inspect", "enrich-ticket"]);
+    expect(commands).toEqual(["init", "inspect"]);
+    expect(commands).not.toContain("enrich-ticket");
     expect(
       initCommand?.options.some(
         (option) => option.long === "--write-agents-md",

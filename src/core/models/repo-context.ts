@@ -3,8 +3,8 @@ import { z } from "zod";
 import {
   RepoRelativePathSchema,
   type RepoRelativePath,
-  type GeneratedDocPaths,
-} from "./generated-paths";
+} from "./path";
+import type { GeneratedDocPaths } from "../project/bridger-paths";
 
 export const RepoContextStackSchema = z.object({
   framework: z.string(),

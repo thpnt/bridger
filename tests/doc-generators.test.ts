@@ -15,8 +15,10 @@ import { generateKnowledgeDoc } from "../src/core/doc-generator/generators/gener
 import {
   buildGeneratedDocPaths,
   getTicketTemplateRelativePath,
+} from "../src/core/project/bridger-paths";
+import {
   RepoRelativePathSchema,
-} from "../src/core/models/generated-paths";
+} from "../src/core/models/path";
 
 const mockedGenerateKnowledgeDoc = vi.mocked(generateKnowledgeDoc);
 
