@@ -45,6 +45,8 @@ function isNodeCliEntrypoint(path: string): boolean {
     path === "src/main.js" ||
     path === "src/cli/index.ts" ||
     path === "src/cli/index.js" ||
+    path === "src/cli/cli.ts" ||
+    path === "src/cli/cli.js" ||
     path.startsWith("bin/")
   );
 }

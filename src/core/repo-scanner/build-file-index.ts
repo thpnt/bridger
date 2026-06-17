@@ -4,10 +4,29 @@ import path from "node:path";
 
 import { FileIndexSchema } from "../models/file-index";
 import { RepoRelativePathSchema } from "../models/path";
-import type { FileIndex } from "../models/file-index";
+import type {
+  FileIndex,
+  FileIndexEntry,
+  FileIndexLanguage,
+  FileRole,
+  ScanWarning,
+  SkipReason,
+  SkippedFile,
+} from "../models/file-index";
+import {
+  detectFileLanguage,
+  getFileConfidence,
+  getFileRoles,
+  getIncludeReason,
+  uniqueSortedRoles,
+} from "./file-classification";
+import {
+  getFileSignals,
+  readPackageBinPaths,
+} from "./file-signals";
 import { createGitignoreFilter } from "./gitignore";
 
-const ALWAYS_EXCLUDE_PATTERNS = [
+const NOISE_DIRECTORY_PATTERNS = [
   "**/node_modules/**",
   "**/.next/**",
   "**/dist/**",
@@ -16,27 +35,51 @@ const ALWAYS_EXCLUDE_PATTERNS = [
   "**/.git/**",
   "**/.bridger/**",
   "**/.agents/**",
-  "**/.env",
-  "**/.env.*",
-  "**/*.png",
-  "**/*.jpg",
-  "**/*.jpeg",
-  "**/*.gif",
-  "**/*.webp",
-  "**/*.svg",
-  "**/*.ico",
-  "**/*.mp4",
-  "**/*.mov",
-  "**/*.woff",
-  "**/*.woff2",
-  "**/*.ttf",
-  "**/*.pdf",
-  "**/*.zip",
-  "**/*.tar",
-  "**/*.gz",
-  "**/*.sqlite",
-  "**/*.db",
 ];
+
+const NOISE_DIRECTORIES = new Set([
+  "node_modules",
+  ".git",
+  ".bridger",
+  ".agents",
+  "dist",
+  "build",
+  "coverage",
+  ".next",
+]);
+
+const GENERATED_DIRECTORIES = new Set(["dist", "build", "coverage", ".next"]);
+
+const BINARY_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".svg",
+  ".ico",
+  ".mp4",
+  ".mov",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".pdf",
+  ".zip",
+  ".tar",
+  ".gz",
+  ".sqlite",
+  ".db",
+]);
+
+const LOCKFILE_NAMES = new Set([
+  "pnpm-lock.yaml",
+  "package-lock.json",
+  "yarn.lock",
+  "bun.lock",
+  "bun.lockb",
+]);
+
+const MAX_INDEXED_FILE_BYTES = 1_000_000;
 
 function toPosixPath(value: string): string {
   return value.replaceAll(path.sep, "/");
@@ -306,37 +349,256 @@ function getFileReason(relativePath: string): string | undefined {
 
 export async function buildFileIndex(repoRoot: string): Promise<FileIndex> {
   const gitignoreFilter = await createGitignoreFilter(repoRoot);
+  const packageBinPaths = await readPackageBinPaths(repoRoot);
   const discoveredPaths = await fg("**/*", {
     cwd: repoRoot,
     onlyFiles: true,
     dot: true,
-    ignore: ALWAYS_EXCLUDE_PATTERNS,
+    ignore: NOISE_DIRECTORY_PATTERNS,
     followSymbolicLinks: false,
   });
 
-  const includedPaths = discoveredPaths
+  const skippedFiles: SkippedFile[] = await getSkippedNoiseDirectories(repoRoot);
+  const files: FileIndexEntry[] = [];
+
+  for (const relativePath of discoveredPaths
     .map(toPosixPath)
-    .filter(gitignoreFilter)
-    .sort((left, right) => left.localeCompare(right));
-
-  const files: FileIndex["files"] = [];
-
-  for (const relativePath of includedPaths) {
+    .sort((left, right) => left.localeCompare(right))) {
     const absolutePath = path.join(repoRoot, relativePath);
     const stats = await fs.stat(absolutePath);
     const extension = path.posix.extname(relativePath);
+    const skipReason = getSkipReason({
+      relativePath,
+      sizeBytes: stats.size,
+      gitignoreFilter,
+    });
+
+    if (skipReason) {
+      skippedFiles.push({
+        path: RepoRelativePathSchema.parse(relativePath),
+        reason: skipReason.reason,
+        detail: skipReason.detail,
+      });
+      continue;
+    }
+
+    const tags = getFileTags(relativePath);
+    const language = detectFileLanguage(relativePath, extension || undefined);
+    const roles = getFileRoles(relativePath, tags);
+    const rolesWithEntrypoint = packageBinPaths.has(relativePath)
+      ? uniqueSortedRoles([...roles, "entrypoint-candidate"])
+      : roles;
+    const signals = await getFileSignals({
+      repoRoot,
+      relativePath,
+      sizeBytes: stats.size,
+      packageBinPaths,
+    });
 
     files.push({
       path: RepoRelativePathSchema.parse(relativePath),
       extension: extension || undefined,
       sizeBytes: stats.size,
-      tags: getFileTags(relativePath),
+      language,
+      roles: rolesWithEntrypoint,
+      confidence: getFileConfidence(rolesWithEntrypoint),
+      includeReason: getIncludeReason({
+        language,
+        roles: rolesWithEntrypoint,
+      }),
+      signals,
+      tags,
       reason: getFileReason(relativePath),
     });
   }
 
+  skippedFiles.sort(compareSkippedFiles);
+  const warnings = getWarnings(files, skippedFiles);
+
   return FileIndexSchema.parse({
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     files,
+    skippedFiles,
+    warnings,
+    stats: buildStats({
+      totalFilesDiscovered: files.length + skippedFiles.length,
+      files,
+      skippedFiles,
+    }),
   });
+}
+
+function getSkipReason(input: {
+  relativePath: string;
+  sizeBytes: number;
+  gitignoreFilter: (relativePath: string) => boolean;
+}): { reason: SkipReason; detail?: string } | null {
+  const lowerPath = input.relativePath.toLowerCase();
+  const extension = path.posix.extname(lowerPath);
+
+  if (isSensitivePath(lowerPath)) {
+    return {
+      reason: "sensitive",
+      detail: "Sensitive environment or secrets-like file.",
+    };
+  }
+
+  if (BINARY_EXTENSIONS.has(extension)) {
+    return {
+      reason: "binary",
+      detail: `Binary or media extension ${extension}.`,
+    };
+  }
+
+  if (!input.gitignoreFilter(input.relativePath)) {
+    return {
+      reason: "ignored",
+      detail: "Ignored by repository gitignore rules.",
+    };
+  }
+
+  if (!LOCKFILE_NAMES.has(path.posix.basename(lowerPath)) && input.sizeBytes > MAX_INDEXED_FILE_BYTES) {
+    return {
+      reason: "too-large",
+      detail: `File exceeds ${MAX_INDEXED_FILE_BYTES} bytes.`,
+    };
+  }
+
+  return null;
+}
+
+async function getSkippedNoiseDirectories(repoRoot: string): Promise<SkippedFile[]> {
+  const skippedFiles: SkippedFile[] = [];
+
+  for (const directory of [...NOISE_DIRECTORIES].sort((left, right) => left.localeCompare(right))) {
+    if (!(await fs.pathExists(path.join(repoRoot, directory)))) {
+      continue;
+    }
+
+    skippedFiles.push({
+      path: RepoRelativePathSchema.parse(directory),
+      reason: GENERATED_DIRECTORIES.has(directory) ? "generated" : "noise-directory",
+      detail: "Directory excluded from repository inventory traversal.",
+    });
+  }
+
+  return skippedFiles;
+}
+
+function isSensitivePath(lowerPath: string): boolean {
+  const fileName = path.posix.basename(lowerPath);
+
+  return (
+    fileName === ".env" ||
+    fileName.startsWith(".env.") ||
+    fileName === "secrets.json" ||
+    fileName === "secrets.yaml" ||
+    fileName === "secrets.yml" ||
+    fileName === "credentials.json" ||
+    fileName.endsWith(".pem") ||
+    fileName.endsWith(".key")
+  );
+}
+
+function buildStats(input: {
+  totalFilesDiscovered: number;
+  files: FileIndexEntry[];
+  skippedFiles: SkippedFile[];
+}): NonNullable<FileIndex["stats"]> {
+  const byLanguage: Record<FileIndexLanguage, number> = {
+    typescript: 0,
+    javascript: 0,
+    python: 0,
+    markdown: 0,
+    json: 0,
+    yaml: 0,
+    css: 0,
+    html: 0,
+    shell: 0,
+    unknown: 0,
+  };
+  const byRole = {} as Record<FileRole, number>;
+  const bySkipReason = {} as Record<SkipReason, number>;
+  let totalIncludedBytes = 0;
+
+  for (const file of input.files) {
+    totalIncludedBytes += file.sizeBytes;
+    byLanguage[file.language ?? "unknown"] += 1;
+
+    for (const role of file.roles ?? []) {
+      byRole[role] = (byRole[role] ?? 0) + 1;
+    }
+  }
+
+  for (const skippedFile of input.skippedFiles) {
+    bySkipReason[skippedFile.reason] = (bySkipReason[skippedFile.reason] ?? 0) + 1;
+  }
+
+  return {
+    totalFilesDiscovered: input.totalFilesDiscovered,
+    includedFileCount: input.files.length,
+    skippedFileCount: input.skippedFiles.length,
+    totalIncludedBytes,
+    byLanguage,
+    byRole,
+    bySkipReason,
+  };
+}
+
+function getWarnings(
+  files: FileIndexEntry[],
+  skippedFiles: SkippedFile[],
+): ScanWarning[] {
+  const warnings: ScanWarning[] = [];
+
+  if (!files.some((file) => file.roles?.includes("source"))) {
+    warnings.push({
+      code: "no-source-files",
+      message: "No source files were detected in the repository inventory.",
+      severity: "warning",
+    });
+  }
+
+  for (const skippedFile of skippedFiles) {
+    if (skippedFile.reason === "sensitive") {
+      warnings.push({
+        code: "sensitive-file-skipped",
+        message: `Skipped sensitive file ${skippedFile.path}.`,
+        filePath: skippedFile.path,
+        severity: "warning",
+      });
+    }
+
+    if (skippedFile.reason === "too-large") {
+      warnings.push({
+        code: "large-file-skipped",
+        message: `Skipped large file ${skippedFile.path}.`,
+        filePath: skippedFile.path,
+        severity: "info",
+      });
+    }
+  }
+
+  if (skippedFiles.length > files.length * 2 && skippedFiles.length > 20) {
+    warnings.push({
+      code: "many-skipped-files",
+      message: "Skipped file count is much larger than included file count.",
+      severity: "info",
+    });
+  }
+
+  return warnings.sort(compareWarnings);
+}
+
+function compareSkippedFiles(left: SkippedFile, right: SkippedFile): number {
+  return left.path.localeCompare(right.path) || left.reason.localeCompare(right.reason);
+}
+
+function compareWarnings(left: ScanWarning, right: ScanWarning): number {
+  return (
+    left.code.localeCompare(right.code) ||
+    (left.filePath ?? "").localeCompare(right.filePath ?? "") ||
+    left.message.localeCompare(right.message)
+  );
 }

@@ -44,19 +44,61 @@ describe("core models", () => {
 
   it("validates a file index payload", () => {
     const fileIndex = {
+      schemaVersion: 2,
       generatedAt: "2026-05-01T00:00:00.000Z",
       files: [
         {
           path: "README.md",
           extension: ".md",
           sizeBytes: 120,
+          language: "markdown",
+          roles: ["docs"],
+          confidence: "inferred",
+          includeReason: "documentation",
+          signals: [],
           tags: ["readme", "documentation", "important"],
           reason: "Project README",
         },
       ],
+      skippedFiles: [
+        {
+          path: ".env",
+          reason: "sensitive",
+          detail: "Sensitive environment or secrets-like file.",
+        },
+      ],
+      warnings: [
+        {
+          code: "sensitive-file-skipped",
+          message: "Skipped sensitive file .env.",
+          filePath: ".env",
+          severity: "warning",
+        },
+      ],
+      stats: {
+        totalFilesDiscovered: 2,
+        includedFileCount: 1,
+        skippedFileCount: 1,
+        totalIncludedBytes: 120,
+        byLanguage: {
+          markdown: 1,
+        },
+        byRole: {
+          docs: 1,
+        },
+        bySkipReason: {
+          sensitive: 1,
+        },
+      },
     };
 
     expect(FileIndexSchema.parse(fileIndex)).toEqual(fileIndex);
+    expect(
+      FileIndexSchema.safeParse({
+        generatedAt: fileIndex.generatedAt,
+        files: [],
+      }).success,
+    ).toBe(false);
   });
 
   it("validates an enriched ticket payload", () => {

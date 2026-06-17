@@ -179,21 +179,55 @@ function createRepoContext() {
 
 function createFileIndex() {
   return {
+    schemaVersion: 2 as const,
     generatedAt: "2026-05-01T00:00:00.000Z",
     files: [
       {
         path: RepoRelativePathSchema.parse("README.md"),
         extension: ".md",
         sizeBytes: 100,
+        language: "markdown" as const,
+        roles: ["docs" as const],
+        confidence: "inferred" as const,
+        includeReason: "documentation" as const,
+        signals: [],
         tags: ["readme"],
       },
       {
         path: RepoRelativePathSchema.parse("src/app/page.tsx"),
         extension: ".tsx",
         sizeBytes: 200,
+        language: "typescript" as const,
+        roles: [
+          "entrypoint-candidate" as const,
+          "route" as const,
+          "source" as const,
+        ],
+        confidence: "inferred" as const,
+        includeReason: "source" as const,
+        signals: [],
         tags: ["app", "route"],
       },
     ],
+    skippedFiles: [],
+    warnings: [],
+    stats: {
+      totalFilesDiscovered: 2,
+      includedFileCount: 2,
+      skippedFileCount: 0,
+      totalIncludedBytes: 300,
+      byLanguage: {
+        markdown: 1,
+        typescript: 1,
+      },
+      byRole: {
+        docs: 1,
+        "entrypoint-candidate": 1,
+        route: 1,
+        source: 1,
+      },
+      bySkipReason: {},
+    },
   };
 }
 
@@ -527,6 +561,22 @@ describe("runInitCommand", () => {
 
       expect(mockedWriteRepoGraphArtifacts).toHaveBeenCalledTimes(1);
       expect(mockedWriteBridgerConfig).toHaveBeenCalledTimes(1);
+      expect(mockedWriteJson).toHaveBeenCalledWith(
+        "/repo/.bridger/artifacts/file-index.json",
+        fileIndex,
+      );
+      expect(mockedWriteJson).toHaveBeenCalledWith(
+        "/repo/.bridger/artifacts/repo-context.json",
+        repoContext,
+      );
+      expect(
+        mockedWriteJson.mock.calls.some(([filePath]) =>
+          String(filePath).includes("scan-result"),
+        ),
+      ).toBe(false);
+      expect(mockedWriteJson.mock.invocationCallOrder[0]).toBeLessThan(
+        mockedGenerateKnowledgeDoc.mock.invocationCallOrder[0],
+      );
       expect(
         mockedWriteRepoGraphArtifacts.mock.invocationCallOrder[0],
       ).toBeLessThan(mockedGenerateKnowledgeDoc.mock.invocationCallOrder[0]);
