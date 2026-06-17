@@ -20,12 +20,20 @@ vi.mock("../../src/core/context-builder/build-repo-context", () => ({
   buildRepoContextArtifacts: vi.fn(),
 }));
 
+vi.mock("../../src/core/codebase-map/build-codebase-map", () => ({
+  buildCodebaseMap: vi.fn(),
+}));
+
 vi.mock("../../src/core/repo-graph/build-graph-summary", () => ({
   buildGraphSummary: vi.fn(),
 }));
 
 vi.mock("../../src/core/repo-graph/build-repo-graph", () => ({
   buildRepoGraph: vi.fn(),
+}));
+
+vi.mock("../../src/core/reading-plans/build-reading-plans", () => ({
+  buildReadingPlans: vi.fn(),
 }));
 
 vi.mock("../../src/core/repo-scanner/build-file-index", () => ({
@@ -54,16 +62,29 @@ import {
   formatInspectSummary,
   runInspectCommand,
 } from "../../src/cli/commands/inspect";
+import { buildCodebaseMap } from "../../src/core/codebase-map/build-codebase-map";
 import { buildRepoContextArtifacts } from "../../src/core/context-builder/build-repo-context";
 import { buildGraphSummary } from "../../src/core/repo-graph/build-graph-summary";
 import { buildRepoGraph } from "../../src/core/repo-graph/build-repo-graph";
+import { buildReadingPlans } from "../../src/core/reading-plans/build-reading-plans";
 import { buildFileIndex } from "../../src/core/repo-scanner/build-file-index";
 import { resolveRepoRoot } from "../../src/core/utils/paths";
 import { logger } from "../../src/shared/logger";
 
+import type { CodebaseMap } from "../../src/core/codebase-map/models/codebase-map";
+import type {
+  ReadingBatch,
+  ReadingPlan,
+  ReadingPlanFile,
+  ReadingPlans,
+  ReadingPlanWarning,
+} from "../../src/core/reading-plans/models/reading-plans";
+
 const mockedBuildRepoContextArtifacts = vi.mocked(buildRepoContextArtifacts);
+const mockedBuildCodebaseMap = vi.mocked(buildCodebaseMap);
 const mockedBuildGraphSummary = vi.mocked(buildGraphSummary);
 const mockedBuildRepoGraph = vi.mocked(buildRepoGraph);
+const mockedBuildReadingPlans = vi.mocked(buildReadingPlans);
 const mockedBuildFileIndex = vi.mocked(buildFileIndex);
 const mockedResolveRepoRoot = vi.mocked(resolveRepoRoot);
 const mockedLogger = vi.mocked(logger);
@@ -129,6 +150,52 @@ const artifacts = {
         reason: "Package manifest and scripts/dependencies source",
       },
     ],
+    skippedFiles: [
+      {
+        path: RepoRelativePathSchema.parse("dist/bundle.js"),
+        reason: "ignored",
+      },
+      {
+        path: RepoRelativePathSchema.parse(".env.local"),
+        reason: "sensitive",
+      },
+      {
+        path: RepoRelativePathSchema.parse("assets/logo.png"),
+        reason: "binary",
+      },
+    ],
+    warnings: [
+      {
+        code: "ignored-file",
+        message: "Ignored file skipped during inventory.",
+        severity: "warning",
+      },
+      {
+        code: "sensitive-file-skipped",
+        message: "Skipped sensitive file .env.local.",
+        filePath: RepoRelativePathSchema.parse(".env.local"),
+        severity: "warning",
+      },
+    ],
+    stats: {
+      totalFilesDiscovered: 5,
+      includedFileCount: 2,
+      skippedFileCount: 3,
+      totalIncludedBytes: 3072,
+      byLanguage: {
+        markdown: 1,
+        json: 1,
+      },
+      byRole: {
+        docs: 1,
+        config: 1,
+      },
+      bySkipReason: {
+        ignored: 1,
+        sensitive: 1,
+        binary: 1,
+      },
+    },
   },
 };
 
@@ -195,10 +262,357 @@ const graphArtifacts = {
   },
 };
 
+const codebaseMapArtifact: CodebaseMap = {
+  schemaVersion: 1,
+  generatedAt: "2026-05-01T00:00:00.000Z",
+  repo: {
+    name: "repo",
+    packageManager: "pnpm",
+    detectedStack: ["Next.js", "TypeScript"],
+  },
+  stats: {
+    fileCount: 2,
+    sourceFileCount: 1,
+    testFileCount: 0,
+    fixtureFileCount: 0,
+    docsFileCount: 1,
+    configFileCount: 1,
+    clusterCount: 1,
+    entrypointCount: 1,
+    centralFileCount: 1,
+    unresolvedImportCount: 0,
+  },
+  entrypoints: [
+    {
+      path: "src/cli/cli.ts",
+      kind: "node-cli",
+      confidence: "observed",
+      reasons: ["CLI entrypoint"],
+    },
+  ],
+  clusters: [
+    {
+      id: "src-core-foo",
+      title: "src/core/foo",
+      rootPath: "src/core/foo",
+      kind: "source",
+      files: ["src/core/foo/service.ts"],
+      roles: {
+        source: 1,
+      },
+      entrypoints: [],
+      centralFiles: [
+        {
+          path: "src/core/foo/service.ts",
+          fanIn: 2,
+          fanOut: 1,
+          reasons: ["High fan-in and centrality"],
+        },
+      ],
+      tests: [],
+      fixtures: [],
+      dependencies: [],
+      consumers: [],
+      confidence: "observed",
+      reasons: ["Source cluster"],
+      warnings: [],
+    },
+  ],
+  files: [
+    {
+      path: "README.md",
+      language: "markdown",
+      roles: ["docs"],
+      signals: [],
+      clusterId: "docs",
+      fanIn: 0,
+      fanOut: 0,
+      isCentral: false,
+      isEntrypoint: false,
+      isTest: false,
+      isFixture: false,
+    },
+    {
+      path: "package.json",
+      language: "json",
+      roles: ["config"],
+      signals: [],
+      clusterId: "config",
+      fanIn: 0,
+      fanOut: 0,
+      isCentral: false,
+      isEntrypoint: false,
+      isTest: false,
+      isFixture: false,
+    },
+  ],
+  signals: {
+    frameworks: {},
+    schemas: {},
+    validation: {},
+    cli: {},
+    testing: {},
+    database: {},
+  },
+  unresolvedImports: {
+    count: 0,
+    byFile: [],
+  },
+  warnings: ["No tests detected."],
+};
+
+const readingPlansArtifact = createReadingPlansArtifact();
+
+function createReadingPlansArtifact(): ReadingPlans {
+  const plans = [
+    makeReadingPlan(
+      "repo-analysis",
+      ".bridger/memory/repo-analysis.md",
+      "Repository analysis reading plan",
+      "Provide broad repository orientation.",
+      [
+        makeReadingBatch(1, "Project metadata and root orientation", [
+          "README.md",
+          "package.json",
+        ]),
+        makeReadingBatch(2, "Main entrypoints", ["src/cli/cli.ts"]),
+      ],
+      [],
+      false,
+    ),
+    makeReadingPlan(
+      "architecture",
+      ".bridger/memory/architecture.md",
+      "Architecture reading plan",
+      "Explain entrypoints, subsystems, dependency flow, central files, and contract boundaries.",
+      [
+        makeReadingBatch(1, "Entrypoints and command surfaces", [
+          "src/cli/cli.ts",
+          "src/cli/commands/init.ts",
+        ]),
+        makeReadingBatch(2, "Source clusters and central files", [
+          "src/core/repo-graph/build-repo-graph.ts",
+          "src/core/codebase-map/build-codebase-map.ts",
+        ]),
+        makeReadingBatch(3, "Contracts, schemas, and types", [
+          "src/core/models/file-index.ts",
+        ]),
+      ],
+      [
+        {
+          code: "batch-truncated",
+          message: "Batch source-clusters was truncated from 3 to 2 files.",
+          planKind: "architecture",
+          batchId: "source-clusters",
+          severity: "warning",
+        },
+      ],
+      false,
+    ),
+    makeReadingPlan(
+      "business-logic",
+      ".bridger/memory/business-logic.md",
+      "Business logic reading plan",
+      "Extract visible product workflows, user-facing behavior, and durable artifact contracts.",
+      [
+        makeReadingBatch(1, "User-facing workflow entrypoints", [
+          "src/cli/cli.ts",
+        ]),
+        makeReadingBatch(2, "Workflow implementation files", [
+          "src/core/context-builder/build-repo-context.ts",
+        ]),
+      ],
+      [],
+      false,
+    ),
+    makeReadingPlan(
+      "conventions",
+      ".bridger/memory/conventions.md",
+      "Conventions reading plan",
+      "Explain implementation style, organization, naming, typing, and recurring code patterns.",
+      [
+        makeReadingBatch(1, "Representative source files by role", [
+          "src/core/models/file-index.ts",
+        ]),
+        makeReadingBatch(2, "Representative test style", [
+          "tests/cli/inspect.test.ts",
+        ]),
+      ],
+      [],
+      false,
+    ),
+    makeReadingPlan(
+      "testing",
+      ".bridger/memory/testing.md",
+      "Testing reading plan",
+      "Explain test tooling, test patterns, fixtures, source relationships, and verification behavior.",
+      [
+        makeReadingBatch(1, "Test setup and commands", [
+          "package.json",
+          "vitest.config.ts",
+        ]),
+        makeReadingBatch(2, "Representative tests", [
+          "tests/repo-scanner.test.ts",
+          "tests/codebase-map.test.ts",
+        ]),
+        makeReadingBatch(3, "Fixtures and test data", [
+          "tests/fixtures/sample.json",
+        ]),
+      ],
+      [],
+      false,
+    ),
+    makeReadingPlan(
+      "agent-rules",
+      ".bridger/memory/agent-rules.md",
+      "Agent rules reading plan",
+      "Prepare evidence for future operational coding-agent rules without synthesizing those rules now.",
+      [
+        makeReadingBatch(1, "Project orientation for coding agents", [
+          "package.json",
+          "README.md",
+        ]),
+        makeReadingBatch(2, "Testing expectations", [
+          "tests/cli/inspect.test.ts",
+        ]),
+      ],
+      [],
+      false,
+    ),
+  ];
+
+  const warnings: ReadingPlanWarning[] = [
+    {
+      code: "codebase-map-warning",
+      message: "No tests detected.",
+      severity: "warning",
+    },
+    {
+      code: "file-index-warning",
+      message: "Ignored file skipped during inventory.",
+      severity: "warning",
+    },
+    {
+      code: "batch-truncated",
+      message: "Batch source-clusters was truncated from 3 to 2 files.",
+      planKind: "architecture",
+      batchId: "source-clusters",
+      severity: "warning",
+    },
+  ];
+
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-05-01T00:00:00.000Z",
+    sourceArtifacts: {
+      fileIndexSchemaVersion: 2,
+      repoGraphVersion: 1,
+      graphSummaryVersion: 1,
+      codebaseMapSchemaVersion: 1,
+    },
+    plans,
+    stats: {
+      planCount: plans.length,
+      batchCount: plans.reduce((total, plan) => total + plan.batches.length, 0),
+      uniqueFileCount: new Set(
+        plans.flatMap((plan) =>
+          plan.batches.flatMap((batch) => batch.files.map((file) => file.path)),
+        ),
+      ).size,
+      repeatedFileReferences: plans
+        .flatMap((plan) => plan.batches.flatMap((batch) => batch.files))
+        .length -
+        new Set(
+          plans.flatMap((plan) =>
+            plan.batches.flatMap((batch) => batch.files.map((file) => file.path)),
+          ),
+        ).size,
+      estimatedTotalBytes: plans
+        .flatMap((plan) => plan.batches.flatMap((batch) => batch.files))
+        .reduce((total, file) => total + file.estimatedBytes, 0),
+    },
+    warnings,
+  };
+}
+
+function makeReadingPlan(
+  kind: ReadingPlan["kind"],
+  targetMemoryFile: string,
+  title: string,
+  purpose: string,
+  batches: ReadingBatch[],
+  warnings: ReadingPlanWarning[],
+  truncated: boolean,
+): ReadingPlan {
+  const files = batches.flatMap((batch) => batch.files);
+
+  return {
+    kind,
+    targetMemoryFile,
+    title,
+    purpose,
+    inputStrategy: {
+      agentFocus: `Focus on ${kind}.`,
+      shouldAnswer: [`What does ${kind} cover?`],
+      shouldAvoid: ["Full source dumps."],
+    },
+    batches: batches.map((batch, index) => ({
+      ...batch,
+      order: index + 1,
+    })),
+    budget: {
+      maxFiles: 12,
+      estimatedBytes: files.reduce((total, file) => total + file.estimatedBytes, 0),
+      truncated,
+    },
+    warnings,
+  };
+}
+
+function makeReadingBatch(
+  order: number,
+  title: string,
+  paths: string[],
+): ReadingBatch {
+  const files = paths.map((path) => makeReadingPlanFile(path));
+
+  return {
+    id: title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    title,
+    purpose: `Read ${title.toLowerCase()}.`,
+    order,
+    selectionRule: `Selected for ${title.toLowerCase()}.`,
+    files,
+    budget: {
+      maxFiles: 3,
+      estimatedBytes: files.reduce((total, file) => total + file.estimatedBytes, 0),
+      truncated: false,
+    },
+  };
+}
+
+function makeReadingPlanFile(path: string): ReadingPlanFile {
+  return {
+    path,
+    roleInBatch: "supporting-context",
+    reason: `Relevant to ${path}.`,
+    evidence: [
+      {
+        source: "codebase-map",
+        detail: `Selected ${path} for preview diagnostics.`,
+      },
+    ],
+    confidence: "observed",
+    estimatedBytes: 128,
+  };
+}
+
 beforeEach(() => {
   mockedBuildRepoContextArtifacts.mockReset();
+  mockedBuildCodebaseMap.mockReset();
   mockedBuildGraphSummary.mockReset();
   mockedBuildRepoGraph.mockReset();
+  mockedBuildReadingPlans.mockReset();
   mockedBuildFileIndex.mockReset();
   mockedResolveRepoRoot.mockReset();
   mockedLogger.info.mockReset();
@@ -215,6 +629,8 @@ afterEach(async () => {
 
 function getMockedBuildResult() {
   mockedBuildRepoContextArtifacts.mockResolvedValue(artifacts as never);
+  mockedBuildCodebaseMap.mockReturnValue(codebaseMapArtifact as never);
+  mockedBuildReadingPlans.mockReturnValue(readingPlansArtifact as never);
 }
 
 describe("formatInspectSummary", () => {
@@ -436,7 +852,18 @@ describe("runInspectCommand", () => {
     mockedBuildRepoGraph.mockResolvedValue(graphArtifacts.graph as never);
     mockedBuildGraphSummary.mockReturnValue(graphArtifacts.summary as never);
 
-    await runInspectCommand({ repo: ".", graph: true });
+    const previousOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
+    try {
+      await runInspectCommand({ repo: ".", graph: true });
+    } finally {
+      if (previousOpenAIKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAIKey;
+      }
+    }
 
     expect(mockedResolveRepoRoot).toHaveBeenCalledWith(".");
     expect(mockedBuildRepoContextArtifacts).toHaveBeenCalledWith("/repo");
@@ -446,13 +873,67 @@ describe("runInspectCommand", () => {
       fileIndex: artifacts.fileIndex,
     });
     expect(mockedBuildGraphSummary).toHaveBeenCalledWith(graphArtifacts.graph);
+    expect(mockedBuildCodebaseMap).toHaveBeenCalledWith({
+      repoRoot: "/repo",
+      fileIndex: artifacts.fileIndex,
+      repoContext: artifacts.repoContext,
+      repoGraph: graphArtifacts.graph,
+      graphSummary: graphArtifacts.summary,
+    });
+    expect(mockedBuildReadingPlans).toHaveBeenCalledWith({
+      repoRoot: "/repo",
+      fileIndex: artifacts.fileIndex,
+      repoContext: artifacts.repoContext,
+      repoGraph: graphArtifacts.graph,
+      graphSummary: graphArtifacts.summary,
+      codebaseMap: codebaseMapArtifact,
+    });
     expect(mockedLogger.info).toHaveBeenCalledTimes(1);
-    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Repo graph");
-    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Files: 3");
-    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Import edges: 2");
-    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Architecture-first order preview");
-    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("1. README.md");
-    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Clusters");
+    const output = String(mockedLogger.info.mock.calls[0]?.[0]);
+    expect(output).toContain("Repo graph");
+    expect(output).toContain("Repository Inventory");
+    expect(output).toContain("Included files: 2");
+    expect(output).toContain("Skipped files: 3");
+    expect(output).toContain("Warnings: 2");
+    expect(output).toContain("Top skip reasons:");
+    expect(output).toContain("Top roles:");
+    expect(output).toContain("Languages:");
+    expect(output).toContain("Diagnostics");
+    expect(output).toContain("FileIndex warnings: 2");
+    expect(output).toContain("CodebaseMap warnings: 1");
+    expect(output).toContain("ReadingPlans warnings: 3");
+    expect(output).toContain("- Plan warnings:");
+    expect(output).toContain("  - architecture: 1");
+    expect(output).toContain("Reading Plans");
+    expect(output).toContain(
+      "- repo-analysis: 2 batches, 3 file references, 3 unique files, 0 warnings, truncated: no",
+    );
+    expect(output).toContain(
+      "- architecture: 3 batches, 5 file references, 5 unique files, 1 warning, truncated: no",
+    );
+    expect(output).toContain(
+      "- business-logic: 2 batches, 2 file references, 2 unique files, 0 warnings, truncated: no",
+    );
+    expect(output).toContain(
+      "- conventions: 2 batches, 2 file references, 2 unique files, 0 warnings, truncated: no",
+    );
+    expect(output).toContain(
+      "- testing: 3 batches, 5 file references, 5 unique files, 0 warnings, truncated: no",
+    );
+    expect(output).toContain(
+      "- agent-rules: 2 batches, 3 file references, 3 unique files, 0 warnings, truncated: no",
+    );
+    expect(output).toContain("Reading Plan Preview");
+    expect(output).toContain("architecture\n- Entrypoints and command surfaces");
+    expect(output).toContain("testing\n- Test setup and commands");
+    expect(output).toContain("Files: 3");
+    expect(output).toContain("Import edges: 2");
+    expect(output).toContain("Architecture-first order preview");
+    expect(output).toContain("1. README.md");
+    expect(output).toContain("Clusters");
+    expect(output).toContain("src-core-foo");
+    expect(output).not.toContain("<<<FILE_CONTENT_START");
+    expect(output).not.toContain("\"schemaVersion\"");
     expect(process.exitCode).toBeUndefined();
   });
 

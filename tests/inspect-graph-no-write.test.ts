@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runInspectCommand } from "../src/cli/commands/inspect";
-import { getBridgerDir } from "../src/core/project/bridger-paths";
+import { getBridgerDir, getReadingPlansPath } from "../src/core/project/bridger-paths";
 import { logger } from "../src/shared/logger";
 
 let tempDir = "";
@@ -41,6 +41,7 @@ describe("inspect --graph filesystem behavior", () => {
     expect(String(logSpy.mock.calls[0]?.[0])).toContain("Clusters");
     expect(String(logSpy.mock.calls[0]?.[0])).toContain("src-core-foo");
     await expect(fs.access(getBridgerDir(tempDir))).rejects.toThrow();
+    await expect(fs.access(getReadingPlansPath(tempDir))).rejects.toThrow();
     expect(process.exitCode).toBeUndefined();
   });
 });
