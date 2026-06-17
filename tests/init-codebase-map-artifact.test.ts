@@ -12,9 +12,15 @@ vi.mock("../src/core/doc-generator/generators/generate-knowledge-doc", () => ({
 
 import { runInitCommand } from "../src/cli/commands/init";
 import { CodebaseMapSchema } from "../src/core/codebase-map/models/codebase-map";
+import { ReadingPlansSchema } from "../src/core/reading-plans/models/reading-plans";
 import {
   getCodebaseMapPath,
+  getFileIndexPath,
+  getGraphSummaryPath,
+  getMemoryFilePath,
   getReadingPlansPath,
+  getRepoContextPath,
+  getRepoGraphPath,
 } from "../src/core/project/bridger-paths";
 
 let tempDir = "";
@@ -25,8 +31,8 @@ afterEach(async () => {
   tempDir = "";
 });
 
-describe("init CodebaseMap artifact", () => {
-  it("writes a valid codebase-map.json before LLM failure without reading plans", async () => {
+describe("init deterministic artifacts", () => {
+  it("writes all deterministic artifacts before LLM failure without changing memory generation", async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridger-init-map-"));
     await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
     await fs.writeFile(
@@ -45,8 +51,18 @@ describe("init CodebaseMap artifact", () => {
       const codebaseMap = JSON.parse(
         await fs.readFile(getCodebaseMapPath(tempDir), "utf8"),
       );
+      const readingPlans = JSON.parse(
+        await fs.readFile(getReadingPlansPath(tempDir), "utf8"),
+      );
       expect(CodebaseMapSchema.safeParse(codebaseMap).success).toBe(true);
-      await expect(fs.access(getReadingPlansPath(tempDir))).rejects.toThrow();
+      expect(ReadingPlansSchema.safeParse(readingPlans).success).toBe(true);
+      await expect(fs.access(getFileIndexPath(tempDir))).resolves.toBeUndefined();
+      await expect(fs.access(getRepoContextPath(tempDir))).resolves.toBeUndefined();
+      await expect(fs.access(getRepoGraphPath(tempDir))).resolves.toBeUndefined();
+      await expect(fs.access(getGraphSummaryPath(tempDir))).resolves.toBeUndefined();
+      await expect(
+        fs.access(getMemoryFilePath(tempDir, "repo-analysis.md")),
+      ).rejects.toThrow();
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "bridger init failed: OPENAI_API_KEY is required",
       );

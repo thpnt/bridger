@@ -48,6 +48,14 @@ vi.mock("../../src/core/output/upsert-generated-markdown-block", () => ({
   upsertGeneratedMarkdownBlock: vi.fn(),
 }));
 
+vi.mock("../../src/core/reading-plans/build-reading-plans", () => ({
+  buildReadingPlans: vi.fn(),
+}));
+
+vi.mock("../../src/core/reading-plans/write-reading-plans", () => ({
+  writeReadingPlansArtifact: vi.fn(),
+}));
+
 vi.mock("../../src/core/repo-graph/build-graph-summary", () => ({
   buildGraphSummary: vi.fn(),
 }));
@@ -100,6 +108,8 @@ import { writeBridgerConfig } from "../../src/core/project/write-bridger-config"
 import { upsertGeneratedMarkdownBlock } from "../../src/core/output/upsert-generated-markdown-block";
 import { writeJson } from "../../src/core/output/write-json";
 import { writeMarkdown } from "../../src/core/output/write-markdown";
+import { buildReadingPlans } from "../../src/core/reading-plans/build-reading-plans";
+import { writeReadingPlansArtifact } from "../../src/core/reading-plans/write-reading-plans";
 import { buildGraphSummary } from "../../src/core/repo-graph/build-graph-summary";
 import { buildRepoGraph } from "../../src/core/repo-graph/build-repo-graph";
 import { readGraphOrderedFiles } from "../../src/core/repo-graph/read-graph-ordered-files";
@@ -114,6 +124,8 @@ const mockedWriteBridgerConfig = vi.mocked(writeBridgerConfig);
 const mockedWriteJson = vi.mocked(writeJson);
 const mockedWriteMarkdown = vi.mocked(writeMarkdown);
 const mockedUpsertGeneratedMarkdownBlock = vi.mocked(upsertGeneratedMarkdownBlock);
+const mockedBuildReadingPlans = vi.mocked(buildReadingPlans);
+const mockedWriteReadingPlansArtifact = vi.mocked(writeReadingPlansArtifact);
 const mockedBuildGraphSummary = vi.mocked(buildGraphSummary);
 const mockedBuildRepoGraph = vi.mocked(buildRepoGraph);
 const mockedReadGraphOrderedFiles = vi.mocked(readGraphOrderedFiles);
@@ -303,6 +315,28 @@ function createGraphOrderedFileContext() {
   };
 }
 
+function createReadingPlans() {
+  return {
+    schemaVersion: 1 as const,
+    generatedAt: "2026-05-01T00:00:00.000Z",
+    sourceArtifacts: {
+      fileIndexSchemaVersion: 2,
+      repoGraphVersion: 1,
+      graphSummaryVersion: 1,
+      codebaseMapSchemaVersion: 1,
+    },
+    plans: [],
+    stats: {
+      planCount: 0,
+      batchCount: 0,
+      uniqueFileCount: 0,
+      repeatedFileReferences: 0,
+      estimatedTotalBytes: 0,
+    },
+    warnings: [],
+  };
+}
+
 beforeEach(() => {
   logEntries.length = 0;
   knowledgeDocCalls.length = 0;
@@ -313,6 +347,8 @@ beforeEach(() => {
   mockedWriteJson.mockReset();
   mockedWriteMarkdown.mockReset();
   mockedUpsertGeneratedMarkdownBlock.mockReset();
+  mockedBuildReadingPlans.mockReset();
+  mockedWriteReadingPlansArtifact.mockReset();
   mockedBuildGraphSummary.mockReset();
   mockedBuildRepoGraph.mockReset();
   mockedReadGraphOrderedFiles.mockReset();
@@ -326,6 +362,8 @@ beforeEach(() => {
     knowledgeDocCalls.push(input);
     return `generated:${input.spec.key}`;
   });
+  mockedBuildReadingPlans.mockReturnValue(createReadingPlans() as never);
+  mockedWriteReadingPlansArtifact.mockResolvedValue(undefined as never);
   process.exitCode = undefined;
 });
 
@@ -390,6 +428,23 @@ describe("runInitCommand", () => {
       graph: repoGraph,
       summary: graphSummary,
     });
+    expect(mockedBuildReadingPlans).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: "/repo",
+        fileIndex,
+        repoContext,
+        repoGraph,
+        graphSummary,
+        codebaseMap: expect.any(Object),
+      }),
+    );
+    expect(mockedWriteReadingPlansArtifact).toHaveBeenCalledWith({
+      repoRoot: "/repo",
+      readingPlans: createReadingPlans(),
+    });
+    expect(
+      mockedWriteReadingPlansArtifact.mock.invocationCallOrder[0],
+    ).toBeLessThan(mockedReadGraphOrderedFiles.mock.invocationCallOrder[0]!);
     expect(mockedReadGraphOrderedFiles).toHaveBeenCalledWith({
       repoRoot: "/repo",
       graph: repoGraph,
@@ -447,6 +502,7 @@ describe("runInitCommand", () => {
     expect(logEntries.at(-1)).toContain(".bridger/artifacts/repo-graph.json");
     expect(logEntries.at(-1)).toContain(".bridger/artifacts/graph-summary.json");
     expect(logEntries.at(-1)).toContain(".bridger/artifacts/codebase-map.json");
+    expect(logEntries.at(-1)).toContain(".bridger/artifacts/reading-plans.json");
     expect(logEntries.at(-1)).toContain(".bridger/config.json");
     expect(logEntries.at(-1)).toContain(".bridger/templates/ticket-template.md");
     expect(logEntries.at(-1)).not.toContain("ticket-template.md not generated");
@@ -454,7 +510,7 @@ describe("runInitCommand", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("writes codebase-map.json before an LLM generation failure", async () => {
+  it("writes codebase-map.json and reading-plans.json before an LLM generation failure", async () => {
     const repoContext = createRepoContext();
     const fileIndex = createFileIndex();
     const repoGraph = createRepoGraph();
@@ -497,11 +553,10 @@ describe("runInitCommand", () => {
       expect(mockedWriteJson.mock.invocationCallOrder[codebaseMapWrite]).toBeLessThan(
         mockedGenerateKnowledgeDoc.mock.invocationCallOrder[0]!,
       );
+      expect(mockedWriteReadingPlansArtifact).toHaveBeenCalledTimes(1);
       expect(
-        mockedWriteJson.mock.calls.some(([filePath]) =>
-          String(filePath).endsWith("reading-plans.json"),
-        ),
-      ).toBe(false);
+        mockedWriteReadingPlansArtifact.mock.invocationCallOrder[0],
+      ).toBeLessThan(mockedGenerateKnowledgeDoc.mock.invocationCallOrder[0]!);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "bridger init failed: OPENAI_API_KEY is required",
       );
@@ -621,6 +676,7 @@ describe("runInitCommand", () => {
       await runInitCommand({ repo: "." });
 
       expect(mockedWriteRepoGraphArtifacts).toHaveBeenCalledTimes(1);
+      expect(mockedWriteReadingPlansArtifact).toHaveBeenCalledTimes(1);
       expect(mockedWriteBridgerConfig).toHaveBeenCalledTimes(1);
       expect(mockedWriteJson).toHaveBeenCalledWith(
         "/repo/.bridger/artifacts/file-index.json",
@@ -640,6 +696,9 @@ describe("runInitCommand", () => {
       );
       expect(
         mockedWriteRepoGraphArtifacts.mock.invocationCallOrder[0],
+      ).toBeLessThan(mockedGenerateKnowledgeDoc.mock.invocationCallOrder[0]);
+      expect(
+        mockedWriteReadingPlansArtifact.mock.invocationCallOrder[0],
       ).toBeLessThan(mockedGenerateKnowledgeDoc.mock.invocationCallOrder[0]);
       expect(mockedWriteMarkdown).not.toHaveBeenCalled();
       expect(consoleErrorSpy).toHaveBeenCalledWith(
