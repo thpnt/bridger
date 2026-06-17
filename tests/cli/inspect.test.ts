@@ -430,17 +430,17 @@ describe("runInspectCommand", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("prints a graph inspection report without building repo context artifacts", async () => {
+  it("prints a live graph and cluster inspection report without persisted artifacts", async () => {
     mockedResolveRepoRoot.mockReturnValue("/repo");
-    mockedBuildFileIndex.mockResolvedValue(artifacts.fileIndex as never);
+    getMockedBuildResult();
     mockedBuildRepoGraph.mockResolvedValue(graphArtifacts.graph as never);
     mockedBuildGraphSummary.mockReturnValue(graphArtifacts.summary as never);
 
     await runInspectCommand({ repo: ".", graph: true });
 
     expect(mockedResolveRepoRoot).toHaveBeenCalledWith(".");
-    expect(mockedBuildRepoContextArtifacts).not.toHaveBeenCalled();
-    expect(mockedBuildFileIndex).toHaveBeenCalledWith("/repo");
+    expect(mockedBuildRepoContextArtifacts).toHaveBeenCalledWith("/repo");
+    expect(mockedBuildFileIndex).not.toHaveBeenCalled();
     expect(mockedBuildRepoGraph).toHaveBeenCalledWith({
       repoRoot: "/repo",
       fileIndex: artifacts.fileIndex,
@@ -452,6 +452,7 @@ describe("runInspectCommand", () => {
     expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Import edges: 2");
     expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Architecture-first order preview");
     expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("1. README.md");
+    expect(mockedLogger.info.mock.calls[0]?.[0]).toContain("Clusters");
     expect(process.exitCode).toBeUndefined();
   });
 

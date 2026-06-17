@@ -2,6 +2,8 @@ import path from "node:path";
 
 import { Command } from "commander";
 
+import { buildCodebaseMap } from "../../core/codebase-map/build-codebase-map";
+import { writeCodebaseMapArtifact } from "../../core/codebase-map/write-codebase-map";
 import { buildRepoContextArtifacts } from "../../core/context-builder/build-repo-context";
 import { generateAgentRulesDoc } from "../../core/doc-generator/generators/generate-agent-rules-doc";
 import { generateArchitectureDoc } from "../../core/doc-generator/generators/generate-architecture-doc";
@@ -25,6 +27,7 @@ import {
   getAgentsGeneratedPath,
   getAgentsMdPath,
   getBridgerConfigPath,
+  getCodebaseMapPath,
   getFileIndexPath,
   getGraphSummaryPath,
   getGeneratedKnowledgeDocPath,
@@ -171,6 +174,7 @@ function getGeneratedFilePaths(repoRoot: string, writeAgentsMd: boolean): string
     getFileIndexPath(repoRoot),
     getRepoGraphPath(repoRoot),
     getGraphSummaryPath(repoRoot),
+    getCodebaseMapPath(repoRoot),
     getGeneratedKnowledgeDocPath(repoRoot, "architecture"),
     getGeneratedKnowledgeDocPath(repoRoot, "repoAnalysis"),
     getGeneratedKnowledgeDocPath(repoRoot, "conventions"),
@@ -238,6 +242,13 @@ export async function runInitCommand(
       fileIndex,
     });
     const graphSummary = buildGraphSummary(graph);
+    const codebaseMap = buildCodebaseMap({
+      repoRoot,
+      fileIndex,
+      repoContext,
+      repoGraph: graph,
+      graphSummary,
+    });
     logInitStep("repo graph ready");
 
     logInitStep("writing deterministic artifacts");
@@ -248,6 +259,7 @@ export async function runInitCommand(
       graph,
       summary: graphSummary,
     });
+    await writeCodebaseMapArtifact({ repoRoot, codebaseMap });
     logInitStep("deterministic artifacts written");
 
     logInitStep("reading graph-ordered file context");

@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 
 import { Command } from "commander";
 
+import { buildCodebaseMap } from "../../core/codebase-map/build-codebase-map";
+import type { CodebaseMap } from "../../core/codebase-map/models/codebase-map";
 import { buildRepoContextArtifacts } from "../../core/context-builder/build-repo-context";
 import {
   getAgentsGeneratedExportPath,
@@ -31,7 +33,6 @@ import { buildGraphSummary } from "../../core/repo-graph/build-graph-summary";
 import { buildRepoGraph } from "../../core/repo-graph/build-repo-graph";
 import type { GraphSummary, GraphSummaryRankedFile } from "../../core/repo-graph/models/graph-summary";
 import type { RepoGraph } from "../../core/repo-graph/models/repo-graph";
-import { buildFileIndex } from "../../core/repo-scanner/build-file-index";
 import { logger } from "../../shared/logger";
 import { resolveRepoRoot } from "../../core/utils/paths";
 import type { FileIndex, FileIndexEntry } from "../../core/models/file-index";
@@ -370,8 +371,9 @@ async function buildFileInspections(
 export function formatGraphInspectOutput(input: {
   graph: RepoGraph;
   summary: GraphSummary;
+  codebaseMap: CodebaseMap;
 }): string {
-  const { graph, summary } = input;
+  const { graph, summary, codebaseMap } = input;
 
   return [
     "Repo graph",
@@ -396,7 +398,39 @@ export function formatGraphInspectOutput(input: {
     "",
     "Architecture-first order preview",
     formatOrderedPreview(summary.architectureFirstOrder.slice(0, 10)),
+    "",
+    "Clusters",
+    formatClusterPreview(codebaseMap),
   ].join("\n");
+}
+
+function formatClusterPreview(codebaseMap: CodebaseMap): string {
+  const maxClusters = 10;
+  const lines = codebaseMap.clusters.slice(0, maxClusters).map((cluster) => {
+    const details = [`${cluster.files.length} files`, cluster.kind];
+    const centralPath = cluster.centralFiles[0]?.path;
+
+    if (centralPath) {
+      details.push(`central: ${centralPath}`);
+    } else if (cluster.entrypoints[0]) {
+      details.push(`entrypoint: ${cluster.entrypoints[0]}`);
+    }
+
+    return `- ${cluster.id}: ${details.join(", ")}`;
+  });
+
+  if (lines.length === 0) {
+    return "- None";
+  }
+
+  const remainingCount = codebaseMap.clusters.length - maxClusters;
+  if (remainingCount > 0) {
+    lines.push(
+      `- ${remainingCount} more cluster${remainingCount === 1 ? "" : "s"}`,
+    );
+  }
+
+  return lines.join("\n");
 }
 
 function formatPathList(paths: string[]): string {
@@ -514,23 +548,33 @@ function printContextPreview(result: InspectResult): void {
 async function buildGraphInspectArtifacts(repoRoot: string): Promise<{
   graph: RepoGraph;
   summary: GraphSummary;
+  codebaseMap: CodebaseMap;
 }> {
-  const fileIndex = await buildFileIndex(repoRoot);
+  const { repoContext, fileIndex } = await buildRepoContextArtifacts(repoRoot);
   const graph = await buildRepoGraph({
     repoRoot,
     fileIndex,
   });
   const summary = buildGraphSummary(graph);
+  const codebaseMap = buildCodebaseMap({
+    repoRoot,
+    fileIndex,
+    repoContext,
+    repoGraph: graph,
+    graphSummary: summary,
+  });
 
   return {
     graph,
     summary,
+    codebaseMap,
   };
 }
 
 function printGraphInspectOutput(input: {
   graph: RepoGraph;
   summary: GraphSummary;
+  codebaseMap: CodebaseMap;
 }): void {
   logger.info(formatGraphInspectOutput(input));
 }

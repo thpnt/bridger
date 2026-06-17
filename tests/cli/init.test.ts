@@ -399,7 +399,10 @@ describe("runInitCommand", () => {
       maxSingleFileBytes: 20 * 1024,
       maxTotalBytes: 120 * 1024,
     });
-    expect(mockedWriteJson).toHaveBeenCalledTimes(2);
+    expect(mockedWriteJson).toHaveBeenCalledTimes(3);
+    expect(mockedWriteJson.mock.calls[2]?.[0]).toBe(
+      "/repo/.bridger/artifacts/codebase-map.json",
+    );
     expect(mockedWriteMarkdown).toHaveBeenCalledTimes(7);
     expect(mockedUpsertGeneratedMarkdownBlock).not.toHaveBeenCalled();
     const knowledgeDocFileCalls = knowledgeDocCalls.filter(
@@ -443,11 +446,69 @@ describe("runInitCommand", () => {
     ]);
     expect(logEntries.at(-1)).toContain(".bridger/artifacts/repo-graph.json");
     expect(logEntries.at(-1)).toContain(".bridger/artifacts/graph-summary.json");
+    expect(logEntries.at(-1)).toContain(".bridger/artifacts/codebase-map.json");
     expect(logEntries.at(-1)).toContain(".bridger/config.json");
     expect(logEntries.at(-1)).toContain(".bridger/templates/ticket-template.md");
     expect(logEntries.at(-1)).not.toContain("ticket-template.md not generated");
     expect(mockedLogger.error).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("writes codebase-map.json before an LLM generation failure", async () => {
+    const repoContext = createRepoContext();
+    const fileIndex = createFileIndex();
+    const repoGraph = createRepoGraph();
+    const graphSummary = createGraphSummary();
+
+    mockedResolveRepoRoot.mockReturnValue("/repo");
+    mockedEnsureOutputDirs.mockResolvedValue(undefined);
+    mockedWriteBridgerConfig.mockResolvedValue(undefined);
+    mockedBuildRepoContextArtifacts.mockResolvedValue({
+      repoContext,
+      fileIndex,
+      importantFiles: [],
+    });
+    mockedBuildRepoGraph.mockResolvedValue(repoGraph);
+    mockedBuildGraphSummary.mockReturnValue(graphSummary);
+    mockedWriteRepoGraphArtifacts.mockResolvedValue({
+      repoGraphPath: "/repo/.bridger/artifacts/repo-graph.json",
+      graphSummaryPath: "/repo/.bridger/artifacts/graph-summary.json",
+    });
+    mockedReadGraphOrderedFiles.mockResolvedValue({
+      files: [],
+      diagnostics: [],
+      totalBytes: 0,
+    });
+    mockedWriteJson.mockResolvedValue(undefined);
+    mockedGenerateKnowledgeDoc.mockRejectedValueOnce(
+      new Error("OPENAI_API_KEY is required"),
+    );
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    try {
+      await runInitCommand({ repo: "." });
+
+      const codebaseMapWrite = mockedWriteJson.mock.calls.findIndex(
+        ([filePath]) => filePath === "/repo/.bridger/artifacts/codebase-map.json",
+      );
+      expect(codebaseMapWrite).toBeGreaterThanOrEqual(0);
+      expect(mockedWriteJson.mock.invocationCallOrder[codebaseMapWrite]).toBeLessThan(
+        mockedGenerateKnowledgeDoc.mock.invocationCallOrder[0]!,
+      );
+      expect(
+        mockedWriteJson.mock.calls.some(([filePath]) =>
+          String(filePath).endsWith("reading-plans.json"),
+        ),
+      ).toBe(false);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "bridger init failed: OPENAI_API_KEY is required",
+      );
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   it("logs the optional AGENTS.md update when requested", async () => {
