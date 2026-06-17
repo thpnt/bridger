@@ -12,6 +12,8 @@ import {
 import { getGeneratedKnowledgeDocRelativePath } from "../src/core/project/bridger-paths";
 import { detectCommands } from "../src/core/repo-scanner/detect-commands";
 import { buildFileIndex } from "../src/core/repo-scanner/build-file-index";
+import { buildRepoGraph } from "../src/core/repo-graph/build-repo-graph";
+import { buildGraphSummary } from "../src/core/repo-graph/build-graph-summary";
 import { detectStack } from "../src/core/repo-scanner/detect-stack";
 
 const fixtureRoot = path.resolve("tests/fixtures/file-index-basic");
@@ -80,6 +82,212 @@ describe("repo scanner", () => {
     expect(index.files.map((entry) => entry.path)).toEqual(
       [...index.files.map((entry) => entry.path)].sort((left, right) => left.localeCompare(right)),
     );
+  });
+
+  it("builds a v2 repository inventory with skip diagnostics, roles, stats, signals, and entrypoints", async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bridger-inventory-"));
+    await fs.outputJson(
+      path.join(tempDir, "package.json"),
+      {
+        name: "inventory-fixture",
+        bin: {
+          inventory: "./src/cli/cli.ts",
+        },
+      },
+      { spaces: 2 },
+    );
+    await fs.outputFile(path.join(tempDir, "pnpm-lock.yaml"), "lockfileVersion: 9\n");
+    await fs.outputFile(path.join(tempDir, ".gitignore"), "ignored/\n");
+    await fs.outputFile(path.join(tempDir, ".env"), "TOKEN=secret\n");
+    await fs.outputFile(path.join(tempDir, ".env.local"), "TOKEN=secret\n");
+    await fs.outputFile(path.join(tempDir, "public/logo.png"), "not really png\n");
+    await fs.outputFile(path.join(tempDir, "large.txt"), "x".repeat(1_000_001));
+    await fs.outputFile(path.join(tempDir, "ignored/generated.ts"), "export {};\n");
+    await fs.outputFile(path.join(tempDir, "node_modules/pkg/index.js"), "module.exports = {};\n");
+    await fs.outputFile(path.join(tempDir, ".git/HEAD"), "ref: main\n");
+    await fs.outputFile(path.join(tempDir, ".bridger/artifacts/file-index.json"), "{}\n");
+    await fs.outputFile(path.join(tempDir, "dist/generated.js"), "export {};\n");
+    await fs.outputFile(path.join(tempDir, "build/generated.js"), "export {};\n");
+    await fs.outputFile(path.join(tempDir, "coverage/coverage.json"), "{}\n");
+    await fs.outputFile(path.join(tempDir, ".next/server.js"), "export {};\n");
+    await fs.outputFile(path.join(tempDir, "README.md"), "# Fixture\n");
+    await fs.outputFile(
+      path.join(tempDir, "src/cli/cli.ts"),
+      [
+        'import { Command } from "commander";',
+        'import { z } from "zod";',
+        'import { helper } from "../lib/helper";',
+        "export const cli = new Command();",
+        "export const schema = z.object({ name: z.string() });",
+        "helper();",
+        "",
+      ].join("\n"),
+    );
+    await fs.outputFile(
+      path.join(tempDir, "src/app/page.tsx"),
+      [
+        'import React from "react";',
+        "export default function Page() { return null; }",
+        "",
+      ].join("\n"),
+    );
+    await fs.outputFile(
+      path.join(tempDir, "src/app/api/route.ts"),
+      [
+        'import type { NextRequest } from "next/server";',
+        "export function GET(_request: NextRequest) { return Response.json({ ok: true }); }",
+        "",
+      ].join("\n"),
+    );
+    await fs.outputFile(
+      path.join(tempDir, "src/lib/helper.ts"),
+      "export function helper() { return true; }\n",
+    );
+    await fs.outputFile(
+      path.join(tempDir, "tests/fixtures/user.fixture.ts"),
+      "export const user = { id: 1 };\n",
+    );
+    await fs.outputFile(
+      path.join(tempDir, "tests/sample.test.ts"),
+      [
+        'import { describe, it } from "vitest";',
+        "describe('sample', () => { it('works', () => undefined); });",
+        "",
+      ].join("\n"),
+    );
+    await fs.outputFile(
+      path.join(tempDir, "api/main.py"),
+      [
+        "from fastapi import FastAPI",
+        "from pydantic import BaseModel",
+        "app = FastAPI()",
+        "class User(BaseModel):",
+        "    name: str",
+        "",
+      ].join("\n"),
+    );
+
+    const index = await buildFileIndex(tempDir);
+    const graph = await buildRepoGraph({
+      repoRoot: tempDir,
+      fileIndex: index,
+    });
+    const summary = buildGraphSummary(graph);
+
+    expect(FileIndexSchema.parse(index)).toEqual(index);
+    expect(index.schemaVersion).toBe(2);
+    expect(index.skippedFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: ".env", reason: "sensitive" }),
+        expect.objectContaining({ path: ".env.local", reason: "sensitive" }),
+        expect.objectContaining({ path: "node_modules", reason: "noise-directory" }),
+        expect.objectContaining({ path: ".git", reason: "noise-directory" }),
+        expect.objectContaining({ path: ".bridger", reason: "noise-directory" }),
+        expect.objectContaining({ path: "dist", reason: "generated" }),
+        expect.objectContaining({ path: "build", reason: "generated" }),
+        expect.objectContaining({ path: "coverage", reason: "generated" }),
+        expect.objectContaining({ path: ".next", reason: "generated" }),
+        expect.objectContaining({ path: "public/logo.png", reason: "binary" }),
+        expect.objectContaining({ path: "large.txt", reason: "too-large" }),
+        expect.objectContaining({ path: "ignored/generated.ts", reason: "ignored" }),
+      ]),
+    );
+    expect(index.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "sensitive-file-skipped",
+          filePath: ".env",
+        }),
+        expect.objectContaining({
+          code: "large-file-skipped",
+          filePath: "large.txt",
+        }),
+      ]),
+    );
+    expect(index.stats).toEqual(
+      expect.objectContaining({
+        totalFilesDiscovered:
+          index.files.length + (index.skippedFiles?.length ?? 0),
+        includedFileCount: index.files.length,
+        skippedFileCount: index.skippedFiles?.length,
+      }),
+    );
+    expect(index.stats?.bySkipReason.sensitive).toBe(2);
+    expect(index.stats?.bySkipReason.binary).toBe(1);
+    expect(index.stats?.bySkipReason["too-large"]).toBe(1);
+    expect(index.stats?.byLanguage.typescript).toBeGreaterThan(0);
+    expect(index.stats?.byLanguage.python).toBe(1);
+
+    const cli = getIndexedFile(index, "src/cli/cli.ts");
+    const page = getIndexedFile(index, "src/app/page.tsx");
+    const route = getIndexedFile(index, "src/app/api/route.ts");
+    const lockfile = getIndexedFile(index, "pnpm-lock.yaml");
+    const fixture = getIndexedFile(index, "tests/fixtures/user.fixture.ts");
+    const test = getIndexedFile(index, "tests/sample.test.ts");
+    const python = getIndexedFile(index, "api/main.py");
+
+    expect(cli.language).toBe("typescript");
+    expect(page.language).toBe("typescript");
+    expect(python.language).toBe("python");
+    expect(lockfile.language).toBe("yaml");
+
+    expect(cli.roles).toEqual([...cli.roles ?? []].sort());
+    expect(cli.roles).toEqual(
+      expect.arrayContaining(["command", "entrypoint-candidate", "source"]),
+    );
+    expect(route.roles).toEqual(expect.arrayContaining(["api-route", "route"]));
+    expect(lockfile.roles).toEqual(expect.arrayContaining(["lockfile"]));
+    expect(lockfile.includeReason).toBe("project-metadata");
+    expect(fixture.roles).toEqual(expect.arrayContaining(["fixture"]));
+    expect(test.roles).toEqual(expect.arrayContaining(["test"]));
+
+    expect(cli.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "cli", source: "import", value: "commander" }),
+        expect.objectContaining({ kind: "schema", source: "import", value: "zod" }),
+        expect.objectContaining({ kind: "validation", source: "import", value: "zod" }),
+        expect.objectContaining({
+          kind: "entrypoint",
+          source: "package-json",
+          value: "package-bin",
+        }),
+      ]),
+    );
+    expect(page.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "frontend", source: "import", value: "react" }),
+        expect.objectContaining({ kind: "framework", source: "import", value: "react" }),
+      ]),
+    );
+    expect(route.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "framework", source: "import", value: "next" }),
+      ]),
+    );
+    expect(test.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "testing", source: "import", value: "vitest" }),
+      ]),
+    );
+    expect(python.signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "framework", source: "import", value: "fastapi" }),
+        expect.objectContaining({ kind: "schema", source: "import", value: "pydantic" }),
+        expect.objectContaining({ kind: "validation", source: "import", value: "pydantic" }),
+      ]),
+    );
+
+    expect(
+      graph.edges
+        .filter((edge) => edge.type === "imports")
+        .map((edge) => `${edge.from} -> ${edge.to}`),
+    ).toEqual(["src/cli/cli.ts -> src/lib/helper.ts"]);
+    expect(
+      graph.edges.some((edge) => edge.to === "react" || edge.to === "commander"),
+    ).toBe(false);
+    expect(graph.diagnostics).toEqual([]);
+    expect(summary.entrypoints).toContain("src/cli/cli.ts");
+    expect(summary.entrypoints.every((entrypoint) => typeof entrypoint === "string")).toBe(true);
   });
 
   it("detects a Next.js stack from package and file heuristics", async () => {
@@ -234,3 +442,14 @@ describe("repo scanner", () => {
     expect(commands.dev).toBe("pnpm dev");
   });
 });
+
+function getIndexedFile(
+  index: Awaited<ReturnType<typeof buildFileIndex>>,
+  filePath: string,
+) {
+  const file = index.files.find((entry) => entry.path === filePath);
+
+  expect(file).toBeDefined();
+
+  return file!;
+}

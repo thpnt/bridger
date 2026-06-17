@@ -52,16 +52,37 @@ const repoKnowledgeInput = {
     },
   },
   fileIndex: {
+    schemaVersion: 2 as const,
     generatedAt: "2026-05-01T00:00:00.000Z",
     files: [
       {
         path: RepoRelativePathSchema.parse("README.md"),
         extension: ".md",
         sizeBytes: 100,
+        language: "markdown" as const,
+        roles: ["docs" as const],
+        confidence: "inferred" as const,
+        includeReason: "documentation" as const,
+        signals: [],
         tags: ["readme", "documentation"],
         reason: "Project README",
       },
     ],
+    skippedFiles: [],
+    warnings: [],
+    stats: {
+      totalFilesDiscovered: 1,
+      includedFileCount: 1,
+      skippedFileCount: 0,
+      totalIncludedBytes: 100,
+      byLanguage: {
+        markdown: 1,
+      },
+      byRole: {
+        docs: 1,
+      },
+      bySkipReason: {},
+    },
   },
   importantFiles: [
     {

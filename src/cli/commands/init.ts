@@ -2,6 +2,8 @@ import path from "node:path";
 
 import { Command } from "commander";
 
+import { buildCodebaseMap } from "../../core/codebase-map/build-codebase-map";
+import { writeCodebaseMapArtifact } from "../../core/codebase-map/write-codebase-map";
 import { buildRepoContextArtifacts } from "../../core/context-builder/build-repo-context";
 import { generateAgentRulesDoc } from "../../core/doc-generator/generators/generate-agent-rules-doc";
 import { generateArchitectureDoc } from "../../core/doc-generator/generators/generate-architecture-doc";
@@ -10,6 +12,8 @@ import { generateConventionsDoc } from "../../core/doc-generator/generators/gene
 import { generateRepoAnalysisDoc } from "../../core/doc-generator/generators/generate-repo-analysis-doc";
 import { generateTestingDoc } from "../../core/doc-generator/generators/generate-testing-doc";
 import { renderAgentsMd } from "../../core/doc-generator/renderers/render-agents-md";
+import { buildReadingPlans } from "../../core/reading-plans/build-reading-plans";
+import { writeReadingPlansArtifact } from "../../core/reading-plans/write-reading-plans";
 import { createBridgerConfig } from "../../core/project/create-bridger-config";
 import { ensureOutputDirs } from "../../core/output/ensure-output-dirs";
 import { writeBridgerConfig } from "../../core/project/write-bridger-config";
@@ -25,8 +29,10 @@ import {
   getAgentsGeneratedPath,
   getAgentsMdPath,
   getBridgerConfigPath,
+  getCodebaseMapPath,
   getFileIndexPath,
   getGraphSummaryPath,
+  getReadingPlansPath,
   getGeneratedKnowledgeDocPath,
   getRepoGraphPath,
   getRepoContextPath,
@@ -171,6 +177,8 @@ function getGeneratedFilePaths(repoRoot: string, writeAgentsMd: boolean): string
     getFileIndexPath(repoRoot),
     getRepoGraphPath(repoRoot),
     getGraphSummaryPath(repoRoot),
+    getCodebaseMapPath(repoRoot),
+    getReadingPlansPath(repoRoot),
     getGeneratedKnowledgeDocPath(repoRoot, "architecture"),
     getGeneratedKnowledgeDocPath(repoRoot, "repoAnalysis"),
     getGeneratedKnowledgeDocPath(repoRoot, "conventions"),
@@ -238,6 +246,21 @@ export async function runInitCommand(
       fileIndex,
     });
     const graphSummary = buildGraphSummary(graph);
+    const codebaseMap = buildCodebaseMap({
+      repoRoot,
+      fileIndex,
+      repoContext,
+      repoGraph: graph,
+      graphSummary,
+    });
+    const readingPlans = buildReadingPlans({
+      repoRoot,
+      fileIndex,
+      repoContext,
+      repoGraph: graph,
+      graphSummary,
+      codebaseMap,
+    });
     logInitStep("repo graph ready");
 
     logInitStep("writing deterministic artifacts");
@@ -248,6 +271,8 @@ export async function runInitCommand(
       graph,
       summary: graphSummary,
     });
+    await writeCodebaseMapArtifact({ repoRoot, codebaseMap });
+    await writeReadingPlansArtifact({ repoRoot, readingPlans });
     logInitStep("deterministic artifacts written");
 
     logInitStep("reading graph-ordered file context");

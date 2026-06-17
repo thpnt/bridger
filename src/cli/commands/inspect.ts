@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 
 import { Command } from "commander";
 
+import { buildCodebaseMap } from "../../core/codebase-map/build-codebase-map";
+import type { CodebaseMap } from "../../core/codebase-map/models/codebase-map";
 import { buildRepoContextArtifacts } from "../../core/context-builder/build-repo-context";
 import {
   getAgentsGeneratedExportPath,
@@ -31,7 +33,8 @@ import { buildGraphSummary } from "../../core/repo-graph/build-graph-summary";
 import { buildRepoGraph } from "../../core/repo-graph/build-repo-graph";
 import type { GraphSummary, GraphSummaryRankedFile } from "../../core/repo-graph/models/graph-summary";
 import type { RepoGraph } from "../../core/repo-graph/models/repo-graph";
-import { buildFileIndex } from "../../core/repo-scanner/build-file-index";
+import { buildReadingPlans } from "../../core/reading-plans/build-reading-plans";
+import type { ReadingPlan, ReadingPlans } from "../../core/reading-plans/models/reading-plans";
 import { logger } from "../../shared/logger";
 import { resolveRepoRoot } from "../../core/utils/paths";
 import type { FileIndex, FileIndexEntry } from "../../core/models/file-index";
@@ -124,6 +127,14 @@ function formatList(values: string[]): string {
 
 function formatCommandValue(value: string | undefined): string {
   return value !== undefined ? value : "none";
+}
+
+function formatQuantity(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 export function formatBytes(bytes: number | undefined): string {
@@ -368,13 +379,22 @@ async function buildFileInspections(
 }
 
 export function formatGraphInspectOutput(input: {
+  fileIndex?: FileIndex;
   graph: RepoGraph;
   summary: GraphSummary;
+  codebaseMap: CodebaseMap;
+  readingPlans?: ReadingPlans;
 }): string {
-  const { graph, summary } = input;
+  const { graph, summary, codebaseMap } = input;
+  const fileIndex = input.fileIndex ?? EMPTY_FILE_INDEX;
+  const readingPlans = input.readingPlans ?? EMPTY_READING_PLANS;
 
   return [
     "Repo graph",
+    "",
+    formatRepositoryInventorySection(fileIndex),
+    "",
+    formatDiagnosticsSection(fileIndex, codebaseMap, readingPlans),
     "",
     "Stats",
     `- Files: ${graph.stats.fileCount}`,
@@ -396,7 +416,264 @@ export function formatGraphInspectOutput(input: {
     "",
     "Architecture-first order preview",
     formatOrderedPreview(summary.architectureFirstOrder.slice(0, 10)),
+    "",
+    "Clusters",
+    formatClusterPreview(codebaseMap),
+    "",
+    formatReadingPlansSection(readingPlans),
+    "",
+    formatReadingPlanPreviewSection(readingPlans),
   ].join("\n");
+}
+
+function formatRepositoryInventorySection(fileIndex: FileIndex): string {
+  const inventory = buildFileIndexInventory(fileIndex);
+
+  return [
+    "Repository Inventory",
+    `- Included files: ${inventory.includedFileCount}`,
+    `- Skipped files: ${inventory.skippedFileCount}`,
+    `- Warnings: ${inventory.warningCount}`,
+    `- Top skip reasons: ${formatCountEntries(inventory.topSkipReasons, 5)}`,
+    `- Top roles: ${formatCountEntries(inventory.topRoles, 8)}`,
+    `- Languages: ${formatCountEntries(inventory.topLanguages, 8)}`,
+  ].join("\n");
+}
+
+function formatDiagnosticsSection(
+  fileIndex: FileIndex,
+  codebaseMap: CodebaseMap,
+  readingPlans: ReadingPlans,
+): string {
+  return [
+    "Diagnostics",
+    `- FileIndex warnings: ${fileIndex.warnings?.length ?? 0}`,
+    `- CodebaseMap warnings: ${codebaseMap.warnings.length}`,
+    `- ReadingPlans warnings: ${readingPlans.warnings.length}`,
+    "- Plan warnings:",
+    ...formatPlanWarningCounts(readingPlans),
+  ].join("\n");
+}
+
+function formatReadingPlansSection(readingPlans: ReadingPlans): string {
+  const lines = ["Reading Plans"];
+
+  for (const kind of READING_PLAN_KINDS) {
+    const plan = readingPlans.plans.find((item) => item.kind === kind);
+    if (!plan) {
+      lines.push(`- Missing plan: ${kind}`);
+      continue;
+    }
+
+    const fileReferenceCount = plan.batches.reduce(
+      (total, batch) => total + batch.files.length,
+      0,
+    );
+    const uniqueFileCount = new Set(
+      plan.batches.flatMap((batch) => batch.files.map((file) => file.path)),
+    ).size;
+
+    lines.push(
+      `- ${plan.kind}: ${formatQuantity(plan.batches.length, "batch", "batches")}, ${formatQuantity(fileReferenceCount, "file reference")}, ${formatQuantity(uniqueFileCount, "unique file")}, ${formatQuantity(plan.warnings.length, "warning")}, truncated: ${plan.budget.truncated ? "yes" : "no"}`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function formatReadingPlanPreviewSection(readingPlans: ReadingPlans): string {
+  const lines = ["Reading Plan Preview"];
+
+  for (const kind of ["architecture", "testing"] as const) {
+    const plan = readingPlans.plans.find((item) => item.kind === kind);
+    if (!plan) {
+      lines.push("");
+      lines.push(`${kind}`);
+      lines.push("- Missing plan");
+      continue;
+    }
+
+    lines.push("");
+    lines.push(plan.kind);
+    lines.push(...formatReadingPlanPreview(plan));
+  }
+
+  return lines.join("\n");
+}
+
+function formatReadingPlanPreview(plan: ReadingPlan): string[] {
+  const lines: string[] = [];
+
+  for (const batch of plan.batches.slice(0, 3)) {
+    lines.push(`- ${batch.title}`);
+    const filePaths = batch.files.slice(0, 3).map((file) => file.path);
+
+    if (filePaths.length === 0) {
+      lines.push("  - none");
+      continue;
+    }
+
+    for (const filePath of filePaths) {
+      lines.push(`  - ${filePath}`);
+    }
+  }
+
+  return lines;
+}
+
+interface CountEntry {
+  key: string;
+  count: number;
+}
+
+interface FileIndexInventory {
+  includedFileCount: number;
+  skippedFileCount: number;
+  warningCount: number;
+  topSkipReasons: CountEntry[];
+  topRoles: CountEntry[];
+  topLanguages: CountEntry[];
+}
+
+const READING_PLAN_KINDS = [
+  "repo-analysis",
+  "architecture",
+  "business-logic",
+  "conventions",
+  "testing",
+  "agent-rules",
+] as const;
+
+function buildFileIndexInventory(fileIndex: FileIndex): FileIndexInventory {
+  const stats = fileIndex.stats;
+
+  return {
+    includedFileCount: stats?.includedFileCount ?? fileIndex.files.length,
+    skippedFileCount: stats?.skippedFileCount ?? fileIndex.skippedFiles?.length ?? 0,
+    warningCount: fileIndex.warnings?.length ?? 0,
+    topSkipReasons: formatCountEntriesToList(
+      stats?.bySkipReason ?? countSkippedFiles(fileIndex),
+    ),
+    topRoles: formatCountEntriesToList(
+      stats?.byRole ?? countFileRoles(fileIndex),
+    ),
+    topLanguages: formatCountEntriesToList(
+      stats?.byLanguage ?? countFileLanguages(fileIndex),
+    ),
+  };
+}
+
+function countSkippedFiles(fileIndex: FileIndex): Record<string, number> {
+  const counts: Record<string, number> = {};
+
+  for (const skippedFile of fileIndex.skippedFiles ?? []) {
+    counts[skippedFile.reason] = (counts[skippedFile.reason] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+function countFileRoles(fileIndex: FileIndex): Record<string, number> {
+  const counts: Record<string, number> = {};
+
+  for (const file of fileIndex.files) {
+    for (const role of file.roles ?? []) {
+      counts[role] = (counts[role] ?? 0) + 1;
+    }
+  }
+
+  return counts;
+}
+
+function countFileLanguages(fileIndex: FileIndex): Record<string, number> {
+  const counts: Record<string, number> = {};
+
+  for (const file of fileIndex.files) {
+    const language = file.language ?? "unknown";
+    counts[language] = (counts[language] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+function formatCountEntries(counts: CountEntry[], maxEntries: number): string {
+  if (counts.length === 0) {
+    return "none";
+  }
+
+  return counts
+    .slice(0, maxEntries)
+    .map((entry) => `${entry.key}: ${entry.count}`)
+    .join(", ");
+}
+
+function formatCountEntriesToList(
+  counts: Record<string, number> | Partial<Record<string, number>>,
+): CountEntry[] {
+  return Object.entries(counts)
+    .flatMap(([key, count]) =>
+      typeof count === "number" ? [{ key, count }] : [],
+    )
+    .sort(
+      (left, right) =>
+        right.count - left.count || left.key.localeCompare(right.key),
+    );
+}
+
+function formatPlanWarningCounts(readingPlans: ReadingPlans): string[] {
+  return READING_PLAN_KINDS.map((kind) => {
+    const plan = readingPlans.plans.find((item) => item.kind === kind);
+    return `  - ${kind}: ${plan?.warnings.length ?? 0}`;
+  });
+}
+
+const EMPTY_FILE_INDEX: FileIndex = {
+  generatedAt: "2026-05-01T00:00:00.000Z",
+  files: [],
+};
+
+const EMPTY_READING_PLANS: ReadingPlans = {
+  schemaVersion: 1,
+  generatedAt: "2026-05-01T00:00:00.000Z",
+  sourceArtifacts: {},
+  plans: [],
+  stats: {
+    planCount: 0,
+    batchCount: 0,
+    uniqueFileCount: 0,
+    repeatedFileReferences: 0,
+    estimatedTotalBytes: 0,
+  },
+  warnings: [],
+};
+
+function formatClusterPreview(codebaseMap: CodebaseMap): string {
+  const maxClusters = 10;
+  const lines = codebaseMap.clusters.slice(0, maxClusters).map((cluster) => {
+    const details = [`${cluster.files.length} files`, cluster.kind];
+    const centralPath = cluster.centralFiles[0]?.path;
+
+    if (centralPath) {
+      details.push(`central: ${centralPath}`);
+    } else if (cluster.entrypoints[0]) {
+      details.push(`entrypoint: ${cluster.entrypoints[0]}`);
+    }
+
+    return `- ${cluster.id}: ${details.join(", ")}`;
+  });
+
+  if (lines.length === 0) {
+    return "- None";
+  }
+
+  const remainingCount = codebaseMap.clusters.length - maxClusters;
+  if (remainingCount > 0) {
+    lines.push(
+      `- ${remainingCount} more cluster${remainingCount === 1 ? "" : "s"}`,
+    );
+  }
+
+  return lines.join("\n");
 }
 
 function formatPathList(paths: string[]): string {
@@ -512,25 +789,49 @@ function printContextPreview(result: InspectResult): void {
 }
 
 async function buildGraphInspectArtifacts(repoRoot: string): Promise<{
+  fileIndex: FileIndex;
   graph: RepoGraph;
   summary: GraphSummary;
+  codebaseMap: CodebaseMap;
+  readingPlans: ReadingPlans;
 }> {
-  const fileIndex = await buildFileIndex(repoRoot);
+  const { repoContext, fileIndex } = await buildRepoContextArtifacts(repoRoot);
   const graph = await buildRepoGraph({
     repoRoot,
     fileIndex,
   });
   const summary = buildGraphSummary(graph);
+  const codebaseMap = buildCodebaseMap({
+    repoRoot,
+    fileIndex,
+    repoContext,
+    repoGraph: graph,
+    graphSummary: summary,
+  });
+  const readingPlans = buildReadingPlans({
+    repoRoot,
+    fileIndex,
+    repoContext,
+    repoGraph: graph,
+    graphSummary: summary,
+    codebaseMap,
+  });
 
   return {
+    fileIndex,
     graph,
     summary,
+    codebaseMap,
+    readingPlans,
   };
 }
 
 function printGraphInspectOutput(input: {
+  fileIndex: FileIndex;
   graph: RepoGraph;
   summary: GraphSummary;
+  codebaseMap: CodebaseMap;
+  readingPlans: ReadingPlans;
 }): void {
   logger.info(formatGraphInspectOutput(input));
 }
