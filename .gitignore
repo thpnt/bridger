@@ -10,6 +10,9 @@
 
 # testing
 /coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # next.js
 /.next/
@@ -17,6 +20,12 @@
 
 # production
 /build
+/dist
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
 
 # misc
 .DS_Store
@@ -34,7 +43,7 @@ yarn-error.log*
 # vercel
 .vercel
 
-# typescript
+# legacy typescript
 *.tsbuildinfo
 next-env.d.ts
 
