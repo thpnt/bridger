@@ -13,7 +13,7 @@ def write_artifact(destination: Path, artifact: ArtifactT) -> None:
     validated = type(artifact).model_validate(artifact.model_dump())
     serialized = (
         orjson.dumps(
-            validated.model_dump(mode="json"),
+            validated.model_dump(mode="json", by_alias=True),
             option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS,
         )
         + b"\n"

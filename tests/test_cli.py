@@ -28,19 +28,42 @@ def test_init_creates_project_files(
     assert artifact_file.is_file()
     assert artifact["schema_version"] == 1
     assert artifact["stats"]["files_included"] == 0
-    assert "Artifact: .bridger/artifacts/file-index.json" in result.stdout
     repo_context_file = tmp_path / ".bridger" / "artifacts" / "repo-context.json"
     repo_context = json.loads(repo_context_file.read_text())
     assert repo_context_file.is_file()
     assert repo_context["schema_version"] == 1
     assert repo_context["manifests"] == []
-    assert "Artifact: .bridger/artifacts/repo-context.json" in result.stdout
     symbol_index_file = tmp_path / ".bridger" / "artifacts" / "symbol-index.json"
     symbol_index = json.loads(symbol_index_file.read_text())
     assert symbol_index_file.is_file()
     assert symbol_index["schema_version"] == 1
     assert symbol_index["symbols"] == []
-    assert "Artifact: .bridger/artifacts/symbol-index.json" in result.stdout
+    repo_graph_file = tmp_path / ".bridger" / "artifacts" / "repo-graph.json"
+    repo_graph = json.loads(repo_graph_file.read_text())
+    assert repo_graph["schema_version"] == 1
+    graph_summary_file = tmp_path / ".bridger" / "artifacts" / "graph-summary.json"
+    graph_summary = json.loads(graph_summary_file.read_text())
+    assert graph_summary["schema_version"] == 1
+    repo_discovery_file = tmp_path / ".bridger" / "artifacts" / "repo-discovery.json"
+    repo_discovery = json.loads(repo_discovery_file.read_text())
+    assert repo_discovery["schema_version"] == 1
+    assert len(repo_discovery["artifact_checksums"]) == 5
+    assert "Bridger initialized" in result.stdout
+    assert "Deterministic substrate" in result.stdout
+    assert "Files" in result.stdout
+    assert "Context" in result.stdout
+    assert "Symbols" in result.stdout
+    assert "Graph" in result.stdout
+    assert "Bootstrap" in result.stdout
+    assert "Artifacts written to .bridger/artifacts/" in result.stdout
+    assert ".bridger/artifacts/file-index.json" not in result.stdout
+    assert ".bridger/artifacts/repo-context.json" not in result.stdout
+    assert ".bridger/artifacts/symbol-index.json" not in result.stdout
+    assert ".bridger/artifacts/repo-graph.json" not in result.stdout
+    assert ".bridger/artifacts/graph-summary.json" not in result.stdout
+    assert ".bridger/artifacts/repo-discovery.json" not in result.stdout
+    assert "0 parse errors" not in result.stdout
+    assert "0 unresolved imports" not in result.stdout
 
 
 def test_init_fresh_sets_project_mode(
@@ -53,6 +76,23 @@ def test_init_fresh_sets_project_mode(
 
     assert result.exit_code == 0
     assert config["project_mode"] == "fresh"
+
+
+def test_init_verbose_shows_artifact_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init", "--verbose"])
+
+    assert result.exit_code == 0
+    assert "Artifacts" in result.stdout
+    assert ".bridger/artifacts/file-index.json" in result.stdout
+    assert ".bridger/artifacts/repo-context.json" in result.stdout
+    assert ".bridger/artifacts/symbol-index.json" in result.stdout
+    assert ".bridger/artifacts/repo-graph.json" in result.stdout
+    assert ".bridger/artifacts/graph-summary.json" in result.stdout
+    assert ".bridger/artifacts/repo-discovery.json" in result.stdout
 
 
 def test_init_preserves_unreadable_existing_config(

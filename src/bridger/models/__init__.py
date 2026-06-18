@@ -5,6 +5,14 @@ from bridger.models.file_index import (
     SkippedFile,
     SkipReason,
 )
+from bridger.models.graph_summary import (
+    DeclaredEntrypointSummary,
+    FanInFile,
+    FanOutFile,
+    GraphSummaryArtifact,
+    GraphSummaryCounts,
+    UnresolvedImportSample,
+)
 from bridger.models.repo_context import (
     CiFile,
     ConfigFile,
@@ -13,6 +21,14 @@ from bridger.models.repo_context import (
     ManifestFile,
     ManifestParseError,
     RepoContextArtifact,
+)
+from bridger.models.repo_graph import (
+    GraphEdge,
+    GraphEdgeKind,
+    GraphNode,
+    GraphNodeKind,
+    RepoGraphArtifact,
+    RepoGraphUnresolvedImport,
 )
 from bridger.models.symbol_index import (
     SymbolIndexArtifact,
@@ -27,6 +43,12 @@ __all__ = [
     "IndexedFile",
     "SkipReason",
     "SkippedFile",
+    "DeclaredEntrypointSummary",
+    "FanInFile",
+    "FanOutFile",
+    "GraphSummaryArtifact",
+    "GraphSummaryCounts",
+    "UnresolvedImportSample",
     "CiFile",
     "ConfigFile",
     "DocsFile",
@@ -34,6 +56,12 @@ __all__ = [
     "ManifestFile",
     "ManifestParseError",
     "RepoContextArtifact",
+    "GraphEdge",
+    "GraphEdgeKind",
+    "GraphNode",
+    "GraphNodeKind",
+    "RepoGraphArtifact",
+    "RepoGraphUnresolvedImport",
     "SymbolIndexArtifact",
     "SymbolKind",
     "SymbolParseError",

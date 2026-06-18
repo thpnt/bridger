@@ -99,6 +99,8 @@ def parse_package_json(content: bytes) -> ParsedManifest:
             "peer_dependencies": "peerDependencies",
             "optional_dependencies": "optionalDependencies",
             "bin": "bin",
+            "main": "main",
+            "module": "module",
             "workspaces": "workspaces",
         },
     )
