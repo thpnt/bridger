@@ -3,7 +3,6 @@ import type { FileIndex } from "../models/file-index";
 import type { RepoContext } from "../models/repo-context";
 import type { GraphSummary } from "../repo-graph/models/graph-summary";
 import type { RepoGraph } from "../repo-graph/models/repo-graph";
-import { buildAgentRulesPlan } from "./build-agent-rules-plan";
 import { buildArchitecturePlan } from "./build-architecture-plan";
 import { buildBusinessLogicPlan } from "./build-business-logic-plan";
 import { buildConventionsPlan } from "./build-conventions-plan";
@@ -31,7 +30,6 @@ export function buildReadingPlans(input: {
     buildBusinessLogicPlan(context),
     buildConventionsPlan(context),
     buildTestingPlan(context),
-    buildAgentRulesPlan(context),
   ];
   const warnings: ReadingPlanWarning[] = [
     ...input.codebaseMap.warnings.map((message) => ({

@@ -903,7 +903,6 @@ architecture.md
 business-logic.md
 conventions.md
 testing.md
-agent-rules.md
 ```
 
 Suggested behavior:
@@ -962,19 +961,6 @@ Use:
 ```txt
 testing reading plan
 ```
-
-### `agent-rules.md`
-
-Use:
-
-```txt
-architecture plan
-conventions signals
-high-centrality files
-diagnostics
-```
-
-Keep this first version deterministic and simple. It can reuse architecture/testing plans with different filters.
 
 ### Verifiable outcome
 
@@ -1415,9 +1401,6 @@ business-logic.md
 
 conventions.md
   gets representative patterns by role
-
-agent-rules.md
-  gets architecture + conventions + high-centrality files + diagnostics
 ```
 
 This should make generated docs more stable, less random, less polluted by fixtures, and closer to how a senior engineer would actually understand the codebase.

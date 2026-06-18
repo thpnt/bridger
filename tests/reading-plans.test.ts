@@ -39,7 +39,6 @@ const PLAN_KINDS = [
   "business-logic",
   "conventions",
   "testing",
-  "agent-rules",
 ] as const;
 
 const TARGET_MEMORY_FILES = [
@@ -48,7 +47,6 @@ const TARGET_MEMORY_FILES = [
   ".bridger/memory/business-logic.md",
   ".bridger/memory/conventions.md",
   ".bridger/memory/testing.md",
-  ".bridger/memory/agent-rules.md",
 ];
 
 let tempDir = "";
@@ -185,20 +183,6 @@ describe("buildReadingPlans", () => {
       expect.arrayContaining([
         "src/core/orders/builder.ts",
         "src/core/orders/schema.ts",
-        "src/core/shared/format.ts",
-        "tests/orders.test.ts",
-      ]),
-    );
-  });
-
-  it("includes central, unresolved, convention, and testing evidence for agent rules", () => {
-    const agentRules = getPlan(buildFixturePlans(), "agent-rules");
-    const paths = getPlanPaths(agentRules);
-
-    expect(paths).toEqual(
-      expect.arrayContaining([
-        "src/core/orders/service.ts",
-        "src/core/orders/writer.ts",
         "src/core/shared/format.ts",
         "tests/orders.test.ts",
       ]),

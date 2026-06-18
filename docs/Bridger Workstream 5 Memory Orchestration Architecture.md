@@ -36,8 +36,6 @@ compact evidence notes
 per-agent reconciliation
   ↓
 .bridger/memory/*.md
-  ↓
-AgentRulesAgent synthesis
 ```
 
 The core principle is:
@@ -153,10 +151,9 @@ ArchitectureAgent
 BusinessLogicAgent
 ConventionsAgent
 TestingAgent
-AgentRulesAgent
 ```
 
-The first five agents can run in parallel. `AgentRulesAgent` runs after the specialist memory files are generated because it synthesizes operational coding-agent rules from the generated memory.
+The five agents can run in parallel because each owns a separate memory target.
 
 ---
 
@@ -195,14 +192,6 @@ flowchart TD
     F3 --> G3[business-logic.md]
     F4 --> G4[conventions.md]
     F5 --> G5[testing.md]
-
-    G1 --> H[AgentRulesAgent synthesis]
-    G2 --> H
-    G3 --> H
-    G4 --> H
-    G5 --> H
-
-    H --> I[agent-rules.md]
 ```
 
 ---
@@ -366,8 +355,6 @@ ConventionsAgent
 TestingAgent
 ```
 
-`AgentRulesAgent` runs after them.
-
 ### Level 2 — Batch-level parallelism
 
 Within each specialist agent, batch evidence extraction can run in parallel.
@@ -414,7 +401,6 @@ Example progress state:
 ```txt
 ArchitectureAgent: 5/7 batches extracted, reconciliation pending
 TestingAgent: 3/3 batches extracted, memory written
-AgentRulesAgent: waiting for upstream memory files
 ```
 
 The run should produce a memory run artifact.
@@ -561,7 +547,6 @@ Parallel map-reduce memory compilation
 + deterministic ReadingPlan-driven context
 + compact evidence notes per batch
 + reconciliation into canonical memory files
-+ AgentRulesAgent synthesis after specialist memory generation
 + dummy-first LLM client
 + future OpenAI/proxy-compatible LLM interface
 + agent and batch-level monitoring

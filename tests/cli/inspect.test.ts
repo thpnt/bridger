@@ -128,7 +128,6 @@ const artifacts = {
       conventionsPath: ".bridger/memory/conventions.md",
       businessLogicPath: ".bridger/memory/business-logic.md",
       testingPath: ".bridger/memory/testing.md",
-      agentRulesPath: ".bridger/memory/agent-rules.md",
       ticketTemplatePath: ".bridger/templates/ticket-template.md",
     },
   },
@@ -457,23 +456,6 @@ function createReadingPlansArtifact(): ReadingPlans {
         ]),
         makeReadingBatch(3, "Fixtures and test data", [
           "tests/fixtures/sample.json",
-        ]),
-      ],
-      [],
-      false,
-    ),
-    makeReadingPlan(
-      "agent-rules",
-      ".bridger/memory/agent-rules.md",
-      "Agent rules reading plan",
-      "Prepare evidence for future operational coding-agent rules without synthesizing those rules now.",
-      [
-        makeReadingBatch(1, "Project orientation for coding agents", [
-          "package.json",
-          "README.md",
-        ]),
-        makeReadingBatch(2, "Testing expectations", [
-          "tests/cli/inspect.test.ts",
         ]),
       ],
       [],
@@ -852,18 +834,7 @@ describe("runInspectCommand", () => {
     mockedBuildRepoGraph.mockResolvedValue(graphArtifacts.graph as never);
     mockedBuildGraphSummary.mockReturnValue(graphArtifacts.summary as never);
 
-    const previousOpenAIKey = process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-
-    try {
-      await runInspectCommand({ repo: ".", graph: true });
-    } finally {
-      if (previousOpenAIKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previousOpenAIKey;
-      }
-    }
+    await runInspectCommand({ repo: ".", graph: true });
 
     expect(mockedResolveRepoRoot).toHaveBeenCalledWith(".");
     expect(mockedBuildRepoContextArtifacts).toHaveBeenCalledWith("/repo");
@@ -919,9 +890,6 @@ describe("runInspectCommand", () => {
     );
     expect(output).toContain(
       "- testing: 3 batches, 5 file references, 5 unique files, 0 warnings, truncated: no",
-    );
-    expect(output).toContain(
-      "- agent-rules: 2 batches, 3 file references, 3 unique files, 0 warnings, truncated: no",
     );
     expect(output).toContain("Reading Plan Preview");
     expect(output).toContain("architecture\n- Entrypoints and command surfaces");

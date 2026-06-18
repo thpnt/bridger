@@ -33,7 +33,6 @@ export const BridgerConfigSchema = z.object({
       "business-logic.md",
       "conventions.md",
       "testing.md",
-      "agent-rules.md",
     ]),
   }),
   artifacts: z.object({

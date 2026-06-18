@@ -37,7 +37,6 @@ export const RepoContextGeneratedDocsSchema = z.object({
   conventionsPath: RepoRelativePathSchema,
   businessLogicPath: RepoRelativePathSchema,
   testingPath: RepoRelativePathSchema,
-  agentRulesPath: RepoRelativePathSchema,
   ticketTemplatePath: RepoRelativePathSchema,
 });
 

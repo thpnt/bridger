@@ -272,7 +272,6 @@ ArchitectureAgent
 BusinessLogicAgent
 ConventionsAgent
 TestingAgent
-AgentRulesAgent
 ```
 
 Possible v1 agents:
@@ -341,7 +340,6 @@ Recommended v0 structure:
     business-logic.md
     conventions.md
     testing.md
-    agent-rules.md
 
   artifacts/
     repo-graph.json
@@ -475,10 +473,6 @@ buildMemoryRunPlan()
 runMemoryAgents()
   ↓
 writeMemoryFiles()
-  ↓
-run AgentRulesAgent
-  ↓
-exportAgentInstructions()
 ```
 
 Recommended agent dependency flow:
@@ -492,17 +486,9 @@ parallel memory agents:
   - BusinessLogicAgent
   - ConventionsAgent
   - TestingAgent
-  ↓
-AgentRulesAgent
-  ↓
-ExportAgent
 ```
 
-The first group can run mostly in parallel because each agent owns a separate target file.
-
-`AgentRulesAgent` should run after the other memory agents because it can synthesize operational rules from their outputs.
-
-The export step should run after memory generation.
+The agents can run mostly in parallel because each agent owns a separate target file.
 
 ---
 
@@ -732,7 +718,6 @@ src/core/memory-agents/
     business-logic-agent.ts
     conventions-agent.ts
     testing-agent.ts
-    agent-rules-agent.ts
 ```
 
 Memory orchestrator:

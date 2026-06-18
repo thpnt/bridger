@@ -157,7 +157,6 @@ Recommended structure:
     business-logic.md
     conventions.md
     testing.md
-    agent-rules.md
 
   skills/
     selected-skills.json
@@ -677,18 +676,6 @@ Purpose:
 
 Explain the testing setup, what should be tested, where tests live, what test patterns exist, and how coding agents should verify changes.
 
-### AgentRulesAgent
-
-Target file:
-
-```txt
-.bridger/memory/agent-rules.md
-```
-
-Purpose:
-
-Synthesize operational rules for coding agents based on the other memory files, selected skills, and deterministic artifacts.
-
 ## Agent input requirements
 
 Each agent should receive:
@@ -726,7 +713,6 @@ This block is done when:
 - memory generation works in constrained form for fresh repos;
 - outputs are validated before writing;
 - `.bridger/memory` is created consistently;
-- AgentRulesAgent runs after the other memory agents;
 - generated memory is useful enough to feed AGENTS.md and `bridger prompt`;
 - failure modes are clear when LLM configuration is missing or invalid.
 
