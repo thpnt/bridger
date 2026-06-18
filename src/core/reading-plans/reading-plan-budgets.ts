@@ -14,5 +14,4 @@ export const READING_PLAN_BUDGETS: Record<
   "business-logic": { maxFiles: 50, maxBytes: 300_000 },
   conventions: { maxFiles: 50, maxBytes: 300_000 },
   testing: { maxFiles: 50, maxBytes: 300_000 },
-  "agent-rules": { maxFiles: 50, maxBytes: 300_000 },
 };

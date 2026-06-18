@@ -17,7 +17,7 @@ describe("cli bootstrap", () => {
       initCommand?.options.some(
         (option) => option.long === "--write-agents-md",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       initCommand?.options.some((option) => option.long === "--repo"),
     ).toBe(true);

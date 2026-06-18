@@ -32,9 +32,9 @@ function buildAdjacencyMap(graph) {
     if (node.kind !== "file") {
       continue;
     }
-    const path23 = normalizeRepoPath(node.path);
-    dependenciesByFile.set(path23, /* @__PURE__ */ new Set());
-    consumersByFile.set(path23, /* @__PURE__ */ new Set());
+    const path20 = normalizeRepoPath(node.path);
+    dependenciesByFile.set(path20, /* @__PURE__ */ new Set());
+    consumersByFile.set(path20, /* @__PURE__ */ new Set());
   }
   for (const edge of graph.edges) {
     if (edge.type !== "imports") {
@@ -89,10 +89,10 @@ function traverseAdjacency(input) {
 }
 function sortMapValues(input) {
   const output = /* @__PURE__ */ new Map();
-  for (const [path23, values] of [...input.entries()].sort(
+  for (const [path20, values] of [...input.entries()].sort(
     ([left], [right]) => left.localeCompare(right)
   )) {
-    output.set(path23, [...values].sort(
+    output.set(path20, [...values].sort(
       (left, right) => left.localeCompare(right)
     ));
   }
@@ -104,17 +104,17 @@ function getEntrypoints(graph) {
   return graph.nodes.filter((node) => node.kind === "file").filter(isEntrypointNode).map((node) => normalizeRepoPath(node.path)).sort((left, right) => left.localeCompare(right));
 }
 function isEntrypointNode(node) {
-  const path23 = normalizeRepoPath(node.path).toLowerCase();
-  return node.tags.includes("entrypoint-candidate") || isNextEntrypoint(path23) || isNodeCliEntrypoint(path23) || isPythonEntrypoint(path23);
+  const path20 = normalizeRepoPath(node.path).toLowerCase();
+  return node.tags.includes("entrypoint-candidate") || isNextEntrypoint(path20) || isNodeCliEntrypoint(path20) || isPythonEntrypoint(path20);
 }
-function isNextEntrypoint(path23) {
-  return path23 === "app/page.tsx" || path23 === "src/app/page.tsx" || /^app\/.+\/page\.tsx$/.test(path23) || /^src\/app\/.+\/page\.tsx$/.test(path23) || /^app\/.+\/route\.ts$/.test(path23) || /^src\/app\/.+\/route\.ts$/.test(path23) || /^pages\/.+\.tsx$/.test(path23) || /^src\/pages\/.+\.tsx$/.test(path23);
+function isNextEntrypoint(path20) {
+  return path20 === "app/page.tsx" || path20 === "src/app/page.tsx" || /^app\/.+\/page\.tsx$/.test(path20) || /^src\/app\/.+\/page\.tsx$/.test(path20) || /^app\/.+\/route\.ts$/.test(path20) || /^src\/app\/.+\/route\.ts$/.test(path20) || /^pages\/.+\.tsx$/.test(path20) || /^src\/pages\/.+\.tsx$/.test(path20);
 }
-function isNodeCliEntrypoint(path23) {
-  return path23 === "index.ts" || path23 === "index.js" || path23 === "main.ts" || path23 === "main.js" || path23 === "src/index.ts" || path23 === "src/index.js" || path23 === "src/main.ts" || path23 === "src/main.js" || path23 === "src/cli/index.ts" || path23 === "src/cli/index.js" || path23 === "src/cli/cli.ts" || path23 === "src/cli/cli.js" || path23.startsWith("bin/");
+function isNodeCliEntrypoint(path20) {
+  return path20 === "index.ts" || path20 === "index.js" || path20 === "main.ts" || path20 === "main.js" || path20 === "src/index.ts" || path20 === "src/index.js" || path20 === "src/main.ts" || path20 === "src/main.js" || path20 === "src/cli/index.ts" || path20 === "src/cli/index.js" || path20 === "src/cli/cli.ts" || path20 === "src/cli/cli.js" || path20.startsWith("bin/");
 }
-function isPythonEntrypoint(path23) {
-  return path23 === "main.py" || path23 === "app.py" || path23 === "src/main.py" || path23 === "src/app.py";
+function isPythonEntrypoint(path20) {
+  return path20 === "main.py" || path20 === "app.py" || path20 === "src/main.py" || path20 === "src/app.py";
 }
 
 // src/core/repo-graph/traversal/get-root-files.ts
@@ -126,16 +126,16 @@ function getRootFiles(graph) {
     if (node.kind !== "file") {
       continue;
     }
-    const path23 = normalizeRepoPath(node.path);
-    const lowerPath = path23.toLowerCase();
-    if (isRootFile(path23)) {
-      rootFiles.add(path23);
+    const path20 = normalizeRepoPath(node.path);
+    const lowerPath = path20.toLowerCase();
+    if (isRootFile(path20)) {
+      rootFiles.add(path20);
     }
     if (isConfigFileNode(node, lowerPath)) {
-      configFiles.add(path23);
+      configFiles.add(path20);
     }
     if (isDocsFileNode(node, lowerPath)) {
-      docsFiles.add(path23);
+      docsFiles.add(path20);
     }
   }
   return {
@@ -144,8 +144,8 @@ function getRootFiles(graph) {
     docsFiles: sortPaths(docsFiles)
   };
 }
-function isRootFile(path23) {
-  return !path23.includes("/");
+function isRootFile(path20) {
+  return !path20.includes("/");
 }
 function isConfigFileNode(node, lowerPath) {
   const fileName = lowerPath.split("/").at(-1) ?? lowerPath;
@@ -167,18 +167,18 @@ function getGraphFileRanks(graph) {
   const configFiles = new Set(rootFiles.configFiles);
   const docsFiles = new Set(rootFiles.docsFiles);
   return graph.nodes.filter((node) => node.kind === "file").map((node) => {
-    const path23 = normalizeRepoPath(node.path);
-    const fanOut = adjacencyMap.dependenciesByFile.get(path23)?.length ?? 0;
-    const fanIn = adjacencyMap.consumersByFile.get(path23)?.length ?? 0;
+    const path20 = normalizeRepoPath(node.path);
+    const fanOut = adjacencyMap.dependenciesByFile.get(path20)?.length ?? 0;
+    const fanIn = adjacencyMap.consumersByFile.get(path20)?.length ?? 0;
     return {
-      path: path23,
+      path: path20,
       fanIn,
       fanOut,
       isLeaf: fanOut === 0,
       isIsolated: fanIn === 0 && fanOut === 0,
-      isEntrypoint: entrypoints.has(path23),
-      isConfig: configFiles.has(path23),
-      isDocs: docsFiles.has(path23)
+      isEntrypoint: entrypoints.has(path20),
+      isConfig: configFiles.has(path20),
+      isDocs: docsFiles.has(path20)
     };
   }).sort((left, right) => left.path.localeCompare(right.path));
 }
@@ -2113,7 +2113,6 @@ var RepoContextGeneratedDocsSchema = z5.object({
   conventionsPath: RepoRelativePathSchema,
   businessLogicPath: RepoRelativePathSchema,
   testingPath: RepoRelativePathSchema,
-  agentRulesPath: RepoRelativePathSchema,
   ticketTemplatePath: RepoRelativePathSchema
 });
 var RepoContextSchema = z5.object({
@@ -2782,18 +2781,13 @@ async function readImportantFiles(input) {
 
 // src/core/project/bridger-paths.ts
 import path11 from "path";
-
-// src/core/doc-generator/doc-filenames.ts
-var GENERATED_DOC_FILENAMES = {
+var MEMORY_FILENAMES = {
   repoAnalysis: "repo-analysis.md",
   architecture: "architecture.md",
   businessLogic: "business-logic.md",
   conventions: "conventions.md",
-  testing: "testing.md",
-  agentRules: "agent-rules.md"
+  testing: "testing.md"
 };
-
-// src/core/project/bridger-paths.ts
 function getBridgerDir(repoRoot) {
   return path11.join(repoRoot, ".bridger");
 }
@@ -2834,11 +2828,11 @@ function getMemoryFilePath(repoRoot, file) {
   return path11.join(getMemoryDir(repoRoot), file);
 }
 function getGeneratedKnowledgeDocPath(repoRoot, key) {
-  return getMemoryFilePath(repoRoot, GENERATED_DOC_FILENAMES[key]);
+  return getMemoryFilePath(repoRoot, MEMORY_FILENAMES[key]);
 }
 function getGeneratedKnowledgeDocRelativePath(key) {
   return RepoRelativePathSchema.parse(
-    [".bridger", "memory", GENERATED_DOC_FILENAMES[key]].join("/")
+    [".bridger", "memory", MEMORY_FILENAMES[key]].join("/")
   );
 }
 function getSkillsDir(repoRoot) {
@@ -2876,8 +2870,7 @@ function buildGeneratedDocPaths() {
     architecturePath: getGeneratedKnowledgeDocRelativePath("architecture"),
     businessLogicPath: getGeneratedKnowledgeDocRelativePath("businessLogic"),
     conventionsPath: getGeneratedKnowledgeDocRelativePath("conventions"),
-    testingPath: getGeneratedKnowledgeDocRelativePath("testing"),
-    agentRulesPath: getGeneratedKnowledgeDocRelativePath("agentRules")
+    testingPath: getGeneratedKnowledgeDocRelativePath("testing")
   };
 }
 
@@ -2956,8 +2949,7 @@ var BridgerConfigSchema = z8.object({
       "architecture.md",
       "business-logic.md",
       "conventions.md",
-      "testing.md",
-      "agent-rules.md"
+      "testing.md"
     ])
   }),
   artifacts: z8.object({
@@ -3175,33 +3167,33 @@ function getArchitectureOrder(graph) {
         ...rootFiles.docsFiles,
         ...rootFiles.configFiles,
         ...rootFiles.rootFiles
-      ].filter((path23) => !isTestFile(path23, nodeByPath.get(path23)))
+      ].filter((path20) => !isTestFile(path20, nodeByPath.get(path20)))
     ),
     ...sortPaths2(
-      entrypoints.filter((path23) => !isTestFile(path23, nodeByPath.get(path23)))
+      entrypoints.filter((path20) => !isTestFile(path20, nodeByPath.get(path20)))
     ),
     ...sortPaths2(
       entrypointDependencies.filter(
-        (path23) => !isTestFile(path23, nodeByPath.get(path23))
+        (path20) => !isTestFile(path20, nodeByPath.get(path20))
       )
     ),
     ...sortPaths2(
       filePaths.filter(
-        (path23) => isFeatureOrDomainFile(path23) && !isTestFile(path23, nodeByPath.get(path23))
+        (path20) => isFeatureOrDomainFile(path20) && !isTestFile(path20, nodeByPath.get(path20))
       )
     ),
     ...sortPaths2(
       filePaths.filter(
-        (path23) => isComponentServiceOrLibFile(path23, nodeByPath.get(path23)) && !isTestFile(path23, nodeByPath.get(path23))
+        (path20) => isComponentServiceOrLibFile(path20, nodeByPath.get(path20)) && !isTestFile(path20, nodeByPath.get(path20))
       )
     ),
     ...sortPaths2(
       filePaths.filter(
-        (path23) => isSharedUtilityFile(path23, nodeByPath.get(path23)) && !isTestFile(path23, nodeByPath.get(path23))
+        (path20) => isSharedUtilityFile(path20, nodeByPath.get(path20)) && !isTestFile(path20, nodeByPath.get(path20))
       )
     ),
     ...sortPaths2(
-      filePaths.filter((path23) => isTestFile(path23, nodeByPath.get(path23)))
+      filePaths.filter((path20) => isTestFile(path20, nodeByPath.get(path20)))
     ),
     ...filePaths
   ]);
@@ -3234,35 +3226,35 @@ function sortPaths2(paths) {
 function uniqueStableOrder(paths) {
   const seen = /* @__PURE__ */ new Set();
   const ordered = [];
-  for (const path23 of paths) {
-    if (seen.has(path23)) {
+  for (const path20 of paths) {
+    if (seen.has(path20)) {
       continue;
     }
-    seen.add(path23);
-    ordered.push(path23);
+    seen.add(path20);
+    ordered.push(path20);
   }
   return ordered;
 }
 function hasTag(node, tag) {
   return node?.tags.includes(tag) ?? false;
 }
-function isFeatureOrDomainFile(path23) {
-  const lowerPath = path23.toLowerCase();
+function isFeatureOrDomainFile(path20) {
+  const lowerPath = path20.toLowerCase();
   return lowerPath.startsWith("features/") || lowerPath.startsWith("feature/") || lowerPath.startsWith("domain/") || lowerPath.startsWith("domains/") || lowerPath.startsWith("modules/") || lowerPath.includes("/features/") || lowerPath.includes("/feature/") || lowerPath.includes("/domain/") || lowerPath.includes("/domains/") || lowerPath.includes("/modules/") || lowerPath.includes("/use-cases/") || lowerPath.includes("/usecases/") || lowerPath.includes("/entities/") || lowerPath.includes("/models/");
 }
-function isComponentServiceOrLibFile(path23, node) {
-  if (isSharedUtilityFile(path23, node)) {
+function isComponentServiceOrLibFile(path20, node) {
+  if (isSharedUtilityFile(path20, node)) {
     return false;
   }
-  const lowerPath = path23.toLowerCase();
+  const lowerPath = path20.toLowerCase();
   return hasTag(node, "component") || hasTag(node, "service") || lowerPath.startsWith("components/") || lowerPath.startsWith("services/") || lowerPath.startsWith("lib/") || lowerPath.includes("/components/") || lowerPath.includes("/services/") || lowerPath.includes("/service/") || lowerPath.includes("/lib/");
 }
-function isSharedUtilityFile(path23, node) {
-  const lowerPath = path23.toLowerCase();
+function isSharedUtilityFile(path20, node) {
+  const lowerPath = path20.toLowerCase();
   return hasTag(node, "utility") || lowerPath.startsWith("utils/") || lowerPath.startsWith("helpers/") || lowerPath.includes("/utils/") || lowerPath.includes("/util/") || lowerPath.includes("/helpers/") || lowerPath.endsWith("utils.ts") || lowerPath.endsWith("utils.js") || lowerPath.endsWith("util.ts") || lowerPath.endsWith("util.js") || lowerPath.endsWith("helpers.ts") || lowerPath.endsWith("helpers.js");
 }
-function isTestFile(path23, node) {
-  const lowerPath = path23.toLowerCase();
+function isTestFile(path20, node) {
+  const lowerPath = path20.toLowerCase();
   const fileName = lowerPath.split("/").at(-1) ?? lowerPath;
   return hasTag(node, "test") || lowerPath.startsWith("tests/") || lowerPath.startsWith("test/") || lowerPath.includes("/__tests__/") || lowerPath.includes(".test.") || lowerPath.includes(".spec.") || lowerPath.endsWith("_test.py") || fileName.startsWith("test_");
 }
@@ -3275,40 +3267,40 @@ function getDependencyOrder(graph) {
   const rankByPath = new Map(ranks.map((rank) => [rank.path, rank]));
   return uniqueStableOrder2([
     ...sortPaths3(
-      filePaths.filter((path23) => {
-        const node = nodeByPath.get(path23);
-        const rank = rankByPath.get(path23);
-        return Boolean(rank?.isLeaf) && !isTestFile2(path23, node);
+      filePaths.filter((path20) => {
+        const node = nodeByPath.get(path20);
+        const rank = rankByPath.get(path20);
+        return Boolean(rank?.isLeaf) && !isTestFile2(path20, node);
       })
     ),
     ...sortPaths3(
-      filePaths.filter((path23) => {
-        const node = nodeByPath.get(path23);
-        const rank = rankByPath.get(path23);
-        return isSharedUtilityFile2(path23, node) && (rank?.fanOut ?? 0) <= 1 && !isTestFile2(path23, node);
+      filePaths.filter((path20) => {
+        const node = nodeByPath.get(path20);
+        const rank = rankByPath.get(path20);
+        return isSharedUtilityFile2(path20, node) && (rank?.fanOut ?? 0) <= 1 && !isTestFile2(path20, node);
       })
     ),
     ...sortPaths3(
-      filePaths.filter((path23) => {
-        const node = nodeByPath.get(path23);
-        return isServiceOrHelperFile(path23, node) && !isTestFile2(path23, node);
+      filePaths.filter((path20) => {
+        const node = nodeByPath.get(path20);
+        return isServiceOrHelperFile(path20, node) && !isTestFile2(path20, node);
       })
     ),
     ...sortPaths3(
-      filePaths.filter((path23) => {
-        const node = nodeByPath.get(path23);
-        return isFeatureOrComponentFile(path23, node) && !isTestFile2(path23, node);
+      filePaths.filter((path20) => {
+        const node = nodeByPath.get(path20);
+        return isFeatureOrComponentFile(path20, node) && !isTestFile2(path20, node);
       })
     ),
     ...sortPaths3(
-      filePaths.filter((path23) => {
-        const node = nodeByPath.get(path23);
-        const rank = rankByPath.get(path23);
-        return Boolean(rank?.isEntrypoint) && !isTestFile2(path23, node);
+      filePaths.filter((path20) => {
+        const node = nodeByPath.get(path20);
+        const rank = rankByPath.get(path20);
+        return Boolean(rank?.isEntrypoint) && !isTestFile2(path20, node);
       })
     ),
     ...sortPaths3(
-      filePaths.filter((path23) => isTestFile2(path23, nodeByPath.get(path23)))
+      filePaths.filter((path20) => isTestFile2(path20, nodeByPath.get(path20)))
     ),
     ...filePaths
   ]);
@@ -3332,37 +3324,37 @@ function sortPaths3(paths) {
 function uniqueStableOrder2(paths) {
   const seen = /* @__PURE__ */ new Set();
   const ordered = [];
-  for (const path23 of paths) {
-    if (seen.has(path23)) {
+  for (const path20 of paths) {
+    if (seen.has(path20)) {
       continue;
     }
-    seen.add(path23);
-    ordered.push(path23);
+    seen.add(path20);
+    ordered.push(path20);
   }
   return ordered;
 }
 function hasTag2(node, tag) {
   return node?.tags.includes(tag) ?? false;
 }
-function isSharedUtilityFile2(path23, node) {
-  const lowerPath = path23.toLowerCase();
+function isSharedUtilityFile2(path20, node) {
+  const lowerPath = path20.toLowerCase();
   return hasTag2(node, "utility") || lowerPath.startsWith("utils/") || lowerPath.startsWith("helpers/") || lowerPath.includes("/utils/") || lowerPath.includes("/util/") || lowerPath.includes("/helpers/") || lowerPath.endsWith("utils.ts") || lowerPath.endsWith("utils.js") || lowerPath.endsWith("util.ts") || lowerPath.endsWith("util.js") || lowerPath.endsWith("helpers.ts") || lowerPath.endsWith("helpers.js");
 }
-function isServiceOrHelperFile(path23, node) {
-  const lowerPath = path23.toLowerCase();
+function isServiceOrHelperFile(path20, node) {
+  const lowerPath = path20.toLowerCase();
   const fileName = lowerPath.split("/").at(-1) ?? lowerPath;
   return hasTag2(node, "service") || lowerPath.startsWith("services/") || lowerPath.startsWith("service/") || lowerPath.startsWith("helpers/") || lowerPath.includes("/services/") || lowerPath.includes("/service/") || lowerPath.includes("/helpers/") || fileName.endsWith("service.ts") || fileName.endsWith("service.js") || fileName.endsWith("service.py") || fileName.endsWith("helper.ts") || fileName.endsWith("helper.js") || fileName.endsWith("helpers.ts") || fileName.endsWith("helpers.js");
 }
-function isFeatureOrDomainFile2(path23) {
-  const lowerPath = path23.toLowerCase();
+function isFeatureOrDomainFile2(path20) {
+  const lowerPath = path20.toLowerCase();
   return lowerPath.startsWith("features/") || lowerPath.startsWith("feature/") || lowerPath.startsWith("domain/") || lowerPath.startsWith("domains/") || lowerPath.startsWith("modules/") || lowerPath.includes("/features/") || lowerPath.includes("/feature/") || lowerPath.includes("/domain/") || lowerPath.includes("/domains/") || lowerPath.includes("/modules/") || lowerPath.includes("/use-cases/") || lowerPath.includes("/usecases/") || lowerPath.includes("/entities/") || lowerPath.includes("/models/");
 }
-function isFeatureOrComponentFile(path23, node) {
-  const lowerPath = path23.toLowerCase();
-  return isFeatureOrDomainFile2(path23) || hasTag2(node, "component") || lowerPath.startsWith("components/") || lowerPath.includes("/components/");
+function isFeatureOrComponentFile(path20, node) {
+  const lowerPath = path20.toLowerCase();
+  return isFeatureOrDomainFile2(path20) || hasTag2(node, "component") || lowerPath.startsWith("components/") || lowerPath.includes("/components/");
 }
-function isTestFile2(path23, node) {
-  const lowerPath = path23.toLowerCase();
+function isTestFile2(path20, node) {
+  const lowerPath = path20.toLowerCase();
   const fileName = lowerPath.split("/").at(-1) ?? lowerPath;
   return hasTag2(node, "test") || lowerPath.startsWith("tests/") || lowerPath.startsWith("test/") || lowerPath.includes("/__tests__/") || lowerPath.includes(".test.") || lowerPath.includes(".spec.") || lowerPath.endsWith("_test.py") || fileName.startsWith("test_");
 }
@@ -3459,8 +3451,8 @@ var SOURCE_EXTENSIONS = /* @__PURE__ */ new Set([
   ".cjs",
   ".py"
 ]);
-function getPathTags(path23) {
-  const normalizedPath = normalizeRepoPath(path23);
+function getPathTags(path20) {
+  const normalizedPath = normalizeRepoPath(path20);
   const lowerPath = normalizedPath.toLowerCase();
   const segments = lowerPath.split("/");
   const fileName = segments.at(-1) ?? lowerPath;
@@ -4132,6 +4124,823 @@ function isSupportedImportLanguage(language) {
   return language === "typescript" || language === "javascript" || language === "python";
 }
 
+// src/core/reading-plans/reading-plan-budgets.ts
+var READING_PLAN_BATCH_BUDGET = {
+  maxFiles: 10,
+  maxBytes: 6e4
+};
+var READING_PLAN_BUDGETS = {
+  "repo-analysis": { maxFiles: 40, maxBytes: 24e4 },
+  architecture: { maxFiles: 60, maxBytes: 36e4 },
+  "business-logic": { maxFiles: 50, maxBytes: 3e5 },
+  conventions: { maxFiles: 50, maxBytes: 3e5 },
+  testing: { maxFiles: 50, maxBytes: 3e5 }
+};
+
+// src/core/reading-plans/build-plan-common.ts
+function createBuildContext(input) {
+  return {
+    ...input,
+    fileIndexByPath: new Map(input.fileIndex.files.map((file) => [file.path, file])),
+    codebaseFileByPath: new Map(input.codebaseMap.files.map((file) => [file.path, file]))
+  };
+}
+function getFilesByRole(context, roles) {
+  return context.codebaseMap.files.filter(
+    (file) => roles.some((role) => file.roles.includes(role))
+  );
+}
+function getFilesBySignalKind(context, signalKinds) {
+  return context.codebaseMap.files.filter(
+    (file) => file.signals.some((signal) => signalKinds.includes(signal.kind))
+  );
+}
+function getEntrypointFiles(context) {
+  const paths = new Set(context.codebaseMap.entrypoints.map((entrypoint) => entrypoint.path));
+  for (const file of context.codebaseMap.files) {
+    if (file.isEntrypoint) paths.add(file.path);
+  }
+  if (paths.size === 0) {
+    for (const filePath of context.graphSummary.entrypoints) paths.add(filePath);
+  }
+  return filesForPaths(context, paths);
+}
+function getCentralFiles2(context) {
+  const paths = new Set(
+    context.codebaseMap.files.filter((file) => file.isCentral).map((file) => file.path)
+  );
+  for (const cluster of context.codebaseMap.clusters) {
+    for (const file of cluster.centralFiles) paths.add(file.path);
+  }
+  return filesForPaths(context, paths);
+}
+function getTestFiles(context) {
+  return context.codebaseMap.files.filter((file) => file.isTest);
+}
+function getFixtureFiles(context) {
+  return context.codebaseMap.files.filter((file) => file.isFixture);
+}
+function getConfigFiles(context) {
+  return getFilesByRole(context, ["config", "project-config"]);
+}
+function getFilesWithWarningsOrUnresolvedImports(context) {
+  const paths = new Set(context.codebaseMap.unresolvedImports.byFile.map((item) => item.path));
+  for (const warning of context.fileIndex.warnings ?? []) {
+    if (warning.filePath) paths.add(warning.filePath);
+  }
+  return filesForPaths(context, paths);
+}
+function rankCandidates(context, candidates, ranking = {}) {
+  const unique = new Map(candidates.map((file) => [file.path, file]));
+  return [...unique.values()].sort((left, right) => {
+    const scoreDifference = scoreCandidate(context, right, ranking) - scoreCandidate(context, left, ranking);
+    return scoreDifference || left.path.localeCompare(right.path);
+  });
+}
+function dedupePlanFilesWithinBatch(files) {
+  const seen = /* @__PURE__ */ new Set();
+  return files.filter((file) => {
+    if (seen.has(file.path)) return false;
+    seen.add(file.path);
+    return true;
+  });
+}
+function applyBatchBudget(files) {
+  const selected = [];
+  let estimatedBytes = 0;
+  for (const file of files) {
+    if (selected.length >= READING_PLAN_BATCH_BUDGET.maxFiles) break;
+    if (estimatedBytes + file.estimatedBytes > READING_PLAN_BATCH_BUDGET.maxBytes) break;
+    selected.push(file);
+    estimatedBytes += file.estimatedBytes;
+  }
+  return { files: selected, estimatedBytes, truncated: selected.length < files.length };
+}
+function estimateBytesForPath(context, filePath) {
+  return context.fileIndexByPath.get(filePath)?.sizeBytes ?? context.repoGraph.nodes.find((node) => node.kind === "file" && node.path === filePath)?.sizeBytes ?? 0;
+}
+function buildBatch(context, planKind, order, definition) {
+  const ranked = rankCandidates(context, definition.candidates, definition.ranking);
+  const planFiles = dedupePlanFilesWithinBatch(
+    ranked.map((file) => toPlanFile(context, file, definition))
+  );
+  const budgeted = applyBatchBudget(planFiles);
+  const warnings = [];
+  if (planFiles.length === 0) {
+    warnings.push({
+      code: "missing-batch-category",
+      message: `No files matched the ${definition.title.toLowerCase()} selection rule.`,
+      planKind,
+      batchId: definition.id,
+      severity: "info"
+    });
+  }
+  if (budgeted.truncated) {
+    warnings.push({
+      code: "batch-truncated",
+      message: `Batch ${definition.id} was truncated from ${planFiles.length} to ${budgeted.files.length} files.`,
+      planKind,
+      batchId: definition.id,
+      severity: "warning"
+    });
+  }
+  return {
+    batch: {
+      id: definition.id,
+      title: definition.title,
+      purpose: definition.purpose,
+      order,
+      selectionRule: definition.selectionRule,
+      files: budgeted.files,
+      budget: {
+        maxFiles: READING_PLAN_BATCH_BUDGET.maxFiles,
+        estimatedBytes: budgeted.estimatedBytes,
+        truncated: budgeted.truncated
+      }
+    },
+    warnings
+  };
+}
+function buildPlan(context, definition) {
+  const built = definition.batches.map(
+    (batch, index) => buildBatch(context, definition.kind, index + 1, batch)
+  );
+  const warnings = built.flatMap((item) => item.warnings);
+  const limit = READING_PLAN_BUDGETS[definition.kind];
+  let fileCount = 0;
+  let estimatedBytes = 0;
+  let planTruncated = false;
+  const batches = built.map(({ batch }) => {
+    const files = [];
+    for (const file of batch.files) {
+      if (fileCount >= limit.maxFiles || estimatedBytes + file.estimatedBytes > limit.maxBytes) {
+        planTruncated = true;
+        continue;
+      }
+      files.push(file);
+      fileCount += 1;
+      estimatedBytes += file.estimatedBytes;
+    }
+    const batchTruncated = batch.budget.truncated || files.length < batch.files.length;
+    if (files.length < batch.files.length && !batch.budget.truncated) {
+      warnings.push({
+        code: "plan-batch-truncated",
+        message: `Batch ${batch.id} lost ${batch.files.length - files.length} file references to the plan budget.`,
+        planKind: definition.kind,
+        batchId: batch.id,
+        severity: "warning"
+      });
+    }
+    return {
+      ...batch,
+      files,
+      budget: {
+        ...batch.budget,
+        estimatedBytes: files.reduce((total, file) => total + file.estimatedBytes, 0),
+        truncated: batchTruncated
+      }
+    };
+  });
+  if (planTruncated) {
+    warnings.push({
+      code: "plan-truncated",
+      message: `Plan ${definition.kind} was truncated to ${fileCount} file references.`,
+      planKind: definition.kind,
+      severity: "warning"
+    });
+  }
+  return {
+    kind: definition.kind,
+    targetMemoryFile: definition.targetMemoryFile,
+    title: definition.title,
+    purpose: definition.purpose,
+    inputStrategy: {
+      agentFocus: definition.agentFocus,
+      shouldAnswer: definition.shouldAnswer,
+      shouldAvoid: definition.shouldAvoid
+    },
+    batches,
+    budget: {
+      maxFiles: limit.maxFiles,
+      estimatedBytes,
+      truncated: planTruncated
+    },
+    warnings: sortWarnings(warnings)
+  };
+}
+function combineFiles(...groups) {
+  return groups.flat();
+}
+function codebaseEvidence(detail) {
+  return [{ source: "codebase-map", detail }];
+}
+function filesForPaths(context, paths) {
+  return [...paths].sort((left, right) => left.localeCompare(right)).flatMap((filePath) => {
+    const file = context.codebaseFileByPath.get(filePath);
+    return file ? [file] : [];
+  });
+}
+function scoreCandidate(context, file, ranking) {
+  let score = 0;
+  score += (ranking.roles ?? []).filter((role) => file.roles.includes(role)).length * 1e3;
+  score += file.signals.filter((signal) => (ranking.signalKinds ?? []).includes(signal.kind)).length * 700;
+  if (ranking.preferredPaths?.has(file.path)) score += 1500;
+  if (ranking.preferEntrypoints && file.isEntrypoint) score += 1200;
+  if (ranking.preferCentral && file.isCentral) score += 1e3;
+  score += file.fanIn * 20 + file.fanOut * 10;
+  score -= Math.floor(estimateBytesForPath(context, file.path) / 1e4);
+  return score;
+}
+function toPlanFile(context, file, definition) {
+  const indexFile = context.fileIndexByPath.get(file.path);
+  const roleInBatch = typeof definition.roleInBatch === "function" ? definition.roleInBatch(file) : definition.roleInBatch;
+  const reason = typeof definition.reason === "function" ? definition.reason(file) : definition.reason;
+  const evidence = definition.evidence?.(file) ?? codebaseEvidence(
+    `Selected from roles [${file.roles.join(", ") || "none"}], signals [${file.signals.map((signal) => signal.kind).join(", ") || "none"}], central=${file.isCentral}, entrypoint=${file.isEntrypoint}.`
+  );
+  return {
+    path: file.path,
+    roleInBatch,
+    reason,
+    evidence: [...evidence].sort(
+      (left, right) => left.source.localeCompare(right.source) || left.detail.localeCompare(right.detail)
+    ),
+    confidence: getConfidence(file, indexFile),
+    estimatedBytes: estimateBytesForPath(context, file.path)
+  };
+}
+function getConfidence(file, indexFile) {
+  if (file.signals.some((signal) => signal.confidence === "observed")) return "observed";
+  return indexFile?.confidence ?? "inferred";
+}
+function sortWarnings(warnings) {
+  return [...warnings].sort(
+    (left, right) => (left.planKind ?? "").localeCompare(right.planKind ?? "") || (left.batchId ?? "").localeCompare(right.batchId ?? "") || (left.path ?? "").localeCompare(right.path ?? "") || left.code.localeCompare(right.code) || left.message.localeCompare(right.message)
+  );
+}
+
+// src/core/reading-plans/build-architecture-plan.ts
+function buildArchitecturePlan(context) {
+  const sourceCentral = getCentralFiles2(context).filter((file) => !file.isTest && !file.isFixture);
+  const relatedClusterPaths = new Set(
+    context.codebaseMap.clusters.filter((cluster) => cluster.dependencies.length > 0 || cluster.consumers.length > 0).flatMap((cluster) => cluster.centralFiles.map((file) => file.path))
+  );
+  const crossCluster = context.codebaseMap.files.filter(
+    (file) => relatedClusterPaths.has(file.path) && !file.isTest && !file.isFixture
+  );
+  const architectureContracts = combineFiles(
+    getFilesByRole(context, ["schema", "type", "model"]),
+    getFilesBySignalKind(context, ["schema", "validation", "database"])
+  ).filter((file) => !file.isTest && !file.isFixture);
+  return buildPlan(context, {
+    kind: "architecture",
+    targetMemoryFile: ".bridger/memory/architecture.md",
+    title: "Architecture reading plan",
+    purpose: "Explain entrypoints, subsystems, dependency flow, central files, and contract boundaries.",
+    agentFocus: "Trace execution starts, subsystem boundaries, existing cluster relations, and shared contracts.",
+    shouldAnswer: ["Where does execution start?", "What are the main subsystems and dependency directions?", "Which files define central contracts or schemas?"],
+    shouldAvoid: ["Test-heavy context.", "Affected-file traversal.", "Invented architectural layers."],
+    batches: [
+      {
+        id: "entrypoints-and-command-surfaces",
+        title: "Entrypoints and command surfaces",
+        purpose: "Understand how execution starts.",
+        selectionRule: "Entrypoints plus implemented command, route, API route, and CLI metadata.",
+        candidates: combineFiles(getEntrypointFiles(context), getFilesByRole(context, ["command", "route", "api-route"]), getFilesBySignalKind(context, ["cli"])).filter((file) => !file.isTest && !file.isFixture),
+        roleInBatch: (file) => file.isEntrypoint ? "entrypoint" : file.roles.includes("route") || file.roles.includes("api-route") ? "route" : "supporting-context",
+        reason: "Defines an existing entry or command surface.",
+        ranking: { roles: ["command", "route", "api-route"], signalKinds: ["cli"], preferEntrypoints: true }
+      },
+      {
+        id: "source-clusters",
+        title: "Source clusters and central files",
+        purpose: "Understand the main source subsystems and their central files.",
+        selectionRule: "Non-test central files from source and mixed CodebaseMap clusters.",
+        candidates: sourceCentral.filter((file) => {
+          const cluster = context.codebaseMap.clusters.find((item) => item.id === file.clusterId);
+          return cluster?.kind === "source" || cluster?.kind === "mixed";
+        }),
+        roleInBatch: "cluster-central-file",
+        reason: "Is central to a source or mixed cluster.",
+        ranking: { preferCentral: true }
+      },
+      {
+        id: "cross-cluster-dependencies",
+        title: "Cross-cluster dependency flow",
+        purpose: "Read central files in clusters with existing dependency or consumer relations.",
+        selectionRule: "Cluster central files where CodebaseMap dependencies or consumers are non-empty.",
+        candidates: crossCluster,
+        roleInBatch: "cluster-central-file",
+        reason: "Belongs to a cluster with an existing cross-cluster relation.",
+        ranking: { preferCentral: true }
+      },
+      {
+        id: "contracts-and-schemas",
+        title: "Contracts, schemas, and types",
+        purpose: "Identify shared contracts and validation boundaries.",
+        selectionRule: "Implemented schema, type, and model roles plus schema, validation, and database signals.",
+        candidates: architectureContracts,
+        roleInBatch: (file) => file.roles.includes("schema") ? "schema" : file.roles.includes("model") ? "model" : "contract",
+        reason: "Carries an implemented contract role or contract-related signal.",
+        ranking: { roles: ["schema", "type", "model"], signalKinds: ["schema", "validation", "database"], preferCentral: true }
+      },
+      {
+        id: "architecture-warnings",
+        title: "Architecture warnings and unresolved imports",
+        purpose: "Highlight deterministic structural uncertainty.",
+        selectionRule: "Unresolved-import paths and path-specific FileIndex warnings.",
+        candidates: getFilesWithWarningsOrUnresolvedImports(context),
+        roleInBatch: "risk-signal",
+        reason: "Has a deterministic structural diagnostic."
+      }
+    ]
+  });
+}
+
+// src/core/reading-plans/build-business-logic-plan.ts
+function buildBusinessLogicPlan(context) {
+  const workflowRoles = ["service", "builder", "writer", "reader", "generator"];
+  return buildPlan(context, {
+    kind: "business-logic",
+    targetMemoryFile: ".bridger/memory/business-logic.md",
+    title: "Business logic reading plan",
+    purpose: "Extract visible product workflows, user-facing behavior, and durable artifact contracts.",
+    agentFocus: "Understand commands, workflow implementation, artifacts, and behavior demonstrated by tests.",
+    shouldAnswer: ["What workflows and commands exist?", "What artifacts are produced?", "How does repository evidence become context?"],
+    shouldAvoid: ["Invented domain concepts.", "Generic low-signal utilities.", "Behavior not visible in selected files."],
+    batches: [
+      {
+        id: "user-facing-workflow-entrypoints",
+        title: "User-facing workflow entrypoints",
+        purpose: "Read files that expose user-visible workflows.",
+        selectionRule: "Entrypoints, command and route roles, and implemented CLI signals.",
+        candidates: combineFiles(getEntrypointFiles(context), getFilesByRole(context, ["command", "route", "api-route"]), getFilesBySignalKind(context, ["cli"])),
+        roleInBatch: (file) => file.isEntrypoint ? "entrypoint" : file.roles.includes("route") || file.roles.includes("api-route") ? "route" : "supporting-context",
+        reason: "Exposes a deterministic user-facing workflow surface.",
+        ranking: { roles: ["command", "route", "api-route"], signalKinds: ["cli"], preferEntrypoints: true }
+      },
+      {
+        id: "workflow-implementation-files",
+        title: "Workflow implementation files",
+        purpose: "Read central implementation files for product workflows.",
+        selectionRule: "Implemented service, builder, writer, reader, and generator roles, prioritized by centrality.",
+        candidates: combineFiles(getFilesByRole(context, [...workflowRoles]), getCentralFiles2(context).filter((file) => file.roles.some((role) => workflowRoles.includes(role)))).filter((file) => !file.isTest && !file.isFixture),
+        roleInBatch: (file) => file.roles.includes("service") ? "service" : "supporting-context",
+        reason: "Has an implemented workflow role in the current artifacts.",
+        ranking: { roles: [...workflowRoles], preferCentral: true }
+      },
+      {
+        id: "artifacts-and-contracts",
+        title: "Artifacts, schemas, and contracts",
+        purpose: "Understand durable objects and output contracts.",
+        selectionRule: "Implemented schema, model, type, config, writer, or generator roles and contract signals.",
+        candidates: combineFiles(getFilesByRole(context, ["schema", "model", "type", "config", "project-config", "writer", "generator"]), getFilesBySignalKind(context, ["schema", "validation", "database"])).filter((file) => !file.isTest && !file.isFixture),
+        roleInBatch: (file) => file.roles.includes("schema") ? "schema" : file.roles.includes("model") ? "model" : file.roles.includes("config") || file.roles.includes("project-config") ? "config" : "contract",
+        reason: "Defines or writes a durable artifact or contract using implemented metadata.",
+        ranking: { roles: ["schema", "model", "type", "writer", "generator", "project-config", "config"], signalKinds: ["schema", "validation", "database"] }
+      },
+      {
+        id: "behavior-tests",
+        title: "Representative behavior tests",
+        purpose: "Include tests that clarify product behavior.",
+        selectionRule: "CodebaseMap isTest files ranked by centrality and graph degree.",
+        candidates: getTestFiles(context),
+        roleInBatch: "representative-test",
+        reason: "Demonstrates behavior using an existing test classification.",
+        ranking: { signalKinds: ["testing"], preferCentral: true }
+      }
+    ]
+  });
+}
+
+// src/core/reading-plans/build-conventions-plan.ts
+var REPRESENTATIVE_ROLES = [
+  "service",
+  "utility",
+  "component",
+  "command",
+  "route",
+  "api-route",
+  "builder",
+  "generator",
+  "resolver",
+  "extractor",
+  "reader",
+  "writer"
+];
+function buildConventionsPlan(context) {
+  const representatives = REPRESENTATIVE_ROLES.flatMap(
+    (role) => rankCandidates(context, getFilesByRole(context, [role]), { roles: [role], preferCentral: true }).slice(0, 3)
+  );
+  return buildPlan(context, {
+    kind: "conventions",
+    targetMemoryFile: ".bridger/memory/conventions.md",
+    title: "Conventions reading plan",
+    purpose: "Explain implementation style, organization, naming, typing, and recurring code patterns.",
+    agentFocus: "Compare representative implementations across only the roles already classified by deterministic artifacts.",
+    shouldAnswer: ["How is code organized?", "How are contracts and workflows implemented?", "How are commands and tests written?"],
+    shouldAvoid: ["Exhaustive implementation coverage.", "Conventions inferred only from filenames.", "Random files without role evidence."],
+    batches: [
+      {
+        id: "representative-source-by-role",
+        title: "Representative source files by role",
+        purpose: "Show implementation style across existing role categories.",
+        selectionRule: "Up to three ranked files for each implemented representative source role.",
+        candidates: representatives,
+        roleInBatch: (file) => file.roles.includes("service") ? "service" : file.roles.includes("utility") ? "utility" : "convention-example",
+        reason: (file) => `Represents implemented role metadata: ${file.roles.filter((role) => REPRESENTATIVE_ROLES.includes(role)).join(", ")}.`,
+        ranking: { roles: REPRESENTATIVE_ROLES, preferCentral: true }
+      },
+      {
+        id: "models-schemas-types",
+        title: "Models, schemas, and types",
+        purpose: "Show data-contract and typing style.",
+        selectionRule: "Implemented schema, model, and type roles plus schema and validation signals.",
+        candidates: combineFiles(getFilesByRole(context, ["schema", "model", "type"]), getFilesBySignalKind(context, ["schema", "validation"])),
+        roleInBatch: (file) => file.roles.includes("schema") ? "schema" : file.roles.includes("model") ? "model" : "contract",
+        reason: "Demonstrates an existing data-contract pattern.",
+        ranking: { roles: ["schema", "model", "type"], signalKinds: ["schema", "validation"] }
+      },
+      {
+        id: "cli-and-workflow-style",
+        title: "CLI and workflow style",
+        purpose: "Show user-facing command implementation patterns.",
+        selectionRule: "Command roles, CLI signals, and relevant deterministic entrypoints.",
+        candidates: combineFiles(getFilesByRole(context, ["command"]), getFilesBySignalKind(context, ["cli"]), getEntrypointFiles(context)),
+        roleInBatch: (file) => file.isEntrypoint ? "entrypoint" : "convention-example",
+        reason: "Demonstrates an implemented command or workflow entry pattern.",
+        ranking: { roles: ["command"], signalKinds: ["cli"], preferEntrypoints: true }
+      },
+      {
+        id: "representative-tests",
+        title: "Representative test style",
+        purpose: "Show testing conventions and expectations.",
+        selectionRule: "Files classified as tests by CodebaseMap.",
+        candidates: getTestFiles(context),
+        roleInBatch: "representative-test",
+        reason: "Provides an existing example of test style.",
+        ranking: { signalKinds: ["testing"] }
+      },
+      {
+        id: "config-and-tooling",
+        title: "Config and tooling conventions",
+        purpose: "Show build, test, lint, and tooling configuration.",
+        selectionRule: "Config and project-config roles, prioritizing testing signals.",
+        candidates: combineFiles(
+          getConfigFiles(context),
+          getFilesBySignalKind(context, ["testing"]).filter(
+            (file) => file.roles.includes("config") || file.roles.includes("project-config")
+          )
+        ),
+        roleInBatch: "config",
+        reason: "Defines an existing tooling or project convention.",
+        ranking: { roles: ["project-config", "config"], signalKinds: ["testing"] }
+      }
+    ]
+  });
+}
+
+// src/core/reading-plans/build-repo-analysis-plan.ts
+function buildRepoAnalysisPlan(context) {
+  const clusterRepresentatives = [];
+  for (const cluster of context.codebaseMap.clusters) {
+    if (!(/* @__PURE__ */ new Set(["source", "mixed", "scripts"])).has(cluster.kind)) continue;
+    const centralPath = cluster.centralFiles[0]?.path;
+    const fallbackPath = [...cluster.files].sort()[0];
+    const file = context.codebaseFileByPath.get(centralPath ?? fallbackPath ?? "");
+    if (file && !file.isTest && !file.isFixture) clusterRepresentatives.push(file);
+  }
+  return buildPlan(context, {
+    kind: "repo-analysis",
+    targetMemoryFile: ".bridger/memory/repo-analysis.md",
+    title: "Repository analysis reading plan",
+    purpose: "Provide broad repository orientation from deterministic project metadata and codebase structure.",
+    agentFocus: "Identify the project, stack, major areas, executable surfaces, and deterministic unknowns.",
+    shouldAnswer: [
+      "What kind of project is this and what stack does it use?",
+      "What are the main directories, clusters, and executable surfaces?",
+      "What is known and what remains uncertain?"
+    ],
+    shouldAvoid: ["Exhaustive source coverage.", "Deep implementation summaries.", "Claims unsupported by selected evidence."],
+    batches: [
+      {
+        id: "project-metadata",
+        title: "Project metadata and root orientation",
+        purpose: "Read project-level files that explain repository identity, stack, scripts, and documentation.",
+        selectionRule: "Project config, package metadata, and documentation roles from CodebaseMap.",
+        candidates: combineFiles(getConfigFiles(context), getFilesByRole(context, ["docs"])),
+        roleInBatch: (file) => file.roles.includes("docs") ? "orientation" : "config",
+        reason: "Provides deterministic project-level orientation.",
+        evidence: (file) => [
+          {
+            source: "codebase-map",
+            detail: `Selected from implemented roles [${file.roles.join(", ")}].`
+          },
+          ...file.roles.includes("project-config") ? [{
+            source: "repo-context",
+            detail: `Repository context reports package manager ${context.repoContext.stack.packageManager || "unknown"} and ${Object.values(context.repoContext.commands).filter(Boolean).length} detected commands.`
+          }] : []
+        ],
+        ranking: { roles: ["project-config", "config", "docs"] }
+      },
+      {
+        id: "main-entrypoints",
+        title: "Main entrypoints",
+        purpose: "Identify how the project is entered or executed.",
+        selectionRule: "CodebaseMap entrypoints and isEntrypoint files; GraphSummary only when the map has none.",
+        candidates: getEntrypointFiles(context),
+        roleInBatch: "entrypoint",
+        reason: "Marks an existing deterministic executable surface.",
+        ranking: { preferEntrypoints: true }
+      },
+      {
+        id: "major-clusters",
+        title: "Major codebase areas",
+        purpose: "Provide one representative central file for each major source cluster.",
+        selectionRule: "Central file, or first stable file, from source, mixed, and scripts clusters.",
+        candidates: clusterRepresentatives,
+        roleInBatch: "cluster-central-file",
+        reason: "Represents a major non-test codebase cluster.",
+        ranking: { preferCentral: true }
+      },
+      {
+        id: "warnings-and-unknowns",
+        title: "Warnings and uncertain areas",
+        purpose: "Surface files tied to deterministic warnings and unresolved imports.",
+        selectionRule: "CodebaseMap unresolved-import paths and FileIndex path-specific warning files.",
+        candidates: getFilesWithWarningsOrUnresolvedImports(context),
+        roleInBatch: "risk-signal",
+        reason: "Has an existing unresolved import or path-specific scan warning."
+      }
+    ]
+  });
+}
+
+// src/core/reading-plans/build-testing-plan.ts
+function buildTestingPlan(context) {
+  const tests = getTestFiles(context);
+  const rankedTests = rankCandidates(context, tests, {
+    signalKinds: ["testing"],
+    preferCentral: true
+  });
+  const selectedTestPaths = /* @__PURE__ */ new Set();
+  let selectedTestBytes = 0;
+  for (const test of rankedTests) {
+    const estimatedBytes = estimateBytesForPath(context, test.path);
+    if (selectedTestPaths.size >= READING_PLAN_BATCH_BUDGET.maxFiles) break;
+    if (selectedTestBytes + estimatedBytes > READING_PLAN_BATCH_BUDGET.maxBytes) break;
+    selectedTestPaths.add(test.path);
+    selectedTestBytes += estimatedBytes;
+  }
+  const sourceUnderTestPaths = new Set(
+    context.repoGraph.edges.filter((edge) => edge.type === "imports" && selectedTestPaths.has(edge.from)).map((edge) => edge.to)
+  );
+  const sourceUnderTest = context.codebaseMap.files.filter(
+    (file) => sourceUnderTestPaths.has(file.path) && !file.isTest && !file.isFixture
+  );
+  const testWarnings = getFilesWithWarningsOrUnresolvedImports(context).filter((file) => file.isTest);
+  const plan = buildPlan(context, {
+    kind: "testing",
+    targetMemoryFile: ".bridger/memory/testing.md",
+    title: "Testing reading plan",
+    purpose: "Explain test tooling, test patterns, fixtures, source relationships, and verification behavior.",
+    agentFocus: "Identify real test commands and configuration, representative tests, fixtures, and directly imported source files.",
+    shouldAnswer: ["What framework and commands are used?", "What patterns do tests and fixtures follow?", "Which source areas have direct test import evidence?"],
+    shouldAvoid: ["Every test file.", "Speculative source-under-test matching.", "Architecture-only entrypoints."],
+    batches: [
+      {
+        id: "test-setup-and-commands",
+        title: "Test setup and commands",
+        purpose: "Identify test tooling and verification commands from real files.",
+        selectionRule: "Project metadata/config files and files carrying implemented testing signals.",
+        candidates: combineFiles(
+          getConfigFiles(context),
+          getFilesBySignalKind(context, ["testing"]).filter(
+            (file) => file.roles.includes("config") || file.roles.includes("project-config")
+          )
+        ),
+        roleInBatch: "config",
+        reason: "Provides file-backed evidence for test setup or commands.",
+        evidence: (file) => [
+          {
+            source: "codebase-map",
+            detail: `Selected from implemented config roles [${file.roles.join(", ")}].`
+          },
+          {
+            source: "repo-context",
+            detail: `Repository context reports test frameworks [${[...context.repoContext.stack.testFramework].sort().join(", ") || "none"}] and test command ${context.repoContext.commands.test ?? "none"}.`
+          }
+        ],
+        ranking: { roles: ["project-config", "config"], signalKinds: ["testing"] }
+      },
+      {
+        id: "representative-tests",
+        title: "Representative tests",
+        purpose: "Read tests that demonstrate test style across available clusters.",
+        selectionRule: "CodebaseMap isTest files ranked by testing signals, centrality, graph degree, and path.",
+        candidates: tests,
+        roleInBatch: "representative-test",
+        reason: "Is classified as a test by CodebaseMap.",
+        ranking: { signalKinds: ["testing"], preferCentral: true }
+      },
+      {
+        id: "fixtures-and-test-data",
+        title: "Fixtures and test data",
+        purpose: "Understand existing fixture patterns.",
+        selectionRule: "CodebaseMap isFixture files and cluster fixture lists.",
+        candidates: getFixtureFiles(context),
+        roleInBatch: "fixture",
+        reason: "Is classified as fixture data by CodebaseMap."
+      },
+      {
+        id: "source-under-test",
+        title: "Source files under test",
+        purpose: "Read source files directly imported by selected tests.",
+        selectionRule: "Targets of existing RepoGraph import edges whose source is a CodebaseMap test file.",
+        candidates: sourceUnderTest,
+        roleInBatch: "supporting-context",
+        reason: "Is the target of an existing graph import edge from a classified test file.",
+        evidence: () => [{ source: "repo-graph", detail: "Direct target of an existing import edge from a CodebaseMap test file." }],
+        ranking: { preferCentral: true }
+      },
+      {
+        id: "test-warnings",
+        title: "Test coverage warnings",
+        purpose: "Surface files tied to deterministic test diagnostics.",
+        selectionRule: "Test files with unresolved imports or path-specific FileIndex warnings.",
+        candidates: testWarnings,
+        roleInBatch: "risk-signal",
+        reason: "Has an existing test-related diagnostic."
+      }
+    ]
+  });
+  if (tests.length === 0 && context.repoContext.stack.testFramework.length > 0) {
+    plan.warnings = sortWarnings([
+      ...plan.warnings,
+      {
+        code: "test-framework-without-tests",
+        message: "RepoContext reports a test framework, but CodebaseMap contains no test files.",
+        planKind: "testing",
+        severity: "warning"
+      }
+    ]);
+  }
+  return plan;
+}
+
+// src/core/reading-plans/models/reading-plans.ts
+import { z as z11 } from "zod";
+var ReadingPlanKindSchema = z11.enum([
+  "repo-analysis",
+  "architecture",
+  "business-logic",
+  "conventions",
+  "testing"
+]);
+var ReadingPlanFileRoleSchema = z11.enum([
+  "orientation",
+  "entrypoint",
+  "cluster-central-file",
+  "contract",
+  "schema",
+  "model",
+  "service",
+  "route",
+  "utility",
+  "test-setup",
+  "representative-test",
+  "fixture",
+  "config",
+  "convention-example",
+  "risk-signal",
+  "supporting-context"
+]);
+var ReadingPlanEvidenceSchema = z11.object({
+  source: z11.enum([
+    "file-index",
+    "repo-context",
+    "repo-graph",
+    "graph-summary",
+    "codebase-map"
+  ]),
+  detail: z11.string().min(1)
+});
+var ReadingPlanFileSchema = z11.object({
+  path: z11.string().min(1),
+  roleInBatch: ReadingPlanFileRoleSchema,
+  reason: z11.string().min(1),
+  evidence: z11.array(ReadingPlanEvidenceSchema).min(1),
+  confidence: ConfidenceSchema,
+  estimatedBytes: z11.number().int().nonnegative()
+});
+var ReadingPlanWarningSchema = z11.object({
+  code: z11.string().min(1),
+  message: z11.string().min(1),
+  planKind: ReadingPlanKindSchema.optional(),
+  batchId: z11.string().min(1).optional(),
+  path: z11.string().min(1).optional(),
+  severity: z11.enum(["info", "warning"])
+});
+var ReadingBudgetSchema = z11.object({
+  maxFiles: z11.number().int().positive(),
+  estimatedBytes: z11.number().int().nonnegative(),
+  truncated: z11.boolean()
+});
+var ReadingBatchSchema = z11.object({
+  id: z11.string().min(1),
+  title: z11.string().min(1),
+  purpose: z11.string().min(1),
+  order: z11.number().int().positive(),
+  selectionRule: z11.string().min(1),
+  files: z11.array(ReadingPlanFileSchema),
+  budget: ReadingBudgetSchema
+});
+var ReadingPlanSchema = z11.object({
+  kind: ReadingPlanKindSchema,
+  targetMemoryFile: z11.string().min(1),
+  title: z11.string().min(1),
+  purpose: z11.string().min(1),
+  inputStrategy: z11.object({
+    agentFocus: z11.string().min(1),
+    shouldAnswer: z11.array(z11.string().min(1)),
+    shouldAvoid: z11.array(z11.string().min(1))
+  }),
+  batches: z11.array(ReadingBatchSchema),
+  budget: ReadingBudgetSchema,
+  warnings: z11.array(ReadingPlanWarningSchema)
+});
+var ReadingPlansStatsSchema = z11.object({
+  planCount: z11.number().int().nonnegative(),
+  batchCount: z11.number().int().nonnegative(),
+  uniqueFileCount: z11.number().int().nonnegative(),
+  repeatedFileReferences: z11.number().int().nonnegative(),
+  estimatedTotalBytes: z11.number().int().nonnegative()
+});
+var ReadingPlansSchema = z11.object({
+  schemaVersion: z11.literal(1),
+  generatedAt: z11.iso.datetime(),
+  sourceArtifacts: z11.object({
+    fileIndexSchemaVersion: z11.number().int().positive().optional(),
+    repoGraphVersion: z11.union([z11.string(), z11.number()]).optional(),
+    graphSummaryVersion: z11.union([z11.string(), z11.number()]).optional(),
+    codebaseMapSchemaVersion: z11.number().int().positive().optional()
+  }),
+  plans: z11.array(ReadingPlanSchema).length(5),
+  stats: ReadingPlansStatsSchema,
+  warnings: z11.array(ReadingPlanWarningSchema)
+});
+
+// src/core/reading-plans/build-reading-plans.ts
+function buildReadingPlans(input) {
+  const context = createBuildContext(input);
+  const plans = [
+    buildRepoAnalysisPlan(context),
+    buildArchitecturePlan(context),
+    buildBusinessLogicPlan(context),
+    buildConventionsPlan(context),
+    buildTestingPlan(context)
+  ];
+  const warnings = [
+    ...input.codebaseMap.warnings.map((message) => ({
+      code: "codebase-map-warning",
+      message,
+      severity: "warning"
+    })),
+    ...(input.fileIndex.warnings ?? []).map((warning) => ({
+      code: warning.code,
+      message: warning.message,
+      ...warning.filePath ? { path: warning.filePath } : {},
+      severity: warning.severity
+    }))
+  ];
+  const allFiles = plans.flatMap(
+    (plan) => plan.batches.flatMap((batch) => batch.files)
+  );
+  const uniquePaths = new Set(allFiles.map((file) => file.path));
+  return ReadingPlansSchema.parse({
+    schemaVersion: 1,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    sourceArtifacts: {
+      ...input.fileIndex.schemaVersion ? { fileIndexSchemaVersion: input.fileIndex.schemaVersion } : {},
+      repoGraphVersion: input.repoGraph.graphVersion,
+      graphSummaryVersion: input.graphSummary.graphVersion,
+      codebaseMapSchemaVersion: input.codebaseMap.schemaVersion
+    },
+    plans,
+    stats: {
+      planCount: plans.length,
+      batchCount: plans.reduce((total, plan) => total + plan.batches.length, 0),
+      uniqueFileCount: uniquePaths.size,
+      repeatedFileReferences: allFiles.length - uniquePaths.size,
+      estimatedTotalBytes: allFiles.reduce(
+        (total, file) => total + file.estimatedBytes,
+        0
+      )
+    },
+    warnings: sortWarnings(warnings)
+  });
+}
+
 // src/shared/logger.ts
 function isDebugLoggingEnabled() {
   if (process.env.DEBUG === "bridger") {
@@ -4177,6 +4986,9 @@ function formatList(values) {
 }
 function formatCommandValue(value) {
   return value !== void 0 ? value : "none";
+}
+function formatQuantity(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 function formatBytes(bytes) {
   if (bytes === void 0) {
@@ -4246,8 +5058,7 @@ async function buildProjectStateInspection(repoRoot) {
     ["architecture.md", getGeneratedKnowledgeDocPath(repoRoot, "architecture")],
     ["business-logic.md", getGeneratedKnowledgeDocPath(repoRoot, "businessLogic")],
     ["conventions.md", getGeneratedKnowledgeDocPath(repoRoot, "conventions")],
-    ["testing.md", getGeneratedKnowledgeDocPath(repoRoot, "testing")],
-    ["agent-rules.md", getGeneratedKnowledgeDocPath(repoRoot, "agentRules")]
+    ["testing.md", getGeneratedKnowledgeDocPath(repoRoot, "testing")]
   ]);
   const supportFiles = await buildFileInspections([
     ["selected-skills.json", getSelectedSkillsPath(repoRoot)],
@@ -4373,8 +5184,14 @@ async function buildFileInspections(files) {
 }
 function formatGraphInspectOutput(input) {
   const { graph, summary, codebaseMap } = input;
+  const fileIndex = input.fileIndex ?? EMPTY_FILE_INDEX;
+  const readingPlans = input.readingPlans ?? EMPTY_READING_PLANS;
   return [
     "Repo graph",
+    "",
+    formatRepositoryInventorySection(fileIndex),
+    "",
+    formatDiagnosticsSection(fileIndex, codebaseMap, readingPlans),
     "",
     "Stats",
     `- Files: ${graph.stats.fileCount}`,
@@ -4398,9 +5215,172 @@ function formatGraphInspectOutput(input) {
     formatOrderedPreview(summary.architectureFirstOrder.slice(0, 10)),
     "",
     "Clusters",
-    formatClusterPreview(codebaseMap)
+    formatClusterPreview(codebaseMap),
+    "",
+    formatReadingPlansSection(readingPlans),
+    "",
+    formatReadingPlanPreviewSection(readingPlans)
   ].join("\n");
 }
+function formatRepositoryInventorySection(fileIndex) {
+  const inventory = buildFileIndexInventory(fileIndex);
+  return [
+    "Repository Inventory",
+    `- Included files: ${inventory.includedFileCount}`,
+    `- Skipped files: ${inventory.skippedFileCount}`,
+    `- Warnings: ${inventory.warningCount}`,
+    `- Top skip reasons: ${formatCountEntries(inventory.topSkipReasons, 5)}`,
+    `- Top roles: ${formatCountEntries(inventory.topRoles, 8)}`,
+    `- Languages: ${formatCountEntries(inventory.topLanguages, 8)}`
+  ].join("\n");
+}
+function formatDiagnosticsSection(fileIndex, codebaseMap, readingPlans) {
+  return [
+    "Diagnostics",
+    `- FileIndex warnings: ${fileIndex.warnings?.length ?? 0}`,
+    `- CodebaseMap warnings: ${codebaseMap.warnings.length}`,
+    `- ReadingPlans warnings: ${readingPlans.warnings.length}`,
+    "- Plan warnings:",
+    ...formatPlanWarningCounts(readingPlans)
+  ].join("\n");
+}
+function formatReadingPlansSection(readingPlans) {
+  const lines = ["Reading Plans"];
+  for (const kind of READING_PLAN_KINDS) {
+    const plan = readingPlans.plans.find((item) => item.kind === kind);
+    if (!plan) {
+      lines.push(`- Missing plan: ${kind}`);
+      continue;
+    }
+    const fileReferenceCount = plan.batches.reduce(
+      (total, batch) => total + batch.files.length,
+      0
+    );
+    const uniqueFileCount = new Set(
+      plan.batches.flatMap((batch) => batch.files.map((file) => file.path))
+    ).size;
+    lines.push(
+      `- ${plan.kind}: ${formatQuantity(plan.batches.length, "batch", "batches")}, ${formatQuantity(fileReferenceCount, "file reference")}, ${formatQuantity(uniqueFileCount, "unique file")}, ${formatQuantity(plan.warnings.length, "warning")}, truncated: ${plan.budget.truncated ? "yes" : "no"}`
+    );
+  }
+  return lines.join("\n");
+}
+function formatReadingPlanPreviewSection(readingPlans) {
+  const lines = ["Reading Plan Preview"];
+  for (const kind of ["architecture", "testing"]) {
+    const plan = readingPlans.plans.find((item) => item.kind === kind);
+    if (!plan) {
+      lines.push("");
+      lines.push(`${kind}`);
+      lines.push("- Missing plan");
+      continue;
+    }
+    lines.push("");
+    lines.push(plan.kind);
+    lines.push(...formatReadingPlanPreview(plan));
+  }
+  return lines.join("\n");
+}
+function formatReadingPlanPreview(plan) {
+  const lines = [];
+  for (const batch of plan.batches.slice(0, 3)) {
+    lines.push(`- ${batch.title}`);
+    const filePaths = batch.files.slice(0, 3).map((file) => file.path);
+    if (filePaths.length === 0) {
+      lines.push("  - none");
+      continue;
+    }
+    for (const filePath of filePaths) {
+      lines.push(`  - ${filePath}`);
+    }
+  }
+  return lines;
+}
+var READING_PLAN_KINDS = [
+  "repo-analysis",
+  "architecture",
+  "business-logic",
+  "conventions",
+  "testing"
+];
+function buildFileIndexInventory(fileIndex) {
+  const stats = fileIndex.stats;
+  return {
+    includedFileCount: stats?.includedFileCount ?? fileIndex.files.length,
+    skippedFileCount: stats?.skippedFileCount ?? fileIndex.skippedFiles?.length ?? 0,
+    warningCount: fileIndex.warnings?.length ?? 0,
+    topSkipReasons: formatCountEntriesToList(
+      stats?.bySkipReason ?? countSkippedFiles(fileIndex)
+    ),
+    topRoles: formatCountEntriesToList(
+      stats?.byRole ?? countFileRoles(fileIndex)
+    ),
+    topLanguages: formatCountEntriesToList(
+      stats?.byLanguage ?? countFileLanguages(fileIndex)
+    )
+  };
+}
+function countSkippedFiles(fileIndex) {
+  const counts = {};
+  for (const skippedFile of fileIndex.skippedFiles ?? []) {
+    counts[skippedFile.reason] = (counts[skippedFile.reason] ?? 0) + 1;
+  }
+  return counts;
+}
+function countFileRoles(fileIndex) {
+  const counts = {};
+  for (const file of fileIndex.files) {
+    for (const role of file.roles ?? []) {
+      counts[role] = (counts[role] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+function countFileLanguages(fileIndex) {
+  const counts = {};
+  for (const file of fileIndex.files) {
+    const language = file.language ?? "unknown";
+    counts[language] = (counts[language] ?? 0) + 1;
+  }
+  return counts;
+}
+function formatCountEntries(counts, maxEntries) {
+  if (counts.length === 0) {
+    return "none";
+  }
+  return counts.slice(0, maxEntries).map((entry) => `${entry.key}: ${entry.count}`).join(", ");
+}
+function formatCountEntriesToList(counts) {
+  return Object.entries(counts).flatMap(
+    ([key, count]) => typeof count === "number" ? [{ key, count }] : []
+  ).sort(
+    (left, right) => right.count - left.count || left.key.localeCompare(right.key)
+  );
+}
+function formatPlanWarningCounts(readingPlans) {
+  return READING_PLAN_KINDS.map((kind) => {
+    const plan = readingPlans.plans.find((item) => item.kind === kind);
+    return `  - ${kind}: ${plan?.warnings.length ?? 0}`;
+  });
+}
+var EMPTY_FILE_INDEX = {
+  generatedAt: "2026-05-01T00:00:00.000Z",
+  files: []
+};
+var EMPTY_READING_PLANS = {
+  schemaVersion: 1,
+  generatedAt: "2026-05-01T00:00:00.000Z",
+  sourceArtifacts: {},
+  plans: [],
+  stats: {
+    planCount: 0,
+    batchCount: 0,
+    uniqueFileCount: 0,
+    repeatedFileReferences: 0,
+    estimatedTotalBytes: 0
+  },
+  warnings: []
+};
 function formatClusterPreview(codebaseMap) {
   const maxClusters = 10;
   const lines = codebaseMap.clusters.slice(0, maxClusters).map((cluster) => {
@@ -4428,7 +5408,7 @@ function formatPathList(paths) {
   if (paths.length === 0) {
     return "- None";
   }
-  return paths.map((path23) => `- ${path23}`).join("\n");
+  return paths.map((path20) => `- ${path20}`).join("\n");
 }
 function formatRankedFiles(files, label) {
   if (files.length === 0) {
@@ -4442,7 +5422,7 @@ function formatOrderedPreview(paths) {
   if (paths.length === 0) {
     return "- None";
   }
-  return paths.map((path23, index) => `${index + 1}. ${path23}`).join("\n");
+  return paths.map((path20, index) => `${index + 1}. ${path20}`).join("\n");
 }
 function formatImportantFileInspectionLines(importantFile) {
   const lines = [`- ${importantFile.path}`, `  Reason: ${importantFile.reason}`];
@@ -4518,10 +5498,20 @@ async function buildGraphInspectArtifacts(repoRoot) {
     repoGraph: graph,
     graphSummary: summary
   });
+  const readingPlans = buildReadingPlans({
+    repoRoot,
+    fileIndex,
+    repoContext,
+    repoGraph: graph,
+    graphSummary: summary,
+    codebaseMap
+  });
   return {
+    fileIndex,
     graph,
     summary,
-    codebaseMap
+    codebaseMap,
+    readingPlans
   };
 }
 function printGraphInspectOutput(input) {
@@ -4562,12 +5552,12 @@ async function pathExists3(filePath) {
     return false;
   }
 }
-var inspectCommand = new Command("inspect").description("Inspect the current repository without using the LLM").option("--repo <path>", "Path to the repository to inspect").option("--context", "Show deterministic context preview before LLM generation").option("--important-files", "Show selected important files and selection reasons").option("--graph", "Print repo graph inspection output").option("--json", "Print inspect result as JSON").action(async (options) => {
+var inspectCommand = new Command("inspect").description("Inspect the current repository without using the LLM").option("--repo <path>", "Path to the repository to inspect").option("--context", "Show deterministic context preview").option("--important-files", "Show selected important files and selection reasons").option("--graph", "Print repo graph inspection output").option("--json", "Print inspect result as JSON").action(async (options) => {
   await runInspectCommand(options);
 });
 
 // src/cli/commands/init.ts
-import path22 from "path";
+import path19 from "path";
 import { Command as Command2 } from "commander";
 
 // src/core/output/write-json.ts
@@ -4587,1612 +5577,57 @@ async function writeCodebaseMapArtifact(input) {
   return outputPath;
 }
 
-// src/core/models/agent-rules-doc.ts
-import { z as z11 } from "zod";
-var GeneratedDocsContentSchema = z11.object({
-  repoAnalysis: z11.string(),
-  architecture: z11.string(),
-  conventions: z11.string(),
-  businessLogic: z11.string(),
-  testing: z11.string()
-});
-var GenerateAgentRulesDocInputSchema = z11.object({
-  repoContext: RepoContextSchema,
-  generatedDocs: GeneratedDocsContentSchema
-});
-
-// src/core/doc-generator/doc-specs.ts
-var REPO_ANALYSIS_REQUIRED_SECTIONS = [
-  "## Project overview",
-  "## Detected stack",
-  "## File and folder evidence",
-  "## Important files",
-  "## Observed structure",
-  "## Observed domains",
-  "## Assumptions",
-  "## Unknowns"
-];
-var ARCHITECTURE_REQUIRED_SECTIONS = [
-  "## Project overview",
-  "## Detected stack",
-  "## App structure",
-  "## Core domains",
-  "## Important folders",
-  "## Data flow assumptions",
-  "## Commands",
-  "## Risky areas",
-  "## Unknowns"
-];
-var BUSINESS_LOGIC_REQUIRED_SECTIONS = [
-  "## Product/domain overview",
-  "## Observed domain concepts",
-  "## Observed entities and models",
-  "## Observed business rules",
-  "## Observed workflows",
-  "## Data ownership and persistence",
-  "## External integrations",
-  "## Assumptions",
-  "## Unknowns",
-  "## Evidence map"
-];
-var CONVENTIONS_REQUIRED_SECTIONS = [
-  "## TypeScript conventions",
-  "## Component conventions",
-  "## Server/client boundary conventions",
-  "## Validation conventions",
-  "## Styling conventions",
-  "## Data access conventions",
-  "## Testing conventions",
-  "## Naming conventions",
-  "## Observed conventions",
-  "## Recommended conventions",
-  "## Things agents should avoid",
-  "## Unknowns"
-];
-var TESTING_REQUIRED_SECTIONS = [
-  "## Testing philosophy",
-  "## Test types and when to use them",
-  "## Unit testing conventions",
-  "## Integration testing conventions",
-  "## Regression testing conventions",
-  "## Component and UI testing conventions",
-  "## Manual QA expectations",
-  "## Existing test evidence",
-  "## Testing gaps and unknowns",
-  "## Things agents should avoid"
-];
-var AGENT_RULES_REQUIRED_SECTIONS = [
-  "## Project overview",
-  "## Commands",
-  "## Rules for agents",
-  "## Coding conventions",
-  "## Business logic boundaries",
-  "## Testing expectations",
-  "## Risky areas",
-  "## Task scoping rules",
-  "## Files/folders to avoid unless explicitly requested",
-  "## Unknowns"
-];
-var KNOWLEDGE_DOC_SPECS = {
-  repoAnalysis: {
-    key: "repoAnalysis",
-    filename: GENERATED_DOC_FILENAMES.repoAnalysis,
-    displayName: "Repo analysis",
-    requiredSections: REPO_ANALYSIS_REQUIRED_SECTIONS
-  },
-  architecture: {
-    key: "architecture",
-    filename: GENERATED_DOC_FILENAMES.architecture,
-    displayName: "Architecture",
-    requiredSections: ARCHITECTURE_REQUIRED_SECTIONS
-  },
-  businessLogic: {
-    key: "businessLogic",
-    filename: GENERATED_DOC_FILENAMES.businessLogic,
-    displayName: "Business logic",
-    requiredSections: BUSINESS_LOGIC_REQUIRED_SECTIONS
-  },
-  conventions: {
-    key: "conventions",
-    filename: GENERATED_DOC_FILENAMES.conventions,
-    displayName: "Conventions",
-    requiredSections: CONVENTIONS_REQUIRED_SECTIONS
-  },
-  testing: {
-    key: "testing",
-    filename: GENERATED_DOC_FILENAMES.testing,
-    displayName: "Testing",
-    requiredSections: TESTING_REQUIRED_SECTIONS
-  },
-  agentRules: {
-    key: "agentRules",
-    filename: GENERATED_DOC_FILENAMES.agentRules,
-    displayName: "Agent rules",
-    requiredSections: AGENT_RULES_REQUIRED_SECTIONS
-  }
+// src/core/project/ensure-bridger-layout.ts
+import fs11 from "fs/promises";
+var SELECTED_SKILLS_JSON = {
+  schemaVersion: 1,
+  selected: []
 };
+var TICKET_TEMPLATE = `# Ticket
 
-// src/core/llm/prompts/shared/prompt-formatting.ts
-function formatBulletList(items, emptyFallback = "- Unknown") {
-  if (items.length === 0) {
-    return emptyFallback;
-  }
-  return items.map((item) => `- ${item}`).join("\n");
-}
-function formatKeyValueLines(entries) {
-  const lines = [];
-  for (const [key, value] of Object.entries(entries)) {
-    const normalizedValue = normalizeText(value);
-    lines.push(`${key}: ${normalizedValue ?? "unknown"}`);
-  }
-  return formatBulletList(lines);
-}
-function formatStringArrayValue(values, emptyFallback = "unknown") {
-  const normalizedValues = values?.map((value) => value.trim()).filter((value) => value.length > 0) ?? [];
-  if (normalizedValues.length === 0) {
-    return emptyFallback;
-  }
-  return normalizedValues.join(", ");
-}
-function formatDetectedStack(stack) {
-  return formatKeyValueLines({
-    Framework: stack.framework,
-    Language: stack.language,
-    "Package manager": stack.packageManager,
-    Styling: formatStringArrayValue(stack.styling),
-    Validation: formatStringArrayValue(stack.validation),
-    Database: formatStringArrayValue(stack.database),
-    Testing: formatStringArrayValue(stack.testFramework)
-  });
-}
-function formatCommands(commands) {
-  const lines = [];
-  const orderedEntries = [
-    ["install", commands.install],
-    ["dev", commands.dev],
-    ["build", commands.build],
-    ["lint", commands.lint],
-    ["typecheck", commands.typecheck],
-    ["test", commands.test],
-    ["format", commands.format]
-  ];
-  for (const [name, value] of orderedEntries) {
-    const normalizedValue = normalizeText(value);
-    if (!normalizedValue) {
-      continue;
-    }
-    lines.push(`${name}: ${normalizedValue}`);
-  }
-  return formatBulletList(lines);
-}
-function formatImportantFiles(files) {
-  if (files.length === 0) {
-    return "none";
-  }
-  return files.map((file) => {
-    const lines = [`--- FILE: ${file.path}`, `Reason: ${file.reason}`];
-    if ("content" in file && normalizeText(file.content)) {
-      lines.push(file.content);
-    }
-    lines.push("--- END FILE");
-    return lines.join("\n");
-  }).join("\n\n");
-}
-function formatFileIndexSummary(fileIndexSummary) {
-  const normalizedSummary = normalizeText(fileIndexSummary);
-  if (!normalizedSummary) {
-    return "No file index summary provided.";
-  }
-  return normalizedSummary;
-}
-function formatGroundingRules() {
-  return formatBulletList([
-    "Use only the provided repo context, file index summary, important files, and generated docs included in the prompt.",
-    "Do not invent architecture, commands, dependencies, folders, workflows, conventions, integrations, or business behavior.",
-    "Treat source files and selected excerpts as stronger evidence than README/docs when they conflict.",
-    "When evidence is weak, use cautious language and preserve the uncertainty instead of guessing.",
-    "Prefer synthesized, practical guidance over evidence logs, file inventories, or generic filler."
-  ]);
-}
-function formatMarkdownOutputRules() {
-  return formatBulletList([
-    "Return Markdown only.",
-    "Use simple headings to make the document easy to scan.",
-    "Keep the document concise, practical, and human-readable.",
-    "Avoid decorative formatting, excessive bullets, and evidence-log style output.",
-    "Do not wrap the full answer in a code block.",
-    "Do not include JSON."
-  ]);
-}
-function formatKnowledgeDocContext(input) {
-  return [
-    "## Repo root",
-    input.repoContext.repoRoot,
-    "",
-    "## Generated at",
-    input.repoContext.generatedAt,
-    "",
-    "## Detected stack",
-    formatDetectedStack(input.repoContext.stack),
-    "",
-    "## Commands",
-    formatCommands(input.repoContext.commands),
-    "",
-    "## File index summary",
-    formatFileIndexSummary(input.fileIndexSummary),
-    "",
-    "## Important files",
-    formatImportantFiles(input.importantFiles)
-  ].join("\n");
-}
-function normalizeText(value) {
-  const normalizedValue = value?.trim();
-  if (!normalizedValue) {
-    return void 0;
-  }
-  return normalizedValue;
-}
+## Goal
 
-// src/core/llm/prompts/docs/agent-rules-prompt.ts
-function formatRepoContext(repoContext) {
-  return [
-    "## Repo root",
-    repoContext.repoRoot,
-    "",
-    "## Generated at",
-    repoContext.generatedAt,
-    "",
-    "## Detected stack",
-    formatDetectedStack(repoContext.stack),
-    "",
-    "## Commands",
-    formatCommands(repoContext.commands),
-    "",
-    "## Important files",
-    formatImportantFiles(repoContext.importantFiles)
-  ].join("\n");
-}
-function formatGeneratedDocs(generatedDocs) {
-  return [
-    `## ${KNOWLEDGE_DOC_SPECS.repoAnalysis.filename}`,
-    generatedDocs.repoAnalysis,
-    "",
-    `## ${KNOWLEDGE_DOC_SPECS.architecture.filename}`,
-    generatedDocs.architecture,
-    "",
-    `## ${KNOWLEDGE_DOC_SPECS.conventions.filename}`,
-    generatedDocs.conventions,
-    "",
-    `## ${KNOWLEDGE_DOC_SPECS.businessLogic.filename}`,
-    generatedDocs.businessLogic,
-    "",
-    `## ${KNOWLEDGE_DOC_SPECS.testing.filename}`,
-    generatedDocs.testing
-  ].join("\n");
-}
-function buildAgentRulesPrompt(input) {
-  const parsedInput = GenerateAgentRulesDocInputSchema.parse(input);
-  return {
-    system: [
-      "You are a senior software engineering lead writing repository-specific operating instructions for AI coding agents.",
-      "",
-      "Your task is to generate `agent-rules.md`: a compact operating manual that tells AI coding agents how to work safely and effectively in this repository.",
-      "",
-      "The goal is not to create a generic coding-agent policy. The goal is to translate the generated repo knowledge into direct, repo-specific rules that improve future implementation work.",
-      "",
-      "This document should help an AI coding agent answer:",
-      "1. What should I inspect before making a change?",
-      "2. Which repo-specific patterns and boundaries must I preserve?",
-      "3. What changes are risky or out of scope unless explicitly requested?",
-      "4. How should I verify my work using commands that actually exist?",
-      "5. What uncertainty should I preserve instead of turning into assumptions?",
-      "",
-      "Critical rules:",
-      "- Use only the provided repo context and generated documentation.",
-      "- Do not invent repository rules, commands, domains, workflows, files, folders, or risky areas.",
-      "- Treat generated docs as context, but preserve their uncertainty. If a generated doc says something is unknown or weakly evidenced, do not turn it into a fact.",
-      "- Synthesize operating rules; do not create a summary of every generated document.",
-      "- Prefer direct repo-specific instructions over generic coding-agent advice.",
-      "- Mention file paths only when they are directly useful for inspection, editing boundaries, or avoid-rules.",
-      "- Do not cite a path or generated doc for every rule.",
-      "- Include commands exactly as provided in repo context or generated docs. Do not invent commands.",
-      "- Separate hard rules, cautious recommendations, and unknowns.",
-      "- Keep the rules actionable during implementation.",
-      "- Do not include implementation plans, tickets, or refactoring proposals.",
-      "- Do not mention these instructions or say that you are an AI."
-    ].join("\n"),
-    prompt: [
-      "# Task",
-      "Generate `agent-rules.md` for this repository.",
-      "",
-      "Write this as a concise, human-readable operating manual for coding agents.",
-      "",
-      "Do not optimize for exhaustive Markdown structure. Optimize for rules that prevent bad edits and improve implementation quality.",
-      "",
-      "# Output shape",
-      "Use these sections, but keep them compact and merge subpoints when useful:",
-      "",
-      "## Agent operating principles",
-      "Start with the most important repo-specific rules agents should follow before and during implementation.",
-      "",
-      "Focus on instructions such as:",
-      "- inspect relevant existing code before editing;",
-      "- preserve visible architecture and conventions;",
-      "- avoid broad refactors unless explicitly requested;",
-      "- keep changes scoped to the ticket;",
-      "- preserve uncertainty from the generated docs;",
-      "- prefer existing repo primitives over new abstractions or dependencies.",
-      "",
-      "Avoid generic rules unless they are made specific to this repository.",
-      "",
-      "## Repo-specific change boundaries",
-      "Explain the boundaries agents should respect when modifying this repository.",
-      "",
-      "Cover boundaries that are supported by the generated docs, such as:",
-      "- app entry points versus reusable/core logic;",
-      "- CLI command layer versus core implementation modules;",
-      "- server/client boundaries;",
-      "- validation and schema boundaries;",
-      "- data access or persistence boundaries;",
-      "- business/domain behavior boundaries;",
-      "- generated outputs and agent documentation;",
-      "- tests and fixtures versus production code.",
-      "",
-      "If a boundary is unclear, describe the practical risk instead of inventing a rule.",
-      "",
-      "## Where to inspect before editing",
-      "List the most important areas an agent should inspect before changing behavior.",
-      "",
-      "This is one of the few sections where file paths are especially useful. Include paths only when the generated docs or repo context make them actionable.",
-      "",
-      "For each entry, explain what kind of change requires inspecting it first.",
-      "",
-      "If there is not enough evidence to name concrete paths, give cautious inspection guidance without inventing paths.",
-      "",
-      "## Coding rules to preserve",
-      "Summarize the conventions that matter most during implementation.",
-      "",
-      "Include TypeScript, component, validation, styling, data-access, server/client, naming, testing, and organization rules only when supported by the generated docs.",
-      "",
-      "Prefer direct instructions:",
-      "- Put new code where similar code already lives.",
-      "- Reuse existing schemas or validation patterns before adding new ones.",
-      "- Follow existing component composition and styling patterns.",
-      "- Keep server-only and client-side concerns separated when the repo shows that boundary.",
-      "",
-      "Do not turn weak conventions into hard rules.",
-      "",
-      "## Business logic and side-effect rules",
-      "Explain how agents should handle product/domain behavior and side effects.",
-      "",
-      "Focus on rules that prevent accidental behavior changes:",
-      "- preserve domain invariants and lifecycle behavior when visible;",
-      "- inspect business-logic or data-access modules before changing behavior;",
-      "- treat auth, billing, persistence, external services, background jobs, LLM calls, email, storage, analytics, telephony, or other side effects carefully when evidenced;",
-      "- avoid inventing product requirements from names alone.",
-      "",
-      "If business logic is weakly evidenced, say what agents should not assume.",
-      "",
-      "## Verification rules",
-      "List the commands and checks agents should use to verify changes.",
-      "",
-      "Use commands exactly as provided by repo context.",
-      "",
-      "Explain when to run each available command. If test evidence is weak, say so and give cautious verification guidance.",
-      "",
-      "Do not invent unavailable commands, CI behavior, coverage requirements, or QA processes.",
-      "",
-      "## Risky changes and avoid-rules",
-      "List repo-specific changes agents should avoid unless explicitly requested.",
-      "",
-      "Examples:",
-      "- broad architecture refactors;",
-      "- introducing new dependencies where existing primitives exist;",
-      "- changing central config or generated files casually;",
-      "- modifying domain, validation, persistence, auth, billing, or side-effect behavior without inspecting related modules;",
-      "- mixing server/client concerns where the repo shows a boundary;",
-      "- claiming tests or conventions exist when evidence is weak.",
-      "",
-      "Only include avoid-rules supported by generated docs or meaningful unknowns.",
-      "",
-      "## Task scoping rules",
-      "Define how agents should keep implementation work narrow.",
-      "",
-      "Include practical instructions:",
-      "- make the smallest change that satisfies the ticket;",
-      "- do not fix unrelated issues while implementing a task;",
-      "- do not rename, reorganize, or restyle unrelated code;",
-      "- do not add new tools or dependencies without explicit request;",
-      "- document assumptions when context is incomplete;",
-      "- ask for clarification or stop when a change depends on unknown product behavior.",
-      "",
-      "Make these rules specific to this repo where the generated docs provide enough context.",
-      "",
-      "## Unknowns agents must preserve",
-      "List uncertainties from the generated docs that future agents should not collapse into facts.",
-      "",
-      "Good entries:",
-      "- architecture boundaries are only partially visible;",
-      "- data flow or persistence ownership is unclear;",
-      "- product/domain workflows are weakly evidenced;",
-      "- testing conventions or coverage expectations are not visible;",
-      "- external integrations or side effects are suggested but not fully represented;",
-      "- team preferences are not documented.",
-      "",
-      "Phrase unknowns as practical warnings for future implementation work.",
-      "",
-      "# Style rules",
-      "- Write plain Markdown.",
-      "- Be compact and practical.",
-      "- Prefer short paragraphs and focused bullets.",
-      "- Avoid decorative Markdown.",
-      "- Avoid bold and italic unless essential.",
-      "- Do not summarize every generated doc.",
-      "- Do not include an evidence trail.",
-      "- Do not use `Rule:`, `Evidence:`, `Recommendation:`, and `Unknown:` labels for every bullet.",
-      "- Do not cite file paths or generated docs after every claim.",
-      "- Mention a path only when it helps the agent know where to inspect, edit carefully, or avoid changes.",
-      "- Mention commands exactly as they appear in repo context.",
-      "- Avoid generic coding-agent filler.",
-      "- Prefer fewer, stronger operating rules.",
-      "- Use cautious language when evidence is weak: `appears to`, `likely`, `unclear`, `not visible from the selected context`.",
-      "- Do not include code blocks unless absolutely necessary.",
-      "",
-      "# Grounding rules",
-      formatGroundingRules(),
-      "",
-      "# Output rules",
-      formatMarkdownOutputRules(),
-      "",
-      "# Repo context",
-      formatRepoContext(parsedInput.repoContext),
-      "",
-      "# Generated docs",
-      formatGeneratedDocs(parsedInput.generatedDocs),
-      ""
-    ].join("\n")
-  };
-}
+## Context
 
-// src/core/llm/client.ts
-import "dotenv/config";
-import OpenAI from "openai";
-import { zodTextFormat } from "openai/helpers/zod";
-import { z as z12 } from "zod";
-var DEFAULT_MODEL = "gpt-5.4-mini";
-var cachedClient = null;
-function getModel() {
-  return process.env.BRIDGER_MODEL || DEFAULT_MODEL;
-}
-function getOpenAIClient() {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      "Missing OPENAI_API_KEY. Add it to your .env file or environment."
-    );
-  }
-  cachedClient ??= new OpenAI({ apiKey });
-  return cachedClient;
-}
-async function generateText(input) {
-  const client = getOpenAIClient();
-  let response;
-  try {
-    response = await client.responses.create({
-      model: getModel(),
-      instructions: input.system,
-      input: input.prompt
-    });
-  } catch (error) {
-    throw new Error(
-      `OpenAI text generation failed: ${formatUnknownError(error)}`
-    );
-  }
-  const text = response.output_text;
-  if (!text || text.trim().length === 0) {
-    throw new Error("OpenAI returned an empty text response.");
-  }
-  return text;
-}
-function formatUnknownError(error) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
+## Implementation notes
 
-// src/core/doc-generator/generators/generate-knowledge-doc.ts
-async function generateKnowledgeDoc({
-  spec,
-  generationInput,
-  buildPrompt
-}) {
-  const { system, prompt } = buildPrompt(generationInput);
-  const markdown = await generateText({
-    system,
-    prompt
-  });
-  const trimmedMarkdown = markdown.trim();
-  if (trimmedMarkdown.length === 0) {
-    throw new Error(`${spec.displayName} generation returned empty Markdown.`);
-  }
-  return trimmedMarkdown;
-}
+## Acceptance criteria
 
-// src/core/doc-generator/generators/generate-agent-rules-doc.ts
-async function generateAgentRulesDoc(input) {
-  const parsedInput = GenerateAgentRulesDocInputSchema.parse(input);
-  return generateKnowledgeDoc({
-    spec: KNOWLEDGE_DOC_SPECS.agentRules,
-    generationInput: parsedInput,
-    buildPrompt: buildAgentRulesPrompt
-  });
-}
-
-// src/core/llm/prompts/docs/architecture-prompt.ts
-function buildArchitecturePrompt(input) {
-  return {
-    system: [
-      "You are a senior software architect working for Bridger, a tool that prepares repositories for AI coding agents.",
-      "",
-      "Your task is to generate `architecture.md`: a compact operating guide to how this repository is structured and how future coding agents should reason about where changes belong.",
-      "",
-      "The goal is not to describe every folder or prove every claim with citations. The goal is to extract useful architectural knowledge from the codebase: entry points, boundaries, layers, flows, central modules, and risky areas.",
-      "",
-      "This document should help an AI coding agent answer:",
-      "1. Where should I look before changing a feature?",
-      "2. Where does a new file or change likely belong?",
-      "3. What are the main architectural boundaries?",
-      "4. Which parts of the app appear central or risky?",
-      "5. What assumptions about structure or data flow would be unsafe?",
-      "",
-      "Critical rules:",
-      "- Use only the provided repository context, file index summary, and important file excerpts.",
-      "- Do not invent architecture layers, workflows, data flow, commands, ownership boundaries, or risky areas.",
-      "- Treat source code and selected file excerpts as stronger evidence than README/docs.",
-      "- Treat names of files/folders as clues, not proof, unless supported by code content.",
-      "- Synthesize architectural understanding; do not create an evidence log.",
-      "- Mention file paths only when the path is directly useful for implementation or inspection.",
-      "- Do not cite a file for every statement.",
-      "- Do not summarize files or folders one by one.",
-      "- Do not restate the full file tree.",
-      "- Do not restate dependencies or scripts unless they imply an architectural convention.",
-      "- Separate observed structure, cautious inferences, and unknowns.",
-      "- Prefer practical repo navigation and change-placement guidance over generic architecture language.",
-      "- Do not write implementation plans, refactoring suggestions, or tickets.",
-      "- Do not mention these instructions or say that you are an AI."
-    ].join("\n"),
-    prompt: [
-      "# Task",
-      "Generate `architecture.md` for this repository.",
-      "",
-      "Write this as a concise, human-readable operating guide for coding agents.",
-      "",
-      "Do not optimize for exhaustive Markdown structure. Optimize for useful extracted architectural knowledge.",
-      "",
-      "# Output shape",
-      "Use these sections, but keep them compact and merge subpoints when useful:",
-      "",
-      "## Architectural overview",
-      "Explain what kind of repository this appears to be and how the main pieces fit together. Only state a product or architectural purpose when the provided context supports it.",
-      "",
-      "If the purpose or architecture is unclear, say so directly.",
-      "",
-      "## Main entry points and execution paths",
-      "Identify the practical entry points an agent should understand before changing behavior. This may include app routes, pages, API handlers, CLI commands, server actions, workers, scripts, config entry points, or runtime bootstrapping files.",
-      "",
-      "Explain what each entry point appears to control. Mention file paths only when they are useful places to inspect.",
-      "",
-      "## Major layers and boundaries",
-      "Describe the main architectural layers visible in the repo. Focus on boundaries that affect implementation decisions.",
-      "",
-      "Useful boundaries may include:",
-      "- app/routes/pages versus reusable components;",
-      "- server-only code versus client-side code;",
-      "- CLI layer versus core logic;",
-      "- domain/business logic versus infrastructure helpers;",
-      "- validation/schema boundaries;",
-      "- data-access or persistence boundaries;",
-      "- generated output versus source code;",
-      "- tests/fixtures versus production code.",
-      "",
-      "If a boundary is weak or unclear, explain the practical risk for coding agents.",
-      "",
-      "## Where changes likely belong",
-      "Give practical guidance for placing future changes based on the observed structure.",
-      "",
-      "Answer questions like:",
-      "- Where would a UI/component change likely go?",
-      "- Where would domain or business behavior likely go?",
-      "- Where would validation or schema changes likely go?",
-      "- Where would CLI command behavior likely go?",
-      "- Where would tests or fixtures likely go?",
-      "- Which folders should be inspected before touching central behavior?",
-      "",
-      "Do not invent folders that are not present. If placement is unclear, say what an agent should inspect first.",
-      "",
-      "## Data and control flow",
-      "Describe visible flow through the application only where it is supported by the context. Focus on how data or control appears to move between entry points, core modules, validation, persistence, generated outputs, or external calls.",
-      "",
-      "If flow is only partially visible, describe the visible part and mark the rest as unknown.",
-      "",
-      "Do not infer a complete end-to-end flow from naming alone.",
-      "",
-      "## Commands and verification hooks",
-      "Summarize available commands that matter for coding agents: install, dev, build, lint, typecheck, test, and format.",
-      "",
-      "Use commands exactly as provided by repo context. If a command category is missing, say it was not detected.",
-      "",
-      "Keep this section short. The purpose is to help agents verify changes, not to document package scripts exhaustively.",
-      "",
-      "## Central and risky areas",
-      "Identify areas where agents should be cautious because they appear central, cross-cutting, generated, configuration-heavy, persistence-related, or connected to external side effects.",
-      "",
-      "For each risky area, explain:",
-      "- why careless changes could be costly;",
-      "- what kind of changes should be scoped carefully;",
-      "- what an agent should inspect before editing.",
-      "",
-      "Mention paths only when they are actionable.",
-      "",
-      "## Architectural unknowns",
-      "List gaps in architectural evidence that future coding agents should not assume.",
-      "",
-      "Good unknowns:",
-      "- data flow is not fully visible from selected files;",
-      "- persistence boundaries are unclear;",
-      "- server/client ownership is only partially evidenced;",
-      "- tests or verification flows are not visible;",
-      "- generated files or framework-managed files may exist but are not clearly documented;",
-      "- external side effects are suggested but not represented in selected context.",
-      "",
-      "Phrase unknowns as practical warnings for future implementation work.",
-      "",
-      "# Style rules",
-      "- Write plain Markdown.",
-      "- Be compact and practical.",
-      "- Prefer short paragraphs and focused bullets.",
-      "- Avoid decorative Markdown.",
-      "- Avoid bold and italic unless essential.",
-      "- Do not include an evidence trail.",
-      "- Do not use `Observed:`, `Evidence:`, `Assumption:`, `Unknown:`, and `Confidence:` labels for every bullet.",
-      "- Do not cite file paths after every claim.",
-      "- Mention a path only when it helps the agent know where to inspect, place code, copy a pattern, or avoid a risky edit.",
-      "- Avoid generic architecture filler.",
-      "- Avoid long lists of folders with shallow descriptions.",
-      "- Prefer fewer, stronger architectural insights.",
-      "- Use cautious language when evidence is weak: `appears to`, `likely`, `unclear`, `not visible from the selected context`.",
-      "- Do not include code blocks unless absolutely necessary.",
-      "",
-      "# Grounding rules",
-      formatGroundingRules(),
-      "",
-      "# Output rules",
-      formatMarkdownOutputRules(),
-      "",
-      "# Repo context",
-      formatKnowledgeDocContext(input)
-    ].join("\n")
-  };
-}
-
-// src/core/context-builder/file-index-summary.ts
-var DEFAULT_MAX_PATHS = 120;
-var DEFAULT_MAX_TOP_FOLDERS = 30;
-var DEFAULT_MAX_TAGS = 30;
-var DEFAULT_MAX_TAGGED_PATHS_PER_TAG = 8;
-var TAGS_TO_SHOW = [
-  "app",
-  "route",
-  "components",
-  "lib",
-  "server",
-  "database",
-  "documentation",
-  "config",
-  "test"
-];
-function summarizeFileIndexForPrompt(fileIndex, options) {
-  const maxPaths = options?.maxPaths ?? DEFAULT_MAX_PATHS;
-  const maxTopFolders = options?.maxTopFolders ?? DEFAULT_MAX_TOP_FOLDERS;
-  const maxTags = options?.maxTags ?? DEFAULT_MAX_TAGS;
-  const maxTaggedPathsPerTag = options?.maxTaggedPathsPerTag ?? DEFAULT_MAX_TAGGED_PATHS_PER_TAG;
-  const topFolders = summarizeTopFolders(fileIndex.files, maxTopFolders);
-  const taggedAreas = summarizeTaggedAreas(fileIndex.files, maxTags);
-  const representativeFiles = [...fileIndex.files].sort(compareRepresentativeFiles).slice(0, maxPaths);
-  const filesByTag = summarizeFilesByTag(fileIndex.files, maxTaggedPathsPerTag);
-  return [
-    `Total indexed files: ${fileIndex.files.length}`,
-    "",
-    "Top-level folders:",
-    ...formatCountLines(topFolders),
-    "",
-    "Detected tagged areas:",
-    ...formatCountLines(taggedAreas),
-    "",
-    "Representative paths:",
-    ...formatRepresentativeFiles(representativeFiles),
-    "",
-    "Representative paths by tag:",
-    ...formatFilesByTag(filesByTag)
-  ].join("\n");
-}
-function summarizeTopFolders(files, maxTopFolders) {
-  const counts = /* @__PURE__ */ new Map();
-  for (const file of files) {
-    const folder = getTopFolder(file.path);
-    counts.set(folder, (counts.get(folder) ?? 0) + 1);
-  }
-  return [...counts.entries()].map(([name, count]) => ({ name, count })).sort(compareCountAndName).slice(0, maxTopFolders);
-}
-function summarizeTaggedAreas(files, maxTags) {
-  const counts = /* @__PURE__ */ new Map();
-  for (const file of files) {
-    for (const tag of file.tags) {
-      counts.set(tag, (counts.get(tag) ?? 0) + 1);
-    }
-  }
-  return [...counts.entries()].map(([name, count]) => ({ name, count })).sort(compareCountAndName).slice(0, maxTags);
-}
-function summarizeFilesByTag(files, maxTaggedPathsPerTag) {
-  const result = [];
-  for (const tag of TAGS_TO_SHOW) {
-    const taggedFiles = files.filter((file) => file.tags.includes(tag)).sort(compareRepresentativeFiles).slice(0, maxTaggedPathsPerTag);
-    if (taggedFiles.length === 0) {
-      continue;
-    }
-    result.push({
-      tag,
-      paths: taggedFiles
-    });
-  }
-  return result;
-}
-function compareCountAndName(left, right) {
-  if (left.count !== right.count) {
-    return right.count - left.count;
-  }
-  return compareStrings(left.name, right.name);
-}
-function compareRepresentativeFiles(left, right) {
-  const scoreDifference = scoreFileForPrompt(right) - scoreFileForPrompt(left);
-  if (scoreDifference !== 0) {
-    return scoreDifference;
-  }
-  return compareStrings(left.path, right.path);
-}
-function compareStrings(left, right) {
-  if (left < right) {
-    return -1;
-  }
-  if (left > right) {
-    return 1;
-  }
-  return 0;
-}
-function formatCountLines(items) {
-  if (items.length === 0) {
-    return ["- none"];
-  }
-  return items.map((item) => `- ${item.name} \u2014 ${item.count} files`);
-}
-function formatRepresentativeFiles(files) {
-  if (files.length === 0) {
-    return ["- none"];
-  }
-  return files.map((file) => `- ${formatFileIndexEntry(file)}`);
-}
-function formatFilesByTag(taggedFiles) {
-  if (taggedFiles.length === 0) {
-    return ["- none"];
-  }
-  const lines = [];
-  for (const entry of taggedFiles) {
-    lines.push(`${entry.tag}:`);
-    for (const file of entry.paths) {
-      lines.push(`- ${file.path}`);
-    }
-  }
-  return lines;
-}
-function getTopFolder(filePath) {
-  const separatorIndex = filePath.indexOf("/");
-  if (separatorIndex === -1) {
-    return ".";
-  }
-  return `${filePath.slice(0, separatorIndex + 1)}`;
-}
-function formatFileIndexEntry(file) {
-  const parts = [file.path];
-  if (file.tags.length > 0) {
-    parts.push(`[${file.tags.join(", ")}]`);
-  }
-  if (file.reason) {
-    parts.push(`\u2014 ${file.reason}`);
-  }
-  return parts.join(" ");
-}
-function scoreFileForPrompt(file) {
-  let score = 0;
-  for (const tag of file.tags) {
-    score += getTagScore(tag);
-  }
-  if (file.path.includes("/schema.")) {
-    score += 40;
-  }
-  if (file.path.includes("/schemas/")) {
-    score += 35;
-  }
-  if (file.path.includes("/types.")) {
-    score += 25;
-  }
-  if (file.path.includes("/models/")) {
-    score += 25;
-  }
-  if (file.path.endsWith("/page.tsx")) {
-    score += 35;
-  }
-  if (file.path.endsWith("/layout.tsx")) {
-    score += 35;
-  }
-  if (file.path.endsWith("/route.ts")) {
-    score += 35;
-  }
-  if (file.path.endsWith("schema.prisma")) {
-    score += 50;
-  }
-  return score;
-}
-function getTagScore(tag) {
-  switch (tag) {
-    case "important":
-      return 100;
-    case "readme":
-    case "agent-rules":
-      return 90;
-    case "package":
-      return 70;
-    case "app":
-    case "route":
-      return 60;
-    case "database":
-      return 55;
-    case "server":
-    case "components":
-    case "lib":
-      return 45;
-    case "documentation":
-    case "test":
-      return 35;
-    case "config":
-      return 30;
-    default:
-      return 0;
-  }
-}
-
-// src/core/doc-generator/knowledge-doc-input.ts
-function buildKnowledgeDocGenerationInput(input) {
-  return {
-    repoContext: input.repoContext,
-    fileIndex: input.fileIndex,
-    fileIndexSummary: summarizeFileIndexForPrompt(input.fileIndex),
-    importantFiles: input.importantFiles
-  };
-}
-
-// src/core/models/repo-knowledge-doc.ts
-import { z as z13 } from "zod";
-var GenerateRepoKnowledgeDocInputSchema = z13.object({
-  repoContext: RepoContextSchema,
-  fileIndex: FileIndexSchema,
-  importantFiles: ImportantFilesSchema
-});
-var RepoKnowledgePromptSchema = z13.object({
-  system: z13.string(),
-  prompt: z13.string()
-});
-
-// src/core/doc-generator/generators/generate-architecture-doc.ts
-async function generateArchitectureDoc(input) {
-  const parsedInput = GenerateRepoKnowledgeDocInputSchema.parse(input);
-  return generateKnowledgeDoc({
-    spec: KNOWLEDGE_DOC_SPECS.architecture,
-    generationInput: buildKnowledgeDocGenerationInput(parsedInput),
-    buildPrompt: buildArchitecturePrompt
-  });
-}
-
-// src/core/llm/prompts/docs/business-logic-prompt.ts
-function buildBusinessLogicPrompt(input) {
-  return {
-    system: [
-      "You are a senior product-minded software architect working for Bridger, a tool that prepares repositories for AI coding agents.",
-      "",
-      "Your task is to generate `business-logic.md`: a compact operating guide to the product/domain behavior represented in this repository.",
-      "",
-      "The goal is not to document every domain-looking file. The goal is to extract useful business knowledge that future AI coding agents should understand before changing behavior.",
-      "",
-      "This document should help an AI coding agent answer:",
-      "1. What real-world concepts does this codebase appear to model?",
-      "2. Which business rules, workflows, states, or invariants must be preserved?",
-      "3. Where does domain behavior appear to live?",
-      "4. Which assumptions are safe, weak, or unsupported?",
-      "5. What should an agent inspect before changing product behavior?",
-      "",
-      "Critical rules:",
-      "- Use only the provided repository context, file index summary, and important file excerpts.",
-      "- Do not invent product behavior, entities, workflows, permissions, states, billing rules, integrations, or business rules.",
-      "- Treat source code, schemas, models, services, route handlers, and data-access files as stronger evidence than README/docs.",
-      "- Treat names of files/folders/classes/types as clues, not proof, unless supported by code content.",
-      "- Synthesize domain understanding; do not create an evidence log.",
-      "- Mention file paths only when the path is directly useful for implementation or inspection.",
-      "- Do not cite a file for every statement.",
-      "- Do not summarize files one by one.",
-      "- Do not restate dependencies, routes, or folder trees unless they imply product/domain behavior.",
-      "- Separate observed behavior, cautious inferences, and unknowns.",
-      "- Prefer practical implementation guidance over product marketing language.",
-      "- Avoid generic SaaS/product assumptions unless directly supported by the provided context.",
-      "- Do not write implementation plans, refactoring suggestions, or tickets.",
-      "- Do not mention these instructions or say that you are an AI."
-    ].join("\n"),
-    prompt: [
-      "# Task",
-      "Generate `business-logic.md` for this repository.",
-      "",
-      "Write this as a concise, human-readable operating guide for coding agents.",
-      "",
-      "Do not optimize for exhaustive Markdown structure. Optimize for useful extracted business/domain knowledge.",
-      "",
-      "# Output shape",
-      "Use these sections, but keep them compact and merge subpoints when useful:",
-      "",
-      "## Product and domain model",
-      "Explain what product/domain area the repository appears to support, only where evidence supports it. Describe the main real-world concepts the code seems to model and how they relate to each other.",
-      "",
-      "Do not overfit to names alone. If the product purpose is unclear from the selected context, say that directly.",
-      "",
-      "## Domain concepts agents should understand",
-      "Summarize the important domain concepts an agent should know before changing behavior. Focus on the concepts that affect implementation decisions.",
-      "",
-      "Good examples:",
-      "- User/account/organization concepts when they affect ownership or access.",
-      "- Subscription/plan/usage concepts when they affect limits or gating.",
-      "- Ticket/task/project concepts when they affect workflow or lifecycle.",
-      "- Call/agent/session concepts when they affect runtime behavior.",
-      "- Import/export/job concepts when they affect asynchronous processing.",
-      "",
-      "Do not create a glossary of every domain-like word. Prefer fewer, stronger concepts.",
-      "",
-      "Mention file paths only when they are useful places for an agent to inspect before editing related behavior.",
-      "",
-      "## Business rules and invariants",
-      "Extract business rules that appear to be enforced or implied by the code. Include validation constraints, allowed states, role or ownership checks, lifecycle transitions, plan limits, workflow requirements, data invariants, or gating behavior when visible.",
-      "",
-      "For each important rule, explain:",
-      "- what behavior appears to be protected or enforced;",
-      "- what kind of change could accidentally break it;",
-      "- whether the evidence is strong or weak.",
-      "",
-      "Do not infer rules from naming alone. If a rule is only weakly evidenced, state that it is weak.",
-      "",
-      "## Workflows and lifecycle behavior",
-      "Describe workflows that are visible from the selected context. Focus on behavior an agent must preserve when changing code.",
-      "",
-      "Examples include onboarding, authentication, checkout, billing, ticket enrichment, repo scanning, document generation, call processing, import/export flows, background jobs, or approval flows.",
-      "",
-      "Only describe steps that are supported by the context. If a workflow is partially visible, explain the visible part and what remains unknown.",
-      "",
-      "## Data ownership and persistence boundaries",
-      "Explain where domain data appears to be stored, validated, accessed, transformed, or owned. Identify likely persistence boundaries and data-access patterns only when visible.",
-      "",
-      "Answer practical questions like:",
-      "- Which modules appear to own important domain objects?",
-      "- Where should an agent inspect before changing persistence-related behavior?",
-      "- Are there schemas, models, repositories, services, server actions, API handlers, or database folders that appear central?",
-      "- Are there ownership or tenancy boundaries that must be preserved?",
-      "",
-      "If persistence or data ownership is not visible in the selected context, say so.",
-      "",
-      "## External integrations and side effects",
-      "Identify external systems only when explicitly evidenced by imports, config, client files, SDK usage, environment names, docs, or route handlers.",
-      "",
-      "Explain what side effects agents should be careful with, such as payments, email, auth, file storage, background jobs, LLM calls, analytics, telephony, or third-party APIs.",
-      "",
-      "Do not infer integrations from dependencies alone unless source usage or configuration makes the integration meaningful.",
-      "",
-      "## Safe assumptions, weak assumptions, and non-assumptions",
-      "Separate what an agent can reasonably rely on from what it should not assume.",
-      "",
-      "Use this section to prevent hallucinated product behavior.",
-      "",
-      "Include:",
-      "- Safe assumptions: strongly supported by code/context.",
-      "- Weak assumptions: plausible but incomplete.",
-      "- Non-assumptions: things future agents must not assume without inspecting more code or asking the user.",
-      "",
-      "Keep this practical. Avoid broad labels like `this is a SaaS` unless the context strongly supports them.",
-      "",
-      "## What agents should inspect before changing behavior",
-      "List the most important areas, modules, or files an agent should inspect before modifying product/domain behavior.",
-      "",
-      "This is the main place to mention file paths. Only include paths that are actionable.",
-      "",
-      "For each entry, explain what kind of behavior it appears to control or why it matters.",
-      "",
-      "## Unknowns and risks",
-      "List product/domain facts that are unclear from the provided context but matter for implementation.",
-      "",
-      "Good unknowns:",
-      "- lifecycle states are referenced but not fully visible;",
-      "- permission or ownership rules are unclear;",
-      "- validation appears partial or distributed;",
-      "- external integration behavior is visible but error handling is not;",
-      "- workflow order is not fully evidenced;",
-      "- background jobs or side effects may exist but are not represented in selected files.",
-      "",
-      "Phrase unknowns as practical warnings for coding agents.",
-      "",
-      "# Style rules",
-      "- Write plain Markdown.",
-      "- Be compact and practical.",
-      "- Prefer short paragraphs and focused bullets.",
-      "- Avoid decorative Markdown.",
-      "- Avoid bold and italic unless essential.",
-      "- Do not include an evidence trail.",
-      "- Do not use `Observed:`, `Evidence:`, `Assumption:`, `Unknown:`, and `Confidence:` labels for every bullet.",
-      "- Do not cite file paths after every claim.",
-      "- Mention a path only when it helps the agent know where to inspect, copy, or avoid.",
-      "- Avoid generic product filler.",
-      "- Avoid long lists of weak concepts.",
-      "- Prefer fewer, stronger domain insights.",
-      "- Use cautious language when evidence is weak: `appears to`, `likely`, `unclear`, `not visible from the selected context`.",
-      "- Do not include code blocks unless absolutely necessary.",
-      "",
-      "# Grounding rules",
-      formatGroundingRules(),
-      "",
-      "# Output rules",
-      formatMarkdownOutputRules(),
-      "",
-      "# Repo context",
-      formatKnowledgeDocContext(input)
-    ].join("\n")
-  };
-}
-
-// src/core/doc-generator/generators/generate-business-logic-doc.ts
-async function generateBusinessLogicDoc(input) {
-  const parsedInput = GenerateRepoKnowledgeDocInputSchema.parse(input);
-  return generateKnowledgeDoc({
-    spec: KNOWLEDGE_DOC_SPECS.businessLogic,
-    generationInput: buildKnowledgeDocGenerationInput(parsedInput),
-    buildPrompt: buildBusinessLogicPrompt
-  });
-}
-
-// src/core/llm/prompts/docs/conventions-prompt.ts
-function buildConventionsPrompt(input) {
-  return {
-    system: [
-      "You are a senior software engineer and codebase conventions analyst working for Bridger, a tool that prepares repositories for AI coding agents.",
-      "",
-      "Your task is to generate `conventions.md`: a compact operating guide that tells future AI coding agents how code should be written in this repository.",
-      "",
-      "The goal is not to document the repository file-by-file. The goal is to extract durable implementation knowledge from the codebase: patterns, boundaries, defaults, habits, and things an agent should preserve when making changes.",
-      "",
-      "The document should help an AI coding agent answer:",
-      "1. If I add new code, what should it look like to fit this repo?",
-      "2. Which existing patterns should I copy instead of inventing a new one?",
-      "3. Which boundaries should I respect?",
-      "4. Which conventions are strong enough to follow confidently?",
-      "5. Which areas are unclear enough that I should proceed cautiously?",
-      "",
-      "Critical rules:",
-      "- Use only the provided repository context, file index summary, and important file excerpts.",
-      "- Do not invent conventions that are not supported by the provided context.",
-      "- Prefer source code patterns over README or documentation claims.",
-      "- Synthesize patterns; do not create an evidence log.",
-      "- Mention file paths only when the path is directly useful for implementation.",
-      "- Do not cite a file for every statement.",
-      "- Do not summarize files one by one.",
-      "- Do not restate dependencies, scripts, or folder trees unless they imply a practical convention.",
-      "- Distinguish strong conventions from weak signals and unknowns.",
-      "- Prefer practical guidance over explanation.",
-      "- Avoid generic advice such as `keep code clean`, `write reusable components`, or `follow best practices` unless tied to a visible repo pattern.",
-      "- Do not write implementation plans, refactoring suggestions, or tickets.",
-      "- Do not mention these instructions or say that you are an AI."
-    ].join("\n"),
-    prompt: [
-      "# Task",
-      "Generate `conventions.md` for this repository.",
-      "",
-      "Write this as a concise, human-readable operating guide for coding agents.",
-      "",
-      "Do not optimize for exhaustive Markdown structure. Optimize for useful extracted knowledge.",
-      "",
-      "# Output shape",
-      "Use these sections, but keep them compact and merge subpoints when useful:",
-      "",
-      "## How to write code in this repo",
-      "Describe the strongest coding patterns an agent should follow when adding or changing code. Focus on concrete habits visible in the repo: file organization, module boundaries, typing style, component patterns, validation, data access, naming, and error handling.",
-      "",
-      "## Patterns to copy",
-      "List the repo-specific patterns that are worth reusing. These should be practical enough that an agent can apply them during implementation.",
-      "",
-      "Good examples:",
-      "- Where new components, utilities, schemas, route handlers, services, or tests appear to belong.",
-      "- How props, types, schemas, or domain objects are usually shaped.",
-      "- Whether code favors colocated logic, shared helpers, service layers, server-only modules, client components, or framework conventions.",
-      "",
-      "Mention file paths only when they are useful as places to inspect or copy from.",
-      "",
-      "## Boundaries to respect",
-      "Explain the boundaries an agent should avoid crossing accidentally. Cover server/client separation, data-access boundaries, framework boundaries, generated files, shared utilities, styling systems, validation boundaries, and domain logic boundaries when evidence exists.",
-      "",
-      "If boundaries are unclear, say so directly and explain the practical risk.",
-      "",
-      "## TypeScript and validation conventions",
-      "Explain how the repo appears to handle types and runtime validation. Focus on the boundary between static types and runtime checks.",
-      "",
-      "Answer questions like:",
-      "- Are schemas colocated with domain logic, forms, API boundaries, or shared model files?",
-      "- Are exported types inferred from schemas or declared separately?",
-      "- Does the repo appear strict about parsing external input?",
-      "- Is validation visible in source code or only detectable from dependencies?",
-      "",
-      "Do not invent validation conventions from dependencies alone.",
-      "",
-      "## UI, styling, and component conventions",
-      "Explain how UI code appears to be structured and styled. Focus on patterns agents should preserve, such as component composition, styling approach, client/server component usage, design primitives, Tailwind/shadcn usage, class helpers, and layout conventions.",
-      "",
-      "Do not list every component. Extract the style of component work.",
-      "",
-      "## Data and business logic conventions",
-      "Explain where data access and product/domain behavior appear to live. Identify whether the repo favors services, API handlers, server actions, repositories, domain modules, database clients, or framework-native organization.",
-      "",
-      "If there is not enough evidence, state what is unknown and what an agent should inspect before changing data-related behavior.",
-      "",
-      "## Testing and verification conventions",
-      "Explain what can be inferred about testing style from the repo. Include visible test placement, naming, framework usage, fixtures, integration/component/unit patterns, or lack of evidence.",
-      "",
-      "Do not invent testing conventions from scripts alone. If scripts exist but tests are not visible, say that clearly.",
-      "",
-      "## Naming and organization conventions",
-      "Summarize naming patterns for files, folders, components, hooks, utilities, schemas, services, tests, and domain objects when visible.",
-      "",
-      "Focus on reusable naming principles, not examples for their own sake.",
-      "",
-      "## What agents should avoid",
-      "List repo-specific mistakes that would likely create inconsistent code.",
-      "",
-      "Examples:",
-      "- Introducing a second styling system.",
-      "- Adding dependencies where the repo already has an established primitive.",
-      "- Bypassing validation or data-access boundaries.",
-      "- Mixing client and server concerns.",
-      "- Creating new architectural layers that the repo does not use.",
-      "- Editing generated or framework-managed files without explicit scope.",
-      "",
-      "Only include avoid-rules supported by observed patterns or meaningful unknowns.",
-      "",
-      "## Unknowns and weak signals",
-      "List conventions that are unclear from the provided context. Phrase them as practical warnings for coding agents.",
-      "",
-      "Good unknowns:",
-      "- Testing style is unclear because no representative tests were selected.",
-      "- Data access boundaries are weakly evidenced; inspect relevant API/server modules before changing persistence behavior.",
-      "- Validation appears in dependencies but source-level schema usage is not visible in the selected context.",
-      "",
-      "# Style rules",
-      "- Write plain Markdown.",
-      "- Be compact and practical.",
-      "- Prefer short paragraphs and focused bullets.",
-      "- Avoid decorative Markdown.",
-      "- Avoid bold and italic unless essential.",
-      "- Do not include an evidence trail.",
-      "- Do not use `Observed:`, `Evidence:`, and `Recommendation:` labels for every bullet.",
-      "- Do not cite file paths after every claim.",
-      "- Mention a path only when it helps the agent know where to inspect, copy, or avoid.",
-      "- Avoid generic filler.",
-      "- Avoid long lists of weak observations.",
-      "- Prefer fewer, stronger conventions.",
-      "- Use cautious language when evidence is weak: `appears to`, `likely`, `unclear`, `not visible from the selected context`.",
-      "- Do not include code blocks unless absolutely necessary.",
-      "",
-      "# Grounding rules",
-      formatGroundingRules(),
-      "",
-      "# Output rules",
-      formatMarkdownOutputRules(),
-      "",
-      "# Repo context",
-      formatKnowledgeDocContext(input)
-    ].join("\n")
-  };
-}
-
-// src/core/doc-generator/generators/generate-conventions-doc.ts
-async function generateConventionsDoc(input) {
-  const parsedInput = GenerateRepoKnowledgeDocInputSchema.parse(input);
-  return generateKnowledgeDoc({
-    spec: KNOWLEDGE_DOC_SPECS.conventions,
-    generationInput: buildKnowledgeDocGenerationInput(parsedInput),
-    buildPrompt: buildConventionsPrompt
-  });
-}
-
-// src/core/llm/prompts/docs/repo-analysis-prompt.ts
-function buildRepoAnalysisPrompt(input) {
-  return {
-    system: [
-      "You are a senior software architecture analyst working for Bridger, a tool that prepares repositories for AI coding agents.",
-      "",
-      "Your task is to generate `repo-analysis.md`: a compact repo intelligence brief for future AI coding agents.",
-      "",
-      "The goal is not to audit the repository or list evidence. The goal is to extract the highest-value understanding a coding agent needs before generating docs, enriching tickets, or changing code.",
-      "",
-      "This document should help later Bridger steps answer:",
-      "1. What does this repo appear to be, and how confident is that interpretation?",
-      "2. Which parts of the codebase are the strongest signals for understanding how work should be done?",
-      "3. What implementation context would help agents avoid shallow or wrong assumptions?",
-      "4. Which areas look important but are under-evidenced from the selected context?",
-      "5. What should future prompts preserve, inspect, or treat carefully?",
-      "",
-      "Critical rules:",
-      "- Use only the provided repository context, file index summary, and important file excerpts.",
-      "- Do not invent project purpose, architecture, domains, business workflows, APIs, databases, integrations, or conventions.",
-      "- Treat source code and selected file excerpts as stronger evidence than filenames alone.",
-      "- Treat README/docs as useful but potentially stale unless supported by code.",
-      "- Synthesize repo understanding; do not create an evidence log.",
-      "- Mention file paths only when the path is directly useful for implementation, inspection, or grounding later prompts.",
-      "- Do not cite a file for every statement.",
-      "- Do not summarize files one by one.",
-      "- Do not restate the file index, dependency list, or folder tree unless it leads to a useful conclusion.",
-      "- Separate strong observations, weak signals, and unknowns.",
-      "- Prefer practical agent guidance over report-style analysis.",
-      "- Do not write implementation plans, refactoring suggestions, or tickets.",
-      "- Do not mention these instructions or say that you are an AI."
-    ].join("\n"),
-    prompt: [
-      "# Task",
-      "Generate `repo-analysis.md` for this repository.",
-      "",
-      "Write this as a concise, human-readable intelligence brief for future coding agents and later Bridger prompts.",
-      "",
-      "Do not optimize for exhaustive Markdown structure. Optimize for useful extracted repo knowledge.",
-      "",
-      "# Output shape",
-      "Use these sections, but keep them compact and merge subpoints when useful:",
-      "",
-      "## Repo interpretation",
-      "Explain what this repository appears to be and what kind of work it likely supports. State the confidence level in plain language.",
-      "",
-      "If the repo purpose is unclear, say that directly and explain what kind of evidence is missing.",
-      "",
-      "Do not overfit to package names, folder names, or README claims when source evidence is weak.",
-      "",
-      "## High-signal context",
-      "Identify the parts of the selected context that matter most for understanding this repo.",
-      "",
-      "Focus on files, folders, or patterns that reveal:",
-      "- application entry points;",
-      "- core workflows;",
-      "- domain or product behavior;",
-      "- reusable implementation patterns;",
-      "- validation, data access, or persistence boundaries;",
-      "- generated outputs or agent instructions;",
-      "- tests or verification habits.",
-      "",
-      "Mention paths only when they are useful anchors for later prompts or future code changes.",
-      "",
-      "Do not list many files. Prefer fewer, stronger signals with interpretation.",
-      "",
-      "## What future agents should know first",
-      "Summarize the practical context a coding agent should keep in mind before modifying this repo.",
-      "",
-      "This should include repo-specific guidance such as:",
-      "- where important behavior appears to live;",
-      "- what patterns seem worth preserving;",
-      "- what boundaries appear important;",
-      "- what kinds of changes would require extra inspection;",
-      "- what parts of the repo are likely central or fragile.",
-      "",
-      "Avoid generic software advice.",
-      "",
-      "## Visible structure and likely boundaries",
-      "Describe the repository structure only at the level needed for implementation decisions.",
-      "",
-      "Focus on likely boundaries between app code, core/domain logic, CLI or API layers, components, shared utilities, validation, persistence, tests, docs, generated files, and configuration.",
-      "",
-      "Do not claim a formal architecture unless the evidence strongly supports it.",
-      "",
-      "If boundaries are weak or ambiguous, explain the practical risk for coding agents.",
-      "",
-      "## Product and domain signals",
-      "Identify product/domain concepts only when supported by selected context.",
-      "",
-      "Explain what appears meaningful for implementation, not every domain-like word.",
-      "",
-      "If no useful domain model is visible, say so. Do not invent one from dependencies or naming alone.",
-      "",
-      "## Stack and verification signals",
-      "Summarize only the stack details that matter for future agents: framework, language, package manager, styling, validation, database/persistence, and testing signals.",
-      "",
-      "Also summarize available verification commands when present.",
-      "",
-      "Keep this compact. Do not turn it into a dependency inventory.",
-      "",
-      "## Risk areas and false assumptions",
-      "List repo-specific risks or false assumptions future agents should avoid.",
-      "",
-      "Examples:",
-      "- assuming a domain workflow is complete when only one step is visible;",
-      "- assuming a database or validation convention from dependencies alone;",
-      "- treating generated files as source files;",
-      "- changing central config, prompt, schema, auth, billing, persistence, or side-effect code without inspecting related modules;",
-      "- assuming tests exist or cover behavior when only scripts are visible.",
-      "",
-      "Only include risks supported by selected context or meaningful absence of evidence.",
-      "",
-      "## What needs more context",
-      "List the most important missing or weakly evidenced areas that later prompts and coding agents should not assume.",
-      "",
-      "Good entries:",
-      "- product purpose is only partially evidenced;",
-      "- core workflow is visible but not end-to-end;",
-      "- persistence layer is not represented in selected files;",
-      "- testing style is unclear;",
-      "- server/client boundaries are partially visible but not conclusive;",
-      "- external integrations are suggested but usage is not selected.",
-      "",
-      "Phrase these as practical warnings, not generic unknowns.",
-      "",
-      "# Style rules",
-      "- Write plain Markdown.",
-      "- Be compact and practical.",
-      "- Prefer short paragraphs and focused bullets.",
-      "- Avoid decorative Markdown.",
-      "- Avoid bold and italic unless essential.",
-      "- Do not include an evidence trail.",
-      "- Do not use `Observed:`, `Evidence:`, `Assumption:`, and `Unknown:` labels for every bullet.",
-      "- Do not cite file paths after every claim.",
-      "- Mention a path only when it helps a future agent know where to inspect, ground a later prompt, place code, or avoid a risky edit.",
-      "- Avoid generic repo-analysis filler.",
-      "- Avoid long lists of files or folders.",
-      "- Prefer fewer, stronger insights.",
-      "- Use cautious language when evidence is weak: `appears to`, `likely`, `unclear`, `not visible from the selected context`.",
-      "- Do not include code blocks unless absolutely necessary.",
-      "",
-      "# Grounding rules",
-      formatGroundingRules(),
-      "",
-      "# Output rules",
-      formatMarkdownOutputRules(),
-      "",
-      "# Repo context",
-      formatKnowledgeDocContext(input)
-    ].join("\n")
-  };
-}
-
-// src/core/doc-generator/generators/generate-repo-analysis-doc.ts
-async function generateRepoAnalysisDoc(input) {
-  const parsedInput = GenerateRepoKnowledgeDocInputSchema.parse(input);
-  return generateKnowledgeDoc({
-    spec: KNOWLEDGE_DOC_SPECS.repoAnalysis,
-    generationInput: buildKnowledgeDocGenerationInput(parsedInput),
-    buildPrompt: buildRepoAnalysisPrompt
-  });
-}
-
-// src/core/llm/prompts/docs/testing-prompt.ts
-function buildTestingPrompt(input) {
-  return {
-    system: [
-      "You are a senior software engineer and testing strategy analyst working for Bridger, a tool that prepares repositories for AI coding agents.",
-      "",
-      "Your task is to generate `testing.md`: a compact testing and verification guide for future AI coding agents working in this repository.",
-      "",
-      "The goal is not to list every possible test type or produce a generic QA strategy. The goal is to extract repo-specific verification knowledge: what should be tested, how changes should be checked, which commands exist, and where testing evidence is weak.",
-      "",
-      "This document should help an AI coding agent answer:",
-      "1. What should I test when changing this repo?",
-      "2. Which verification commands can I actually run?",
-      "3. When should I add automated tests versus rely on manual checks?",
-      "4. Which testing patterns are visible enough to copy?",
-      "5. Which testing assumptions would be unsafe?",
-      "",
-      "Critical rules:",
-      "- Use only the provided repository context, file index summary, and important file excerpts.",
-      "- Do not invent test commands, frameworks, test folders, CI behavior, coverage expectations, or QA processes.",
-      "- Treat actual test files and source code evidence as stronger evidence than package scripts alone.",
-      "- Package scripts and detected frameworks are useful, but they do not prove testing conventions by themselves.",
-      "- Synthesize testing guidance; do not create an evidence log.",
-      "- Mention file paths only when the path is directly useful for implementation, inspection, or copying an existing test pattern.",
-      "- Do not cite a file for every statement.",
-      "- Do not summarize test files one by one.",
-      "- Do not restate package scripts unless they are actionable verification commands.",
-      "- Separate observed testing patterns, cautious recommendations, and unknowns.",
-      "- Prefer practical change-verification guidance over generic testing theory.",
-      "- Do not write implementation plans, refactoring suggestions, or tickets.",
-      "- Do not mention these instructions or say that you are an AI."
-    ].join("\n"),
-    prompt: [
-      "# Task",
-      "Generate `testing.md` for this repository.",
-      "",
-      "Write this as a concise, human-readable verification guide for coding agents.",
-      "",
-      "Do not optimize for exhaustive Markdown structure. Optimize for useful extracted testing knowledge.",
-      "",
-      "# Output shape",
-      "Use these sections, but keep them compact and merge subpoints when useful:",
-      "",
-      "## Verification overview",
-      "Explain the testing and verification posture an agent should infer from the selected context.",
-      "",
-      "If there is strong test evidence, summarize the visible testing style. If there is weak or no test evidence, say that directly and give cautious verification guidance.",
-      "",
-      "Do not invent team preferences or maturity level.",
-      "",
-      "## Commands agents can run",
-      "List only the verification-related commands available in repo context, such as build, lint, typecheck, test, format, or dev when relevant.",
-      "",
-      "Use commands exactly as provided by repo context.",
-      "",
-      "For each available command, briefly explain when an agent should run it.",
-      "",
-      "If a command category is missing, say it was not detected. Do not invent alternatives.",
-      "",
-      "## What to test by change type",
-      "Explain what an agent should verify depending on the kind of change being made.",
-      "",
-      "Cover relevant change types when supported by the repo context:",
-      "- UI/component changes;",
-      "- route/page/navigation changes;",
-      "- validation/schema changes;",
-      "- data access or persistence changes;",
-      "- domain/business logic changes;",
-      "- CLI command changes;",
-      "- generated output or prompt changes;",
-      "- bug fixes and regressions;",
-      "- external integration or side-effect changes.",
-      "",
-      "For each change type, say whether automated tests are visibly supported, recommended cautiously, or not evidenced.",
-      "",
-      "## Existing testing patterns to copy",
-      "Summarize visible test patterns that are worth reusing.",
-      "",
-      "Focus on practical conventions:",
-      "- test file placement;",
-      "- test naming;",
-      "- fixtures;",
-      "- unit versus integration style;",
-      "- component or UI testing style;",
-      "- mocking/stubbing patterns;",
-      "- test utilities or setup files.",
-      "",
-      "Mention file paths only when they are useful examples to inspect or copy.",
-      "",
-      "If no representative tests are visible, say that clearly.",
-      "",
-      "## When to add automated tests",
-      "Provide repo-specific guidance for when future agents should add or update tests.",
-      "",
-      "Focus on behavior likely to break silently:",
-      "- pure utilities or deterministic helpers;",
-      "- schemas and validation boundaries;",
-      "- domain rules and state transitions;",
-      "- data access behavior;",
-      "- CLI command behavior;",
-      "- regression fixes;",
-      "- risky parsing, formatting, or generated-output behavior.",
-      "",
-      "Mark guidance as a recommendation when it is not directly observed from existing tests.",
-      "",
-      "## Manual checks agents should perform",
-      "List practical manual verification steps that make sense for this repo.",
-      "",
-      "Ground manual checks in visible commands, app structure, CLI behavior, routes, generated files, and risky areas.",
-      "",
-      "Do not invent deployment, CI, staging, browser, or external-service steps unless evidenced.",
-      "",
-      "## Testing gaps and unsafe assumptions",
-      "List what future coding agents should not assume about testing in this repo.",
-      "",
-      "Good entries:",
-      "- test scripts exist but representative tests are not visible;",
-      "- a framework is detected but conventions are unclear;",
-      "- UI exists but UI tests are not visible;",
-      "- data or domain logic exists but integration tests are not visible;",
-      "- CI behavior is not visible;",
-      "- manual QA expectations are not documented;",
-      "- coverage expectations are not visible.",
-      "",
-      "Phrase gaps as practical warnings for implementation work.",
-      "",
-      "## Testing mistakes to avoid",
-      "List repo-specific testing mistakes agents should avoid.",
-      "",
-      "Examples:",
-      "- inventing unavailable commands;",
-      "- adding a new test framework without explicit request;",
-      "- claiming coverage from package scripts alone;",
-      "- writing tests that ignore existing fixture or setup patterns;",
-      "- skipping verification for validation, data access, or domain behavior changes;",
-      "- relying only on manual checks for deterministic logic that can be tested.",
-      "",
-      "Only include avoid-rules supported by observed patterns or meaningful unknowns.",
-      "",
-      "# Style rules",
-      "- Write plain Markdown.",
-      "- Be compact and practical.",
-      "- Prefer short paragraphs and focused bullets.",
-      "- Avoid decorative Markdown.",
-      "- Avoid bold and italic unless essential.",
-      "- Do not include an evidence trail.",
-      "- Do not use `Observed:`, `Evidence:`, `Recommendation:`, and `Unknown:` labels for every bullet.",
-      "- Do not cite file paths after every claim.",
-      "- Mention a path only when it helps the agent know where to inspect, copy a test pattern, or verify behavior.",
-      "- Mention commands exactly as they appear in repo context.",
-      "- Avoid generic testing lectures.",
-      "- Avoid long lists of test types if they are not relevant to the repo.",
-      "- Prefer fewer, stronger testing insights.",
-      "- Use cautious language when evidence is weak: `appears to`, `likely`, `unclear`, `not visible from the selected context`.",
-      "- Do not include code blocks unless absolutely necessary.",
-      "",
-      "# Grounding rules",
-      formatGroundingRules(),
-      "",
-      "# Output rules",
-      formatMarkdownOutputRules(),
-      "",
-      "# Repo context",
-      formatKnowledgeDocContext(input)
-    ].join("\n")
-  };
-}
-
-// src/core/doc-generator/generators/generate-testing-doc.ts
-async function generateTestingDoc(input) {
-  const parsedInput = GenerateRepoKnowledgeDocInputSchema.parse(input);
-  return generateKnowledgeDoc({
-    spec: KNOWLEDGE_DOC_SPECS.testing,
-    generationInput: buildKnowledgeDocGenerationInput(parsedInput),
-    buildPrompt: buildTestingPrompt
-  });
-}
-
-// src/core/doc-generator/renderers/render-agents-md.ts
-function renderAgentsMd(input) {
-  const parsedRepoContext = RepoContextSchema.parse(input.repoContext);
-  if (input.agentRulesMarkdown.trim().length === 0) {
-    throw new Error("Cannot render AGENTS.md from empty agent rules markdown.");
-  }
-  const docs = parsedRepoContext.generatedDocs;
-  const markdown = [
-    "# AGENTS.md",
-    "",
-    "Generated by Bridger from repo-aware analysis.",
-    "",
-    "This file is intended to provide additional repository-specific instructions for coding agents.",
-    "",
-    "## Source documents",
-    "",
-    `- \`${docs.repoAnalysisPath}\``,
-    `- \`${docs.architecturePath}\``,
-    `- \`${docs.conventionsPath}\``,
-    `- \`${docs.businessLogicPath}\``,
-    `- \`${docs.testingPath}\``,
-    `- \`${docs.agentRulesPath}\``,
-    "",
-    "---",
-    "",
-    input.agentRulesMarkdown
-  ].join("\n");
-  return markdown.endsWith("\n") ? markdown : `${markdown}
+## Validation
 `;
+async function ensureBridgerLayout(repoRoot) {
+  await fs11.mkdir(getBridgerDir(repoRoot), { recursive: true });
+  await fs11.mkdir(getMemoryDir(repoRoot), { recursive: true });
+  await fs11.mkdir(getArtifactsDir(repoRoot), { recursive: true });
+  await fs11.mkdir(getSkillsDir(repoRoot), { recursive: true });
+  await fs11.mkdir(getTemplatesDir(repoRoot), { recursive: true });
+  await fs11.mkdir(getExportsDir(repoRoot), { recursive: true });
+  await writeFileIfMissing(getBridgerIndexPath(repoRoot), "# Bridger Index\n");
+  await writeFileIfMissing(getBridgerLogPath(repoRoot), "# Bridger Log\n");
+  await writeFileIfMissing(
+    getSelectedSkillsPath(repoRoot),
+    `${JSON.stringify(SELECTED_SKILLS_JSON, null, 2)}
+`
+  );
+  await writeFileIfMissing(getTicketTemplatePath(repoRoot), TICKET_TEMPLATE);
+}
+async function writeFileIfMissing(filePath, content) {
+  try {
+    await fs11.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (isExistingFileError(error)) {
+      return;
+    }
+    throw error;
+  }
+}
+function isExistingFileError(error) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
+}
+
+// src/core/output/ensure-output-dirs.ts
+async function ensureOutputDirs(repoRoot) {
+  await ensureBridgerLayout(repoRoot);
 }
 
 // src/core/project/create-bridger-config.ts
@@ -6252,59 +5687,6 @@ function createBridgerConfig(input) {
   });
 }
 
-// src/core/project/ensure-bridger-layout.ts
-import fs11 from "fs/promises";
-var SELECTED_SKILLS_JSON = {
-  schemaVersion: 1,
-  selected: []
-};
-var TICKET_TEMPLATE = `# Ticket
-
-## Goal
-
-## Context
-
-## Implementation notes
-
-## Acceptance criteria
-
-## Validation
-`;
-async function ensureBridgerLayout(repoRoot) {
-  await fs11.mkdir(getBridgerDir(repoRoot), { recursive: true });
-  await fs11.mkdir(getMemoryDir(repoRoot), { recursive: true });
-  await fs11.mkdir(getArtifactsDir(repoRoot), { recursive: true });
-  await fs11.mkdir(getSkillsDir(repoRoot), { recursive: true });
-  await fs11.mkdir(getTemplatesDir(repoRoot), { recursive: true });
-  await fs11.mkdir(getExportsDir(repoRoot), { recursive: true });
-  await writeFileIfMissing(getBridgerIndexPath(repoRoot), "# Bridger Index\n");
-  await writeFileIfMissing(getBridgerLogPath(repoRoot), "# Bridger Log\n");
-  await writeFileIfMissing(
-    getSelectedSkillsPath(repoRoot),
-    `${JSON.stringify(SELECTED_SKILLS_JSON, null, 2)}
-`
-  );
-  await writeFileIfMissing(getTicketTemplatePath(repoRoot), TICKET_TEMPLATE);
-}
-async function writeFileIfMissing(filePath, content) {
-  try {
-    await fs11.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
-  } catch (error) {
-    if (isExistingFileError(error)) {
-      return;
-    }
-    throw error;
-  }
-}
-function isExistingFileError(error) {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
-}
-
-// src/core/output/ensure-output-dirs.ts
-async function ensureOutputDirs(repoRoot) {
-  await ensureBridgerLayout(repoRoot);
-}
-
 // src/core/project/write-bridger-config.ts
 import fs12 from "fs/promises";
 import path18 from "path";
@@ -6320,269 +5702,11 @@ async function writeBridgerConfig(repoRoot, config) {
   );
 }
 
-// src/core/output/upsert-generated-markdown-block.ts
-import fs13 from "fs/promises";
-import path19 from "path";
-async function readExistingContent(filePath) {
-  try {
-    return await fs13.readFile(filePath, "utf8");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-function buildGeneratedBlock(content, startMarker, endMarker) {
-  return `${startMarker}
-
-${content.trimEnd()}
-
-${endMarker}
-`;
-}
-async function upsertGeneratedMarkdownBlock(input) {
-  const existingContent = await readExistingContent(input.filePath);
-  const generatedBlock = buildGeneratedBlock(
-    input.content,
-    input.startMarker,
-    input.endMarker
-  );
-  if (existingContent === null) {
-    await fs13.mkdir(path19.dirname(input.filePath), { recursive: true });
-    await fs13.writeFile(input.filePath, generatedBlock, "utf8");
-    return;
-  }
-  const startIndex = existingContent.indexOf(input.startMarker);
-  const endIndex = existingContent.indexOf(input.endMarker);
-  if (startIndex === -1 && endIndex === -1) {
-    const separator = existingContent.endsWith("\n") ? "\n" : "\n\n";
-    const contentToWrite = `${existingContent}${separator}${generatedBlock}`;
-    await fs13.writeFile(input.filePath, contentToWrite, "utf8");
-    return;
-  }
-  if (startIndex === -1 || endIndex === -1) {
-    throw new Error(
-      `Malformed generated block in ${input.filePath}: expected both markers "${input.startMarker}" and "${input.endMarker}".`
-    );
-  }
-  if (endIndex < startIndex) {
-    throw new Error(
-      `Malformed generated block in ${input.filePath}: end marker appears before start marker.`
-    );
-  }
-  const before = existingContent.slice(0, startIndex);
-  const after = existingContent.slice(endIndex + input.endMarker.length);
-  const normalizedAfter = after.startsWith("\n") ? after.slice(1) : after;
-  const nextContent = `${before}${generatedBlock}${normalizedAfter}`;
-  await fs13.writeFile(input.filePath, nextContent, "utf8");
-}
-
-// src/core/output/write-markdown.ts
-import fs14 from "fs/promises";
-import path20 from "path";
-async function writeMarkdown(filePath, content) {
-  await fs14.mkdir(path20.dirname(filePath), { recursive: true });
-  const output = content.endsWith("\n") ? content : `${content}
-`;
-  await fs14.writeFile(filePath, output, "utf8");
-}
-
-// src/core/repo-graph/read-graph-ordered-files.ts
-import { readFile as readFile2 } from "fs/promises";
-import path21 from "path";
-async function readGraphOrderedFiles(input) {
-  const maxFiles = Math.max(0, Math.floor(input.maxFiles));
-  const maxSingleFileBytes = Math.max(0, Math.floor(input.maxSingleFileBytes));
-  const maxTotalBytes = Math.max(0, Math.floor(input.maxTotalBytes));
-  if (maxFiles === 0 || maxSingleFileBytes === 0 || maxTotalBytes === 0) {
-    return {
-      files: [],
-      diagnostics: [],
-      totalBytes: 0
-    };
-  }
-  const nodeByPath = getFileNodeByPath3(input.graph);
-  const summarySets = getSummarySets(input.summary);
-  const entrypointDependencyPaths = getEntrypointDependencyPaths({
-    graph: input.graph,
-    summary: input.summary
-  });
-  const orderedPaths = getOrderedPathsForMode({
-    summary: input.summary,
-    mode: input.mode
-  });
-  const files = [];
-  const diagnostics = [];
-  let totalBytes = 0;
-  for (const filePath of orderedPaths) {
-    if (files.length >= maxFiles) {
-      break;
-    }
-    const node = nodeByPath.get(filePath);
-    if (node === void 0) {
-      continue;
-    }
-    if (!matchesTagFilters(node, input.includeTags, input.excludeTags)) {
-      continue;
-    }
-    if (node.sizeBytes > maxSingleFileBytes) {
-      diagnostics.push(createLargeFileDiagnostic(filePath, maxSingleFileBytes));
-      continue;
-    }
-    let content;
-    try {
-      content = await readFile2(path21.join(input.repoRoot, filePath), "utf8");
-    } catch {
-      diagnostics.push({
-        level: "warning",
-        code: "read-error",
-        file: filePath,
-        message: `Could not read ${filePath}.`
-      });
-      continue;
-    }
-    if (looksBinary(content)) {
-      diagnostics.push({
-        level: "info",
-        code: "skipped-binary-file",
-        file: filePath,
-        message: `Skipped ${filePath} because it appears to be binary.`
-      });
-      continue;
-    }
-    const contentBytes = Buffer.byteLength(content, "utf8");
-    if (contentBytes > maxSingleFileBytes) {
-      diagnostics.push(createLargeFileDiagnostic(filePath, maxSingleFileBytes));
-      continue;
-    }
-    if (totalBytes + contentBytes > maxTotalBytes) {
-      diagnostics.push({
-        level: "info",
-        code: "skipped-total-byte-limit",
-        file: filePath,
-        message: `Stopped before reading ${filePath} because maxTotalBytes would be exceeded.`
-      });
-      break;
-    }
-    files.push({
-      path: filePath,
-      reason: getFileReason2({
-        path: filePath,
-        node,
-        summarySets,
-        entrypointDependencyPaths
-      }),
-      order: files.length + 1,
-      content
-    });
-    totalBytes += contentBytes;
-  }
-  return {
-    files,
-    diagnostics,
-    totalBytes
-  };
-}
-function getOrderedPathsForMode(input) {
-  const orderedPaths = input.mode === "architecture-first" ? input.summary.architectureFirstOrder : input.summary.dependencyFirstOrder;
-  return uniqueStableOrder3(orderedPaths.map(normalizeRepoPath));
-}
-function getFileNodeByPath3(graph) {
-  const nodeByPath = /* @__PURE__ */ new Map();
-  for (const node of graph.nodes) {
-    if (node.kind !== "file") {
-      continue;
-    }
-    nodeByPath.set(normalizeRepoPath(node.path), node);
-  }
-  return nodeByPath;
-}
-function matchesTagFilters(node, includeTags, excludeTags) {
-  if (includeTags && includeTags.length > 0) {
-    const hasIncludedTag = includeTags.some((tag) => node.tags.includes(tag));
-    if (!hasIncludedTag) {
-      return false;
-    }
-  }
-  if (excludeTags && excludeTags.length > 0) {
-    const hasExcludedTag = excludeTags.some((tag) => node.tags.includes(tag));
-    if (hasExcludedTag) {
-      return false;
-    }
-  }
-  return true;
-}
-function getEntrypointDependencyPaths(input) {
-  const entrypoints = new Set(input.summary.entrypoints.map(normalizeRepoPath));
-  const dependencies = /* @__PURE__ */ new Set();
-  for (const edge of input.graph.edges) {
-    if (edge.type !== "imports") {
-      continue;
-    }
-    const from = normalizeRepoPath(edge.from);
-    if (!entrypoints.has(from)) {
-      continue;
-    }
-    dependencies.add(normalizeRepoPath(edge.to));
-  }
-  return dependencies;
-}
-function getFileReason2(input) {
-  const filePath = normalizeRepoPath(input.path);
-  if (input.summarySets.docsFiles.has(filePath) && isRootPath(filePath)) {
-    return "Root documentation file";
-  }
-  if (input.summarySets.configFiles.has(filePath)) {
-    return "Project config file";
-  }
-  if (input.summarySets.entrypoints.has(filePath)) {
-    return "Entrypoint candidate";
-  }
-  if (input.entrypointDependencyPaths.has(filePath)) {
-    return "Dependency of entrypoint";
-  }
-  if (input.node.tags.includes("test")) {
-    return "Test file";
-  }
-  if (input.node.tags.includes("utility") || input.summarySets.leafFiles.has(filePath)) {
-    return "Shared utility or leaf file";
-  }
-  return "Included by graph order";
-}
-function getSummarySets(summary) {
-  return {
-    entrypoints: new Set(summary.entrypoints.map(normalizeRepoPath)),
-    configFiles: new Set(summary.configFiles.map(normalizeRepoPath)),
-    docsFiles: new Set(summary.docsFiles.map(normalizeRepoPath)),
-    leafFiles: new Set(summary.leafFiles.map(normalizeRepoPath))
-  };
-}
-function isRootPath(filePath) {
-  return !filePath.includes("/");
-}
-function looksBinary(content) {
-  return content.includes("\0");
-}
-function uniqueStableOrder3(paths) {
-  const seen = /* @__PURE__ */ new Set();
-  const orderedPaths = [];
-  for (const currentPath of paths) {
-    if (seen.has(currentPath)) {
-      continue;
-    }
-    seen.add(currentPath);
-    orderedPaths.push(currentPath);
-  }
-  return orderedPaths;
-}
-function createLargeFileDiagnostic(filePath, maxSingleFileBytes) {
-  return {
-    level: "info",
-    code: "skipped-large-file",
-    file: filePath,
-    message: `Skipped ${filePath} because it exceeds ${maxSingleFileBytes} bytes.`
-  };
+// src/core/reading-plans/write-reading-plans.ts
+async function writeReadingPlansArtifact(input) {
+  const outputPath = getReadingPlansPath(input.repoRoot);
+  await writeJson(outputPath, ReadingPlansSchema.parse(input.readingPlans));
+  return outputPath;
 }
 
 // src/core/repo-graph/write-repo-graph.ts
@@ -6612,69 +5736,8 @@ async function writeRepoGraphArtifacts(input) {
 }
 
 // src/cli/commands/init.ts
-var BRIDGER_GENERATED_START_MARKER = "<!-- BRIDGER GENERATED START -->";
-var BRIDGER_GENERATED_END_MARKER = "<!-- BRIDGER GENERATED END -->";
-var INIT_GRAPH_CONTEXT_MAX_FILES = 40;
-var INIT_GRAPH_CONTEXT_MAX_SINGLE_FILE_BYTES = IMPORTANT_FILE_BUDGETS.maxSingleFileBytes;
-var INIT_GRAPH_CONTEXT_MAX_TOTAL_BYTES = IMPORTANT_FILE_BUDGETS.maxTotalContentBytes;
 function logInitStep(message) {
   logger.debug(`bridger init: ${message}`);
-}
-async function generateDocs(input) {
-  const generationInput = {
-    repoContext: input.repoContext,
-    fileIndex: input.fileIndex,
-    importantFiles: input.importantFiles
-  };
-  const repoAnalysisMarkdown = await generateRepoAnalysisDoc(generationInput);
-  const architectureMarkdown = await generateArchitectureDoc(generationInput);
-  const conventionsMarkdown = await generateConventionsDoc(generationInput);
-  const businessLogicMarkdown = await generateBusinessLogicDoc(generationInput);
-  const testingMarkdown = await generateTestingDoc(generationInput);
-  const agentRulesMarkdown = await generateAgentRulesDoc({
-    repoContext: input.repoContext,
-    generatedDocs: {
-      repoAnalysis: repoAnalysisMarkdown,
-      architecture: architectureMarkdown,
-      conventions: conventionsMarkdown,
-      businessLogic: businessLogicMarkdown,
-      testing: testingMarkdown
-    }
-  });
-  return {
-    architectureMarkdown,
-    repoAnalysisMarkdown,
-    conventionsMarkdown,
-    businessLogicMarkdown,
-    testingMarkdown,
-    agentRulesMarkdown
-  };
-}
-async function writeGeneratedDocs(input) {
-  await writeMarkdown(
-    getGeneratedKnowledgeDocPath(input.repoRoot, "architecture"),
-    input.generatedDocs.architectureMarkdown
-  );
-  await writeMarkdown(
-    getGeneratedKnowledgeDocPath(input.repoRoot, "repoAnalysis"),
-    input.generatedDocs.repoAnalysisMarkdown
-  );
-  await writeMarkdown(
-    getGeneratedKnowledgeDocPath(input.repoRoot, "conventions"),
-    input.generatedDocs.conventionsMarkdown
-  );
-  await writeMarkdown(
-    getGeneratedKnowledgeDocPath(input.repoRoot, "businessLogic"),
-    input.generatedDocs.businessLogicMarkdown
-  );
-  await writeMarkdown(
-    getGeneratedKnowledgeDocPath(input.repoRoot, "testing"),
-    input.generatedDocs.testingMarkdown
-  );
-  await writeMarkdown(
-    getGeneratedKnowledgeDocPath(input.repoRoot, "agentRules"),
-    input.generatedDocs.agentRulesMarkdown
-  );
 }
 function formatInitSummary(input) {
   const lines = [
@@ -6688,38 +5751,19 @@ function formatInitSummary(input) {
   for (const filePath of input.generatedFiles) {
     lines.push(`- ${filePath}`);
   }
-  lines.push("");
-  lines.push("Skipped:");
-  if (input.skippedFiles.length === 0) {
-    lines.push("- none");
-  } else {
-    for (const filePath of input.skippedFiles) {
-      lines.push(`- ${filePath}`);
-    }
-  }
   return lines.join("\n");
 }
-function getGeneratedFilePaths(repoRoot, writeAgentsMd) {
-  const filePaths = [
+function getGeneratedFilePaths(repoRoot) {
+  return [
     getBridgerConfigPath(repoRoot),
     getRepoContextPath(repoRoot),
     getFileIndexPath(repoRoot),
     getRepoGraphPath(repoRoot),
     getGraphSummaryPath(repoRoot),
     getCodebaseMapPath(repoRoot),
-    getGeneratedKnowledgeDocPath(repoRoot, "architecture"),
-    getGeneratedKnowledgeDocPath(repoRoot, "repoAnalysis"),
-    getGeneratedKnowledgeDocPath(repoRoot, "conventions"),
-    getGeneratedKnowledgeDocPath(repoRoot, "businessLogic"),
-    getGeneratedKnowledgeDocPath(repoRoot, "testing"),
-    getGeneratedKnowledgeDocPath(repoRoot, "agentRules"),
-    getTicketTemplatePath(repoRoot),
-    getAgentsGeneratedExportPath(repoRoot)
-  ];
-  if (writeAgentsMd) {
-    filePaths.push(getRootAgentsPath(repoRoot));
-  }
-  return filePaths.map((filePath) => path22.relative(repoRoot, filePath));
+    getReadingPlansPath(repoRoot),
+    getTicketTemplatePath(repoRoot)
+  ].map((filePath) => path19.relative(repoRoot, filePath));
 }
 function getDetectedStackNames(stack) {
   return [
@@ -6750,12 +5794,11 @@ async function runInitCommand(options = {}) {
         repoRoot,
         mode: fileIndex.files.length > 0 ? "existing" : "unknown",
         detectedStack: getDetectedStackNames(repoContext.stack),
-        packageManager: repoContext.stack.packageManager || void 0,
-        writeRootAgentsFile: Boolean(options.writeAgentsMd)
+        packageManager: repoContext.stack.packageManager || void 0
       })
     );
     logInitStep("project config written");
-    logInitStep("building repo graph");
+    logInitStep("building deterministic artifacts");
     const graph = await buildRepoGraph({
       repoRoot,
       fileIndex
@@ -6768,7 +5811,15 @@ async function runInitCommand(options = {}) {
       repoGraph: graph,
       graphSummary
     });
-    logInitStep("repo graph ready");
+    const readingPlans = buildReadingPlans({
+      repoRoot,
+      fileIndex,
+      repoContext,
+      repoGraph: graph,
+      graphSummary,
+      codebaseMap
+    });
+    logInitStep("deterministic artifacts ready");
     logInitStep("writing deterministic artifacts");
     await writeJson(getRepoContextPath(repoRoot), repoContext);
     await writeJson(getFileIndexPath(repoRoot), fileIndex);
@@ -6778,67 +5829,13 @@ async function runInitCommand(options = {}) {
       summary: graphSummary
     });
     await writeCodebaseMapArtifact({ repoRoot, codebaseMap });
+    await writeReadingPlansArtifact({ repoRoot, readingPlans });
     logInitStep("deterministic artifacts written");
-    logInitStep("reading graph-ordered file context");
-    const graphOrderedFileContext = await readGraphOrderedFiles({
-      repoRoot,
-      graph,
-      summary: graphSummary,
-      mode: "architecture-first",
-      maxFiles: INIT_GRAPH_CONTEXT_MAX_FILES,
-      maxSingleFileBytes: INIT_GRAPH_CONTEXT_MAX_SINGLE_FILE_BYTES,
-      maxTotalBytes: INIT_GRAPH_CONTEXT_MAX_TOTAL_BYTES
-    });
-    logInitStep(
-      `graph-ordered file context ready (${graphOrderedFileContext.files.length} files)`
-    );
-    if (graphOrderedFileContext.diagnostics.length > 0) {
-      logger.warn(
-        `Skipped ${graphOrderedFileContext.diagnostics.length} graph-ordered context files.`
-      );
-    }
-    logInitStep("generating documentation");
-    const generatedDocs = await generateDocs({
-      repoContext,
-      fileIndex,
-      importantFiles: graphOrderedFileContext.files.map((file) => ({
-        path: file.path,
-        reason: file.reason,
-        content: file.content
-      }))
-    });
-    logInitStep("documentation generated");
-    logInitStep("writing generated files");
-    await writeGeneratedDocs({
-      repoRoot,
-      generatedDocs
-    });
-    const agentsMarkdown = renderAgentsMd({
-      repoContext,
-      agentRulesMarkdown: generatedDocs.agentRulesMarkdown
-    });
-    await writeMarkdown(getAgentsGeneratedExportPath(repoRoot), agentsMarkdown);
-    logInitStep("generated files written");
-    if (options.writeAgentsMd) {
-      logInitStep("updating AGENTS.md");
-      await upsertGeneratedMarkdownBlock({
-        filePath: getRootAgentsPath(repoRoot),
-        content: agentsMarkdown,
-        startMarker: BRIDGER_GENERATED_START_MARKER,
-        endMarker: BRIDGER_GENERATED_END_MARKER
-      });
-      logInitStep("AGENTS.md updated");
-    }
-    const generatedFiles = getGeneratedFilePaths(repoRoot, Boolean(options.writeAgentsMd));
-    const skippedFiles = options.writeAgentsMd ? [] : [
-      "AGENTS.md unchanged. Run `bridger init --write-agents-md` to append/update the generated Bridger section."
-    ];
     logger.info(
       formatInitSummary({
         repoRoot,
         indexedFileCount: fileIndex.files.length,
-        generatedFiles,
-        skippedFiles
+        generatedFiles: getGeneratedFilePaths(repoRoot)
       })
     );
   } catch (error) {
@@ -6847,13 +5844,9 @@ async function runInitCommand(options = {}) {
     process.exitCode = 1;
   }
 }
-var initCommand = new Command2("init").description("Generate Bridger repo context and agent-ready documentation").option("--repo <path>", "Path to the repository to initialize").option(
-  "--write-agents-md",
-  "Append/update generated Bridger section in AGENTS.md"
-).action(async (options) => {
+var initCommand = new Command2("init").description("Generate deterministic Bridger repository artifacts").option("--repo <path>", "Path to the repository to initialize").action(async (options) => {
   await runInitCommand({
-    repo: options.repo,
-    writeAgentsMd: Boolean(options.writeAgentsMd)
+    repo: options.repo
   });
 });
 

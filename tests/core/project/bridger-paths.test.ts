@@ -16,7 +16,6 @@ describe("generated paths", () => {
       businessLogicPath: ".bridger/memory/business-logic.md",
       conventionsPath: ".bridger/memory/conventions.md",
       testingPath: ".bridger/memory/testing.md",
-      agentRulesPath: ".bridger/memory/agent-rules.md",
     });
   });
 

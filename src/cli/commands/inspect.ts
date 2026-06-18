@@ -224,7 +224,6 @@ async function buildProjectStateInspection(
     ["business-logic.md", getGeneratedKnowledgeDocPath(repoRoot, "businessLogic")],
     ["conventions.md", getGeneratedKnowledgeDocPath(repoRoot, "conventions")],
     ["testing.md", getGeneratedKnowledgeDocPath(repoRoot, "testing")],
-    ["agent-rules.md", getGeneratedKnowledgeDocPath(repoRoot, "agentRules")],
   ]);
   const supportFiles = await buildFileInspections([
     ["selected-skills.json", getSelectedSkillsPath(repoRoot)],
@@ -541,7 +540,6 @@ const READING_PLAN_KINDS = [
   "business-logic",
   "conventions",
   "testing",
-  "agent-rules",
 ] as const;
 
 function buildFileIndexInventory(fileIndex: FileIndex): FileIndexInventory {
@@ -885,7 +883,7 @@ async function pathExists(filePath: string): Promise<boolean> {
 export const inspectCommand = new Command("inspect")
   .description("Inspect the current repository without using the LLM")
   .option("--repo <path>", "Path to the repository to inspect")
-  .option("--context", "Show deterministic context preview before LLM generation")
+  .option("--context", "Show deterministic context preview")
   .option("--important-files", "Show selected important files and selection reasons")
   .option("--graph", "Print repo graph inspection output")
   .option("--json", "Print inspect result as JSON")

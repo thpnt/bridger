@@ -1,7 +1,5 @@
 import path from "node:path";
 
-import { GENERATED_DOC_FILENAMES } from "../doc-generator/doc-filenames";
-import type { KnowledgeDocKey } from "../doc-generator/doc-types";
 import {
   RepoRelativePathSchema,
   type RepoRelativePath,
@@ -12,8 +10,22 @@ export type BridgerMemoryFile =
   | "architecture.md"
   | "business-logic.md"
   | "conventions.md"
-  | "testing.md"
-  | "agent-rules.md";
+  | "testing.md";
+
+export type KnowledgeDocKey =
+  | "repoAnalysis"
+  | "architecture"
+  | "businessLogic"
+  | "conventions"
+  | "testing";
+
+const MEMORY_FILENAMES = {
+  repoAnalysis: "repo-analysis.md",
+  architecture: "architecture.md",
+  businessLogic: "business-logic.md",
+  conventions: "conventions.md",
+  testing: "testing.md",
+} as const satisfies Record<KnowledgeDocKey, BridgerMemoryFile>;
 
 export interface GeneratedDocPaths {
   repoAnalysisPath: RepoRelativePath;
@@ -21,7 +33,6 @@ export interface GeneratedDocPaths {
   businessLogicPath: RepoRelativePath;
   conventionsPath: RepoRelativePath;
   testingPath: RepoRelativePath;
-  agentRulesPath: RepoRelativePath;
 }
 
 export function getBridgerDir(repoRoot: string): string {
@@ -83,14 +94,14 @@ export function getGeneratedKnowledgeDocPath(
   repoRoot: string,
   key: KnowledgeDocKey,
 ): string {
-  return getMemoryFilePath(repoRoot, GENERATED_DOC_FILENAMES[key]);
+  return getMemoryFilePath(repoRoot, MEMORY_FILENAMES[key]);
 }
 
 export function getGeneratedKnowledgeDocRelativePath(
   key: KnowledgeDocKey,
 ): RepoRelativePath {
   return RepoRelativePathSchema.parse(
-    [".bridger", "memory", GENERATED_DOC_FILENAMES[key]].join("/"),
+    [".bridger", "memory", MEMORY_FILENAMES[key]].join("/"),
   );
 }
 
@@ -139,6 +150,5 @@ export function buildGeneratedDocPaths(): GeneratedDocPaths {
     businessLogicPath: getGeneratedKnowledgeDocRelativePath("businessLogic"),
     conventionsPath: getGeneratedKnowledgeDocRelativePath("conventions"),
     testingPath: getGeneratedKnowledgeDocRelativePath("testing"),
-    agentRulesPath: getGeneratedKnowledgeDocRelativePath("agentRules"),
   };
 }

@@ -44,8 +44,8 @@ describe("bridger project paths", () => {
     expect(getReadingPlansPath(repoRoot)).toBe(
       path.join(repoRoot, ".bridger", "artifacts", "reading-plans.json"),
     );
-    expect(getMemoryFilePath(repoRoot, "agent-rules.md")).toBe(
-      path.join(repoRoot, ".bridger", "memory", "agent-rules.md"),
+    expect(getMemoryFilePath(repoRoot, "testing.md")).toBe(
+      path.join(repoRoot, ".bridger", "memory", "testing.md"),
     );
   });
 });
@@ -79,6 +79,13 @@ describe("bridger config", () => {
     expect(config.exports.agentsMd.generatedPath).toBe(
       ".bridger/exports/AGENTS.generated.md",
     );
+    expect(config.memory.files).toEqual([
+      "repo-analysis.md",
+      "architecture.md",
+      "business-logic.md",
+      "conventions.md",
+      "testing.md",
+    ]);
   });
 
   it("writes and reads config from the canonical path", async () => {

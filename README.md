@@ -1,8 +1,8 @@
 # Bridger
 
-A context and ticket-readiness layer for software teams adopting AI coding agents.
+A local-first context compiler for software teams adopting AI coding agents.
 
-Bridger scans a repository, builds deterministic codebase context, generates agent-ready documentation, and prepares the foundation for ticket enrichment grounded in the actual codebase.
+Bridger scans a repository and builds deterministic codebase context for later memory compilation and instruction generation.
 
 ## What Bridger does
 
@@ -10,8 +10,9 @@ Bridger scans a repository, builds deterministic codebase context, generates age
 - file index generation
 - repo context generation
 - deterministic repo graph generation
-- graph-aware file ordering for LLM context
-- generated Markdown documentation for AI coding agents
+- codebase map generation
+- batch-aware reading plans
+- affected-file traversal
 
 Bridger's repo graph is structural and deterministic. It does not semantically understand the codebase.
 
@@ -23,7 +24,7 @@ Shows a human-readable summary of the repository context, including detected sta
 
 ### `bridger inspect --context`
 
-Shows the deterministic context preview used before LLM document generation.
+Shows the deterministic selected-context preview.
 
 ### `bridger inspect --important-files`
 
@@ -47,7 +48,7 @@ It:
 
 ### `bridger init`
 
-Builds the repository knowledge layer and writes the generated artifacts.
+Builds and writes the deterministic repository intelligence layer.
 
 The current init pipeline:
 
@@ -55,28 +56,22 @@ The current init pipeline:
 2. builds a file index
 3. builds repo context
 4. builds the repo graph
-5. writes deterministic graph artifacts
-6. reads graph-ordered file context
-7. generates the Markdown docs used by agents
-8. optionally updates `AGENTS.md` when `--write-agents-md` is passed
+5. builds the graph summary
+6. builds the codebase map
+7. builds five doc-specific reading plans
+8. writes validated deterministic artifacts
 
 `bridger init` generates:
 
-- `.bridger/repo-context.json`
-- `.bridger/file-index.json`
-- `.bridger/repo-graph.json`
-- `.bridger/graph-summary.json`
-- `.bridger/generated/repo-analysis.md`
-- `.bridger/generated/architecture.md`
-- `.bridger/generated/conventions.md`
-- `.bridger/generated/business-logic.md`
-- `.bridger/generated/testing.md`
-- `.bridger/generated/agent-rules.md`
-- `AGENTS.generated.md`
+- `.bridger/config.json`
+- `.bridger/artifacts/repo-context.json`
+- `.bridger/artifacts/file-index.json`
+- `.bridger/artifacts/repo-graph.json`
+- `.bridger/artifacts/graph-summary.json`
+- `.bridger/artifacts/codebase-map.json`
+- `.bridger/artifacts/reading-plans.json`
 
-### `bridger enrich-ticket "<request>"`
-
-Expands a rough product or engineering request into a ticket-shaped handoff. It is part of the broader product direction, but it is separate from the repo graph feature.
+`bridger init` does not call an LLM and does not write final memory or agent export files.
 
 ## Repo graph feature
 
@@ -92,8 +87,8 @@ It records:
 
 Bridger writes two graph artifacts:
 
-- `.bridger/repo-graph.json` for the full graph
-- `.bridger/graph-summary.json` for the derived summary used by context generation
+- `.bridger/artifacts/repo-graph.json` for the full graph
+- `.bridger/artifacts/graph-summary.json` for the derived summary
 
 The summary includes:
 
@@ -106,7 +101,7 @@ The summary includes:
 
 ## Graph-aware context ordering
 
-`bridger init` uses the graph summary to read files in a deterministic architecture-first order when generating docs.
+The graph summary provides deterministic architecture-first and dependency-first file orderings for inspection and downstream context compilation.
 
 That order starts with:
 
@@ -117,7 +112,7 @@ That order starts with:
 5. components, services, libraries, and shared utilities
 6. test files
 
-Large files, unreadable files, and binary-looking files are skipped with diagnostics instead of being forced into the generated context.
+Large files, unreadable files, and binary-looking files are skipped with diagnostics.
 
 ## Current limitations
 
@@ -140,6 +135,5 @@ For a quick pass:
 
 1. run `bridger inspect --graph`
 2. run `bridger init`
-3. inspect `.bridger/repo-graph.json`, `.bridger/graph-summary.json`, and the generated Markdown docs
-4. compare the graph-ordered context against a naive file order
-
+3. inspect the JSON artifacts under `.bridger/artifacts`
+4. verify `reading-plans.json` contains the five deterministic memory plans

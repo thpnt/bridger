@@ -8,7 +8,6 @@ export const ReadingPlanKindSchema = z.enum([
   "business-logic",
   "conventions",
   "testing",
-  "agent-rules",
 ]);
 
 export const ReadingPlanFileRoleSchema = z.enum([
@@ -107,7 +106,7 @@ export const ReadingPlansSchema = z.object({
     graphSummaryVersion: z.union([z.string(), z.number()]).optional(),
     codebaseMapSchemaVersion: z.number().int().positive().optional(),
   }),
-  plans: z.array(ReadingPlanSchema).length(6),
+  plans: z.array(ReadingPlanSchema).length(5),
   stats: ReadingPlansStatsSchema,
   warnings: z.array(ReadingPlanWarningSchema),
 });
