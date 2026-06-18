@@ -23,6 +23,18 @@ def test_init_creates_project_files(
     assert result.exit_code == 0
     assert (tmp_path / ".bridger").is_dir()
     assert (tmp_path / ".bridger" / "config.json").is_file()
+    artifact_file = tmp_path / ".bridger" / "artifacts" / "file-index.json"
+    artifact = json.loads(artifact_file.read_text())
+    assert artifact_file.is_file()
+    assert artifact["schema_version"] == 1
+    assert artifact["stats"]["files_included"] == 0
+    assert "Artifact: .bridger/artifacts/file-index.json" in result.stdout
+    repo_context_file = tmp_path / ".bridger" / "artifacts" / "repo-context.json"
+    repo_context = json.loads(repo_context_file.read_text())
+    assert repo_context_file.is_file()
+    assert repo_context["schema_version"] == 1
+    assert repo_context["manifests"] == []
+    assert "Artifact: .bridger/artifacts/repo-context.json" in result.stdout
 
 
 def test_init_fresh_sets_project_mode(
