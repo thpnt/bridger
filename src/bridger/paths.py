@@ -27,6 +27,10 @@ class ProjectPaths:
         return self.bridger_dir / "artifacts" / "repo-context.json"
 
     @property
+    def symbol_index_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "symbol-index.json"
+
+    @property
     def directories(self) -> tuple[Path, ...]:
         return tuple(
             self.bridger_dir / name

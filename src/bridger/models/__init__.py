@@ -14,6 +14,12 @@ from bridger.models.repo_context import (
     ManifestParseError,
     RepoContextArtifact,
 )
+from bridger.models.symbol_index import (
+    SymbolIndexArtifact,
+    SymbolKind,
+    SymbolParseError,
+    SymbolRecord,
+)
 
 __all__ = [
     "FileIndexArtifact",
@@ -28,4 +34,8 @@ __all__ = [
     "ManifestFile",
     "ManifestParseError",
     "RepoContextArtifact",
+    "SymbolIndexArtifact",
+    "SymbolKind",
+    "SymbolParseError",
+    "SymbolRecord",
 ]

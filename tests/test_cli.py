@@ -35,6 +35,12 @@ def test_init_creates_project_files(
     assert repo_context["schema_version"] == 1
     assert repo_context["manifests"] == []
     assert "Artifact: .bridger/artifacts/repo-context.json" in result.stdout
+    symbol_index_file = tmp_path / ".bridger" / "artifacts" / "symbol-index.json"
+    symbol_index = json.loads(symbol_index_file.read_text())
+    assert symbol_index_file.is_file()
+    assert symbol_index["schema_version"] == 1
+    assert symbol_index["symbols"] == []
+    assert "Artifact: .bridger/artifacts/symbol-index.json" in result.stdout
 
 
 def test_init_fresh_sets_project_mode(
