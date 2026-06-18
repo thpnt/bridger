@@ -1,0 +1,80 @@
+import json
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from bridger.cli import app
+
+runner = CliRunner()
+
+
+def test_cli_imports() -> None:
+    assert app is not None
+
+
+def test_init_creates_project_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".bridger").is_dir()
+    assert (tmp_path / ".bridger" / "config.json").is_file()
+
+
+def test_init_fresh_sets_project_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["init", "--fresh"])
+    config = json.loads((tmp_path / ".bridger" / "config.json").read_text())
+
+    assert result.exit_code == 0
+    assert config["project_mode"] == "fresh"
+
+
+def test_init_preserves_unreadable_existing_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_file = tmp_path / ".bridger" / "config.json"
+    config_file.parent.mkdir()
+    config_file.write_text("user-authored content")
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert config_file.read_text() == "user-authored content"
+
+
+def test_update() -> None:
+    result = runner.invoke(app, ["update"])
+
+    assert result.exit_code == 0
+
+
+def test_prompt_includes_task() -> None:
+    result = runner.invoke(app, ["prompt", "Add auth"])
+
+    assert result.exit_code == 0
+    assert "Add auth" in result.stdout
+
+
+def test_inspect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["inspect"])
+
+    assert result.exit_code == 0
+
+
+def test_inspect_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["inspect", "--graph"])
+
+    assert result.exit_code == 0
