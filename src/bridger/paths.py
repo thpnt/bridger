@@ -19,6 +19,30 @@ class ProjectPaths:
         return self.bridger_dir / "config.json"
 
     @property
+    def file_index_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "file-index.json"
+
+    @property
+    def repo_context_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "repo-context.json"
+
+    @property
+    def symbol_index_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "symbol-index.json"
+
+    @property
+    def repo_graph_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "repo-graph.json"
+
+    @property
+    def graph_summary_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "graph-summary.json"
+
+    @property
+    def repo_discovery_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "repo-discovery.json"
+
+    @property
     def directories(self) -> tuple[Path, ...]:
         return tuple(
             self.bridger_dir / name

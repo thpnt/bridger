@@ -11,9 +11,10 @@ app = typer.Typer(help="Compile repository context for AI coding agents.")
 @app.command("init")
 def init(
     fresh: bool = typer.Option(False, "--fresh", help="Use fresh project mode."),
+    verbose: bool = typer.Option(False, "--verbose", help="Show artifact paths."),
 ) -> None:
     """Initialize Bridger project context files."""
-    init_command.run(fresh)
+    init_command.run(fresh, verbose)
 
 
 @app.command()
