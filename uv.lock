@@ -94,6 +94,7 @@ name = "bridger"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "openai" },
     { name = "openai-agents" },
     { name = "orjson" },
     { name = "pathspec" },
@@ -120,6 +121,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "openai", specifier = ">=2.43.0" },
     { name = "openai-agents", specifier = ">=0.17.6" },
     { name = "orjson", specifier = ">=3.10" },
     { name = "pathspec", specifier = ">=0.12" },

@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 
 import orjson
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from bridger.paths import ProjectPaths
 
@@ -14,6 +14,12 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+class ProjectLLMConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    default_profile: str = "balanced"
+
+
 class ProjectConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -22,6 +28,7 @@ class ProjectConfig(BaseModel):
     project_mode: ProjectMode
     created_at: datetime
     updated_at: datetime
+    llm: ProjectLLMConfig = Field(default_factory=ProjectLLMConfig)
 
 
 def create_project_config(root: Path, mode: ProjectMode) -> ProjectConfig:

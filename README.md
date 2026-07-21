@@ -4,6 +4,11 @@ Bridger is a CLI-first context compiler and instruction generator for AI coding 
 The current Python foundation exposes placeholder commands while the repository context
 pipeline is rebuilt.
 
+The provider-independent LLM execution boundary lives in
+[`docs/llm-client.md`](docs/llm-client.md). It supports one async model turn,
+OpenAI Responses API execution, structured outputs, tool-call normalization,
+bounded transient retries, and a deterministic scripted dummy client for tests.
+
 ## Local development
 
 ```shell
@@ -27,5 +32,6 @@ uv run bridger inspect
 uv run bridger inspect --graph
 ```
 
-These commands are intentionally lightweight. Repository scanning, context planning,
-memory agents, and LLM calls are not implemented yet.
+These commands are intentionally lightweight. Agentic repository discovery,
+context planning, memory agents, and prompt-generation workflows are not
+implemented yet.
