@@ -1,0 +1,214 @@
+from enum import StrEnum
+from typing import Annotated, Any, Generic, Literal, TypeVar
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+
+StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
+
+ToolName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
+
+
+class LLMOperation(StrEnum):
+    REPO_DISCOVERY = "repo_discovery"
+    CONTEXT_PLAN_GENERATION = "context_plan_generation"
+    CONTEXT_PLAN_REVIEW = "context_plan_review"
+    MEMORY_AGENT_EVIDENCE = "memory_agent_evidence"
+    MEMORY_AGENT_RECONCILIATION = "memory_agent_reconciliation"
+    AGENTS_EXPORT = "agents_export"
+    PROMPT_GENERATION = "prompt_generation"
+    TICKET_GENERATION = "ticket_generation"
+    UPDATE = "update"
+    IMPLEMENTATION_PLANNING = "implementation_planning"
+
+
+class LLMToolCall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    name: ToolName
+    arguments: dict[str, JsonValue]
+    raw_arguments: str | None = None
+
+
+class LLMMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str | None = None
+    tool_calls: list[LLMToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
+    tool_name: ToolName | None = None
+    tool_result: (
+        dict[str, JsonValue] | list[JsonValue] | str | int | float | bool | None
+    ) = None
+    tool_failed: bool = False
+
+    @classmethod
+    def system(cls, content: str) -> "LLMMessage":
+        return cls(role="system", content=content)
+
+    @classmethod
+    def user(cls, content: str) -> "LLMMessage":
+        return cls(role="user", content=content)
+
+    @classmethod
+    def assistant(cls, content: str) -> "LLMMessage":
+        return cls(role="assistant", content=content)
+
+    @classmethod
+    def assistant_tool_calls(cls, tool_calls: list[LLMToolCall]) -> "LLMMessage":
+        return cls(role="assistant", tool_calls=tool_calls)
+
+    @classmethod
+    def tool_result_message(
+        cls,
+        *,
+        tool_call_id: str,
+        tool_name: str,
+        result: dict[str, JsonValue]
+        | list[JsonValue]
+        | str
+        | int
+        | float
+        | bool
+        | None,
+        failed: bool = False,
+    ) -> "LLMMessage":
+        return cls(
+            role="tool",
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            tool_result=result,
+            tool_failed=failed,
+        )
+
+    @model_validator(mode="after")
+    def validate_role_payload(self) -> "LLMMessage":
+        if self.role in {"system", "user"}:
+            if not self.content:
+                raise ValueError(f"{self.role} messages require text content")
+            if self.tool_calls or self.tool_call_id is not None:
+                raise ValueError(f"{self.role} messages cannot contain tool data")
+        if self.role == "assistant":
+            has_content = self.content is not None and self.content != ""
+            has_tool_calls = bool(self.tool_calls)
+            if has_content == has_tool_calls:
+                raise ValueError(
+                    "assistant messages require exactly one of content or tool_calls"
+                )
+            if self.tool_call_id is not None:
+                raise ValueError("assistant messages cannot contain tool results")
+        if self.role == "tool":
+            if not self.tool_call_id or not self.tool_name:
+                raise ValueError("tool results require tool_call_id and tool_name")
+            if self.content is not None or self.tool_calls:
+                raise ValueError("tool results cannot contain assistant content")
+        return self
+
+
+class LLMToolDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: ToolName
+    description: str = Field(min_length=1)
+    input_schema: dict[str, JsonValue]
+    strict: bool = True
+
+    @field_validator("input_schema")
+    @classmethod
+    def validate_json_schema(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        if value.get("type") != "object":
+            raise ValueError("tool input_schema must be a JSON Schema object")
+        properties = value.get("properties")
+        if properties is not None and not isinstance(properties, dict):
+            raise ValueError("tool input_schema properties must be an object")
+        return value
+
+
+class LLMReasoningConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    effort: Literal["minimal", "low", "medium", "high"] | None = None
+    summary: Literal["auto", "concise", "detailed"] | None = None
+
+
+class LLMRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: LLMOperation
+    profile: str = Field(default="balanced", min_length=1)
+    messages: list[LLMMessage] = Field(min_length=1)
+    tools: list[LLMToolDefinition] = Field(default_factory=list)
+    tool_choice: str | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    timeout_seconds: float | None = Field(default=None, gt=0)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    reasoning: LLMReasoningConfig | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata(cls, value: dict[str, str]) -> dict[str, str]:
+        for key, item in value.items():
+            if len(key) > 64 or len(item) > 512:
+                raise ValueError("metadata keys and values exceed provider limits")
+        return value
+
+
+class LLMUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
+
+
+class LLMResponse(BaseModel, Generic[StructuredOutputT]):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    text: str | None = None
+    structured_output: StructuredOutputT | None = None
+    tool_calls: list[LLMToolCall] = Field(default_factory=list)
+    refusal: str | None = None
+    finish_reason: str | None = None
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+    provider: str
+    model: str
+    response_id: str | None = None
+    provider_request_id: str | None = None
+    latency_ms: int | None = None
+    retry_count: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> "LLMResponse[StructuredOutputT]":
+        outcomes = [
+            self.text is not None and self.text != "",
+            self.structured_output is not None,
+            bool(self.tool_calls),
+            self.refusal is not None,
+        ]
+        if not any(outcomes):
+            raise ValueError(
+                "LLMResponse requires text, structured output, tool calls, or refusal"
+            )
+        if self.refusal is not None and any(outcomes[:3]):
+            raise ValueError("refusal cannot be combined with successful output")
+        return self
+
+    def with_retry_count(self, retry_count: int) -> "LLMResponse[StructuredOutputT]":
+        return self.model_copy(update={"retry_count": retry_count})
+
+
+def dump_json_value(value: Any) -> JsonValue:
+    return value
