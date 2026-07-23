@@ -12,10 +12,9 @@ from pydantic import (
     model_validator,
 )
 
-from bridger.models.file_index import validate_repository_path
+from bridger.models.repository_path import RepositoryPath, validate_repository_path
 
 NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
-RepositoryPath = Annotated[str, StringConstraints(min_length=1)]
 TopicSlug = Annotated[
     str,
     StringConstraints(
@@ -152,6 +151,32 @@ class ContextPlanRunStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+class ToolExecutionStatus(StrEnum):
+    COMPLETED = "completed"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+class ToolExecutionEventType(StrEnum):
+    TOOL_CALL_REQUESTED = "tool_call_requested"
+    TOOL_CALL_REJECTED = "tool_call_rejected"
+    TOOL_CALL_COMPLETED = "tool_call_completed"
+    TOOL_CALL_FAILED = "tool_call_failed"
+
+
+class FinalizationDecisionCode(StrEnum):
+    ACCEPTED = "accepted"
+    INVALID_REQUEST = "invalid_request"
+    RUN_NOT_ACTIVE = "run_not_active"
+    RUN_NOT_SYNTHESIZABLE = "run_not_synthesizable"
+    RUN_STALLED = "run_stalled"
+    RUN_FAILED = "run_failed"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    UNSAFE_EVIDENCE_PATH = "unsafe_evidence_path"
+    UNKNOWN_EVIDENCE_PATH = "unknown_evidence_path"
+    UNINSPECTED_EVIDENCE_PATH = "uninspected_evidence_path"
+
+
 class ContextPlanRunPhase(StrEnum):
     INITIALIZATION = "initialization"
     ORIENTATION = "orientation"
@@ -193,6 +218,90 @@ class ContextPlanSearchRecord(ContextPlanModel):
     result_count: Annotated[int, Field(ge=0)]
 
 
+class ContextPlanValidationIssue(ContextPlanModel):
+    code: NonEmptyString
+    location: list[str | int]
+    message: NonEmptyString
+    context: dict[str, JsonValue]
+
+
+class ToolCallRequest(ContextPlanModel):
+    call_id: NonEmptyString
+    name: NonEmptyString
+    arguments: dict[str, JsonValue]
+
+
+class ToolBudgetCost(ContextPlanModel):
+    tool_calls: Annotated[int, Field(ge=0)] = 1
+    file_reads: Annotated[int, Field(ge=0)] = 0
+    excerpts: Annotated[int, Field(ge=0)] = 0
+    searches: Annotated[int, Field(ge=0)] = 0
+    symbol_queries: Annotated[int, Field(ge=0)] = 0
+    graph_queries: Annotated[int, Field(ge=0)] = 0
+
+
+class ToolInspectionDelta(ContextPlanModel):
+    discovered_paths: list[RepositoryPath] = Field(default_factory=list)
+    evidence_paths: list[RepositoryPath] = Field(default_factory=list)
+    excerpts_read: list[ContextPlanInspectedExcerpt] = Field(default_factory=list)
+    symbols_inspected: list[ContextPlanInspectedSymbol] = Field(default_factory=list)
+    searches_performed: list[ContextPlanSearchRecord] = Field(default_factory=list)
+    graph_paths_inspected: list[RepositoryPath] = Field(default_factory=list)
+    manifests_inspected: list[RepositoryPath] = Field(default_factory=list)
+
+    _validate_paths = field_validator(
+        "discovered_paths",
+        "evidence_paths",
+        "graph_paths_inspected",
+        "manifests_inspected",
+    )(lambda paths: [validate_context_plan_path(path) for path in paths])
+
+
+class ToolExecutionResult(ContextPlanModel):
+    call_id: NonEmptyString
+    tool_name: NonEmptyString
+    status: ToolExecutionStatus
+    output: dict[str, JsonValue] | None = None
+    issues: list[ContextPlanValidationIssue] = Field(default_factory=list)
+    estimated_cost: ToolBudgetCost
+    actual_cost: ToolBudgetCost
+    inspection_delta: ToolInspectionDelta = Field(default_factory=ToolInspectionDelta)
+    truncated: bool = False
+
+
+class ToolExecutionEvent(ContextPlanModel):
+    event_type: ToolExecutionEventType
+    call_id: NonEmptyString
+    tool_name: NonEmptyString
+    fingerprint: NonEmptyString
+    estimated_cost: ToolBudgetCost | None = None
+    actual_cost: ToolBudgetCost | None = None
+    inspection_delta: ToolInspectionDelta | None = None
+    issue_codes: list[NonEmptyString] = Field(default_factory=list)
+    truncated: bool = False
+    occurred_at: datetime
+
+    _validate_occurred_at = field_validator("occurred_at")(validate_aware_datetime)
+
+
+class FinalizationContext(ContextPlanModel):
+    run_status: ContextPlanRunStatus
+    stalled: bool
+    hard_budget_exhausted: bool
+    evidence_paths: list[RepositoryPath] = Field(default_factory=list)
+    finalization_request_count: Annotated[int, Field(ge=0)]
+
+    _validate_evidence_paths = field_validator("evidence_paths")(
+        lambda paths: [validate_context_plan_path(path) for path in paths]
+    )
+
+
+class FinalizationDecision(ContextPlanModel):
+    accepted: bool
+    code: FinalizationDecisionCode
+    issues: list[ContextPlanValidationIssue] = Field(default_factory=list)
+
+
 class ContextPlanGraphQueryRecord(ContextPlanModel):
     tool: NonEmptyString
     subject: NonEmptyString
@@ -212,13 +321,6 @@ class ContextPlanRunInspection(ContextPlanModel):
     _validate_paths = field_validator("inspected_files")(
         lambda paths: [validate_context_plan_path(path) for path in paths]
     )
-
-
-class ContextPlanValidationIssue(ContextPlanModel):
-    code: NonEmptyString
-    location: list[str | int]
-    message: NonEmptyString
-    context: dict[str, JsonValue]
 
 
 class ContextPlanFinalizationRecord(ContextPlanModel):

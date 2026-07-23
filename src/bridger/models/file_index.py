@@ -1,20 +1,10 @@
 from datetime import datetime
 from enum import StrEnum
-from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-RepositoryPath = Annotated[str, StringConstraints(min_length=1)]
-
-
-def validate_repository_path(path: str) -> str:
-    parsed_path = PurePosixPath(path)
-    if parsed_path.is_absolute() or ".." in parsed_path.parts:
-        raise ValueError("path must stay within the repository")
-    if "\\" in path or path != parsed_path.as_posix():
-        raise ValueError("path must be a repository-relative POSIX path")
-    return path
+from bridger.models.repository_path import RepositoryPath, validate_repository_path
 
 
 class ArtifactModel(BaseModel):
