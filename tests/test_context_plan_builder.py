@@ -208,6 +208,8 @@ def test_dummy_workflow_recovers_from_rejection_and_writes_both_artifacts(
     assert run.output is not None
 
     assert len(client.requests) == 6
+    assert client.requests[0].reasoning is not None
+    assert client.requests[0].reasoning.effort == "high"
     assert "Repository bootstrap facts" in client.requests[0].messages[-1].content
     assert any(
         message.role == "tool" and message.tool_call_id == "list"

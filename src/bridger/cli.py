@@ -1,9 +1,15 @@
+from pathlib import Path
+
 import typer
+from dotenv import load_dotenv
 
 from bridger.commands import init as init_command
 from bridger.commands import inspect as inspect_command
 from bridger.commands import prompt as prompt_command
 from bridger.commands import update as update_command
+
+BRIDGER_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(BRIDGER_ROOT / ".env")
 
 app = typer.Typer(help="Compile repository context for AI coding agents.")
 

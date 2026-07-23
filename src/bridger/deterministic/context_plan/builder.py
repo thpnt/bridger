@@ -47,6 +47,7 @@ from bridger.llm.errors import LLMStructuredOutputError
 from bridger.llm.models import (
     LLMMessage,
     LLMOperation,
+    LLMReasoningConfig,
     LLMRequest,
     LLMResponse,
     LLMToolCall,
@@ -794,6 +795,7 @@ class ContextPlanBuilder:
             profile=self._model_profile,
             messages=list(prompt.messages),
             tools=list(prompt.tools),
+            reasoning=LLMReasoningConfig(effort="high"),
             metadata=metadata,
         )
         state.record_model_call_started()
