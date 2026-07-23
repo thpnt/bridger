@@ -21,6 +21,7 @@ from bridger.deterministic.repo_context import build_repo_context_for_project
 from bridger.deterministic.repo_discovery import build_repo_discovery_for_project
 from bridger.deterministic.repo_graph import build_repo_graph_for_project
 from bridger.deterministic.symbols import (
+    TreeSitterCompatibilityError,
     build_extractor_registry,
     build_symbol_index_for_project,
     extractor_for_path,
@@ -127,6 +128,13 @@ def run(fresh: bool, verbose: bool, llm_profile: str | None = None) -> int:
             InitExitCode.PREREQUISITES,
             paths=paths,
             next_step="Run bridger init again to regenerate deterministic artifacts.",
+        )
+    except TreeSitterCompatibilityError as error:
+        return _fail(
+            str(error),
+            InitExitCode.PREREQUISITES,
+            paths=paths,
+            next_step="Reinstall Bridger so tree-sitter 0.25.x is selected.",
         )
     except LLMConfigurationError as error:
         return _fail(

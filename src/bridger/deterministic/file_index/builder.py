@@ -1,7 +1,11 @@
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
-from bridger.deterministic.file_index.ignore import file_skip_reason
+from bridger.deterministic.file_index.ignore import (
+    file_skip_reason,
+    is_gitignored,
+    load_gitignore,
+)
 from bridger.deterministic.file_index.metadata import (
     collect_file_metadata,
     has_binary_marker,
@@ -48,6 +52,7 @@ def build_file_index_for_project(
     generated_at: datetime | None = None,
 ) -> FileIndexArtifact:
     root = repo_root.resolve()
+    gitignore = load_gitignore(root)
     included_files: list[IndexedFile] = []
     skipped_files: list[SkippedFile] = []
 
@@ -69,6 +74,9 @@ def build_file_index_for_project(
             continue
         if ignored_reason is not None:
             skipped_files.append(_skipped(relative_path, ignored_reason))
+            continue
+        if is_gitignored(gitignore, relative_path):
+            skipped_files.append(_skipped(relative_path, SkipReason.GITIGNORED))
             continue
 
         try:

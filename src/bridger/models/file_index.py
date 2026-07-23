@@ -14,6 +14,7 @@ class ArtifactModel(BaseModel):
 class SkipReason(StrEnum):
     IGNORED_DIRECTORY = "ignored_directory"
     IGNORED_FILE = "ignored_file"
+    GITIGNORED = "gitignored"
     SENSITIVE_FILE = "sensitive_file"
     BINARY_FILE = "binary_file"
     LARGE_FILE = "large_file"

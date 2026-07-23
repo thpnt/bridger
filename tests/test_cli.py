@@ -238,6 +238,29 @@ def test_init_maps_missing_artifact_to_prerequisite_failure(
     assert "Required artifact is missing" in result.stdout
 
 
+def test_init_maps_incompatible_tree_sitter_to_prerequisite_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def incompatible_tree_sitter(*args, **kwargs):
+        raise init_command.TreeSitterCompatibilityError(
+            "Tree-sitter 0.26.0 is incompatible with Bridger's language bindings."
+        )
+
+    monkeypatch.setattr(
+        init_command,
+        "build_symbol_index_for_project",
+        incompatible_tree_sitter,
+    )
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == init_command.InitExitCode.PREREQUISITES
+    assert "Tree-sitter 0.26.0 is incompatible" in result.stdout
+    assert "Reinstall Bridger so tree-sitter 0.25.x is selected" in result.stdout
+
+
 def test_init_maps_artifact_write_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

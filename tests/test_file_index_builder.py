@@ -51,6 +51,41 @@ def test_builder_skips_sensitive_files(tmp_path: Path, filename: str) -> None:
     assert skipped_paths(tmp_path)[filename] == SkipReason.SENSITIVE_FILE
 
 
+def test_builder_respects_root_gitignore_file_patterns(tmp_path: Path) -> None:
+    (tmp_path / ".gitignore").write_text("*.generated\ncache/\n")
+    (tmp_path / "keep.txt").write_text("keep")
+    (tmp_path / "ignored.generated").write_text("ignore")
+    (tmp_path / "cache" / "nested.txt").parent.mkdir()
+    (tmp_path / "cache" / "nested.txt").write_text("ignore")
+
+    artifact = build_file_index_for_project(tmp_path)
+
+    assert [file.path for file in artifact.files] == [".gitignore", "keep.txt"]
+    assert {
+        file.path: file.skip_reason for file in artifact.skipped_files
+    } == {
+        "cache/nested.txt": SkipReason.GITIGNORED,
+        "ignored.generated": SkipReason.GITIGNORED,
+    }
+
+
+def test_builder_respects_gitignore_negation(tmp_path: Path) -> None:
+    (tmp_path / ".gitignore").write_text("generated/\n!generated/keep.txt\n")
+    (tmp_path / "generated").mkdir()
+    (tmp_path / "generated" / "drop.txt").write_text("drop")
+    (tmp_path / "generated" / "keep.txt").write_text("keep")
+
+    artifact = build_file_index_for_project(tmp_path)
+
+    assert [file.path for file in artifact.files] == [
+        ".gitignore",
+        "generated/keep.txt",
+    ]
+    assert {
+        file.path: file.skip_reason for file in artifact.skipped_files
+    } == {"generated/drop.txt": SkipReason.GITIGNORED}
+
+
 def test_builder_skips_binary_file(tmp_path: Path) -> None:
     (tmp_path / "binary.dat").write_bytes(b"text\0binary")
 
