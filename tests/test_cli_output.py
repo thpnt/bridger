@@ -12,7 +12,7 @@ def test_render_init_summary_hides_zero_value_noise() -> None:
 
     output = capture.get()
 
-    assert "Bridger initialized" in output
+    assert "Repository substrate ready" in output
     assert "Deterministic substrate" in output
     assert "0 parse errors" not in output
     assert "0 unresolved imports" not in output
@@ -28,7 +28,7 @@ def test_render_init_summary_shows_warnings() -> None:
 
     output = capture.get()
 
-    assert "Bridger initialized with warnings" in output
+    assert "Repository substrate ready with warnings" in output
     assert "2 parse errors" in output
     assert "12 unresolved imports" in output
     assert "Warnings" in output

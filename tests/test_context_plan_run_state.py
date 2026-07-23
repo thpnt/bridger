@@ -200,7 +200,7 @@ def test_model_and_elapsed_budget_limits_are_enforced() -> None:
     decision = policy.preflight_model_turn(state, now=NOW)
 
     assert decision.allowed is False
-    assert decision.reasons == ("model_turns",)
+    assert decision.reasons == ("model_turns", "token_usage")
     assert policy.hard_budget_exhausted(state, now=NOW) is True
     assert policy.preflight_tool_call(
         state,

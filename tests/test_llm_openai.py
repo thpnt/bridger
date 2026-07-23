@@ -15,6 +15,7 @@ from bridger.llm.errors import (
     LLMInvalidResponseError,
     LLMProviderError,
     LLMQuotaError,
+    LLMRateLimitError,
     LLMStructuredOutputError,
     LLMTimeoutError,
 )
@@ -22,11 +23,13 @@ from bridger.llm.models import (
     LLMMessage,
     LLMOperation,
     LLMRequest,
+    LLMResponse,
     LLMToolCall,
     LLMToolDefinition,
 )
 from bridger.llm.profiles import LLMProfile, RetryPolicy
 from bridger.llm.providers.openai import OpenAILLMClient
+from bridger.models.context_plan import ContextPlan
 
 
 class ExampleResult(BaseModel):
@@ -95,6 +98,66 @@ def request_with_tools() -> LLMRequest:
     )
 
 
+def context_plan_request(prompt: str) -> LLMRequest:
+    return LLMRequest(
+        operation=LLMOperation.CONTEXT_PLAN_GENERATION,
+        messages=[
+            LLMMessage.system("Return the requested Context Plan."),
+            LLMMessage.user(prompt),
+        ],
+    )
+
+
+def context_plan() -> ContextPlan:
+    return ContextPlan.model_validate(
+        {
+            "generated_at": "2026-07-23T12:00:00Z",
+            "repo": {"root_name": "fixture", "revision": "test"},
+            "summary": {
+                "repository_purpose": "Fixture application",
+                "project_type": "Python application",
+                "detected_stack": ["Python"],
+                "main_runtime_flow": "The app module starts the fixture.",
+                "confidence": 0.9,
+            },
+            "packages": [
+                {
+                    "package_id": "pkg.application",
+                    "title": "Application",
+                    "purpose": "Explain the application entrypoint.",
+                    "priority": 1,
+                    "topics": ["application-runtime"],
+                    "ordered_items": [
+                        {
+                            "path": "src/app.py",
+                            "line_start": 1,
+                            "line_end": 2,
+                            "role": "entrypoint",
+                            "reason": "Contains application startup.",
+                            "expected_use": "Trace the runtime flow.",
+                        }
+                    ],
+                    "provenance": [
+                        {
+                            "source_type": "file_excerpt",
+                            "path": "src/app.py",
+                            "line_start": 1,
+                            "line_end": 2,
+                            "evidence_note": "Inspected entrypoint excerpt.",
+                        }
+                    ],
+                    "confidence": 0.9,
+                    "warnings": [],
+                    "unknowns": [],
+                }
+            ],
+            "intentionally_excluded": [],
+            "global_warnings": [],
+            "global_unknowns": [],
+        }
+    )
+
+
 def text_response(**overrides: Any) -> dict[str, Any]:
     response = {
         "id": "resp_1",
@@ -133,21 +196,43 @@ def test_openai_adapter_translates_messages_tools_privacy_and_normalizes_text() 
     assert payload["store"] is False
     assert payload["model"] == "gpt-test"
     assert payload["input"][0] == {"role": "system", "content": "System prompt SECRET"}
-    assert payload["input"][2]["type"] == "function_call"
-    assert payload["input"][2]["call_id"] == "call_1"
+    assert payload["input"][2] == {
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "read_file",
+        "arguments": '{"path": "a.py"}',
+    }
     assert payload["input"][3]["type"] == "function_call_output"
+    assert payload["input"][3]["call_id"] == "call_1"
     assert json.loads(payload["input"][3]["output"])["ok"] is True
-    assert payload["tools"][0]["type"] == "function"
-    assert payload["tools"][0]["strict"] is True
+    assert payload["tools"] == [
+        {
+            "type": "function",
+            "name": "read_file",
+            "description": "Read a safe file",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
+    ]
     assert payload["metadata"] == {"workflow_id": "wf_1"}
     assert "secret_path" not in payload["metadata"]
+    assert isinstance(response, LLMResponse)
     assert response.text == "hello"
+    assert response.usage.input_tokens == 3
+    assert response.usage.output_tokens == 5
+    assert response.usage.total_tokens == 8
     assert response.usage.cached_input_tokens == 1
     assert response.usage.reasoning_tokens == 2
     assert response.model == "gpt-test-returned"
     assert response.response_id == "resp_1"
     assert response.provider_request_id == "req_1"
     assert response.latency_ms in {99, 100}
+    assert isinstance(response.model_dump(), dict)
 
 
 def test_openai_adapter_parses_tool_calls_and_rejects_malformed_arguments() -> None:
@@ -185,6 +270,69 @@ def test_openai_adapter_parses_tool_calls_and_rejects_malformed_arguments() -> N
         run_generate(bad_client, request_with_tools())
 
 
+def test_openai_adapter_preserves_multiple_ordered_tool_calls() -> None:
+    response_payload = text_response(
+        output=[
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "read_file",
+                "arguments": '{"path":"src/a.py"}',
+            },
+            {
+                "type": "function_call",
+                "id": "fc_2",
+                "call_id": "call_2",
+                "name": "read_file",
+                "arguments": '{"path":"src/b.py"}',
+            },
+        ]
+    )
+    client = OpenAILLMClient(
+        openai_client=FakeOpenAI([response_payload]),
+        profile=profile(),
+    )
+
+    response = run_generate(client, request_with_tools())
+
+    assert [call.id for call in response.tool_calls] == ["call_1", "call_2"]
+    assert [call.arguments for call in response.tool_calls] == [
+        {"path": "src/a.py"},
+        {"path": "src/b.py"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tool_call", "message"),
+    [
+        (
+            {"type": "function_call", "name": "read_file", "arguments": "{}"},
+            "stable call ID",
+        ),
+        (
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "arguments": "{}",
+            },
+            "name",
+        ),
+    ],
+)
+def test_openai_adapter_rejects_tool_calls_without_required_fields(
+    tool_call: dict[str, Any],
+    message: str,
+) -> None:
+    client = OpenAILLMClient(
+        openai_client=FakeOpenAI([text_response(output=[tool_call])]),
+        profile=profile(),
+    )
+
+    with pytest.raises(LLMInvalidResponseError, match=message):
+        run_generate(client, request_with_tools())
+
+
 def test_openai_adapter_validates_structured_output() -> None:
     fake = FakeOpenAI([text_response(output_text='{"answer":"ok"}')])
     client = OpenAILLMClient(openai_client=fake, profile=profile())
@@ -200,16 +348,21 @@ def test_openai_adapter_validates_structured_output() -> None:
     invalid_json = OpenAILLMClient(
         openai_client=FakeOpenAI([text_response(output_text="{bad")]),
         profile=profile(),
+        clock=_clock(),
     )
-    with pytest.raises(LLMStructuredOutputError):
+    with pytest.raises(LLMStructuredOutputError) as invalid_json_error:
         run_generate(invalid_json, request_with_tools(), output_type=ExampleResult)
+    assert invalid_json_error.value.invalid_output == "{bad"
+    assert invalid_json_error.value.usage.total_tokens == 8
+    assert invalid_json_error.value.latency_ms in {99, 100}
 
     invalid_schema = OpenAILLMClient(
         openai_client=FakeOpenAI([text_response(output_text='{"wrong":"ok"}')]),
         profile=profile(),
     )
-    with pytest.raises(LLMStructuredOutputError):
+    with pytest.raises(LLMStructuredOutputError) as invalid_schema_error:
         run_generate(invalid_schema, request_with_tools(), output_type=ExampleResult)
+    assert invalid_schema_error.value.invalid_output == {"wrong": "ok"}
 
     incomplete = OpenAILLMClient(
         openai_client=FakeOpenAI(
@@ -222,8 +375,39 @@ def test_openai_adapter_validates_structured_output() -> None:
         ),
         profile=profile(),
     )
-    with pytest.raises(LLMStructuredOutputError):
+    with pytest.raises(LLMStructuredOutputError) as incomplete_error:
         run_generate(incomplete, request_with_tools(), output_type=ExampleResult)
+    assert incomplete_error.value.usage.input_tokens == 3
+
+
+def test_openai_adapter_uses_context_plan_schema_for_synthesis_and_repair() -> None:
+    plan = context_plan()
+    fake = FakeOpenAI(
+        [
+            text_response(output_text=plan.model_dump_json()),
+            text_response(id="resp_2", output_text=plan.model_dump_json()),
+        ]
+    )
+    client = OpenAILLMClient(openai_client=fake, profile=profile())
+
+    synthesis = run_generate(
+        client,
+        context_plan_request("Synthesize the Context Plan."),
+        output_type=ContextPlan,
+    )
+    repair = run_generate(
+        client,
+        context_plan_request("Repair the invalid Context Plan."),
+        output_type=ContextPlan,
+    )
+
+    assert synthesis.structured_output == plan
+    assert repair.structured_output == plan
+    for payload in fake.responses.calls:
+        assert "tools" not in payload
+        assert payload["text"]["format"]["type"] == "json_schema"
+        assert payload["text"]["format"]["name"] == "ContextPlan"
+        assert payload["text"]["format"]["schema"] == ContextPlan.model_json_schema()
 
 
 def test_openai_adapter_maps_errors_and_retries_without_real_sleep() -> None:
@@ -256,6 +440,14 @@ def test_openai_adapter_maps_errors_and_retries_without_real_sleep() -> None:
     )
     with pytest.raises(LLMQuotaError):
         run_generate(quota_client, request_with_tools())
+
+    rate_limit_client = OpenAILLMClient(
+        openai_client=FakeOpenAI([_rate_limit(), _rate_limit(), _rate_limit()]),
+        profile=profile(),
+        sleep=_record_sleep([]),
+    )
+    with pytest.raises(LLMRateLimitError):
+        run_generate(rate_limit_client, request_with_tools())
 
     timeout_client = OpenAILLMClient(
         openai_client=FakeOpenAI(
@@ -290,6 +482,14 @@ def test_openai_adapter_maps_errors_and_retries_without_real_sleep() -> None:
     with pytest.raises(LLMContextLimitError):
         run_generate(context_client, request_with_tools())
 
+    invalid_request_client = OpenAILLMClient(
+        openai_client=FakeOpenAI([_bad_request("invalid_request_error")]),
+        profile=profile(),
+    )
+    with pytest.raises(LLMProviderError) as invalid_request_error:
+        run_generate(invalid_request_client, request_with_tools())
+    assert invalid_request_error.value.retryable is False
+
 
 def test_openai_retry_exhaustion_returns_final_normalized_error() -> None:
     fake = FakeOpenAI([_server_error(), _server_error(), _server_error()])
@@ -304,6 +504,37 @@ def test_openai_retry_exhaustion_returns_final_normalized_error() -> None:
 
     assert error.value.retryable is True
     assert len(fake.responses.calls) == 3
+
+
+def test_openai_request_timeout_overrides_profile_timeout() -> None:
+    fake = FakeOpenAI([text_response()])
+    timeout_profile = profile().model_copy(update={"timeout_seconds": 30.0})
+    client = OpenAILLMClient(openai_client=fake, profile=timeout_profile)
+    request = request_with_tools().model_copy(update={"timeout_seconds": 5.0})
+
+    run_generate(client, request)
+
+    assert fake.responses.calls[0]["timeout"] == 5.0
+
+
+@pytest.mark.parametrize(
+    ("provider_response", "error_type"),
+    [
+        (text_response(status="failed", output=[]), LLMProviderError),
+        (text_response(output=[], output_text=None), LLMInvalidResponseError),
+    ],
+)
+def test_openai_adapter_normalizes_failed_or_empty_responses(
+    provider_response: dict[str, Any],
+    error_type: type[Exception],
+) -> None:
+    client = OpenAILLMClient(
+        openai_client=FakeOpenAI([provider_response]),
+        profile=profile(),
+    )
+
+    with pytest.raises(error_type):
+        run_generate(client, request_with_tools())
 
 
 def test_openai_logging_excludes_prompts_keys_and_tool_results(

@@ -11,10 +11,15 @@ app = typer.Typer(help="Compile repository context for AI coding agents.")
 @app.command("init")
 def init(
     fresh: bool = typer.Option(False, "--fresh", help="Use fresh project mode."),
-    verbose: bool = typer.Option(False, "--verbose", help="Show artifact paths."),
+    verbose: bool = typer.Option(False, "--verbose", help="Show run details."),
+    llm_profile: str | None = typer.Option(
+        None,
+        "--llm-profile",
+        help="Use a configured LLM profile for Context Plan generation.",
+    ),
 ) -> None:
     """Initialize Bridger project context files."""
-    init_command.run(fresh, verbose)
+    raise typer.Exit(init_command.run(fresh, verbose, llm_profile))
 
 
 @app.command()

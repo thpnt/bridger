@@ -43,6 +43,14 @@ class ProjectPaths:
         return self.bridger_dir / "artifacts" / "repo-discovery.json"
 
     @property
+    def context_plan_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "context-plan.json"
+
+    @property
+    def context_plan_run_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "context-plan-run.json"
+
+    @property
     def directories(self) -> tuple[Path, ...]:
         return tuple(
             self.bridger_dir / name

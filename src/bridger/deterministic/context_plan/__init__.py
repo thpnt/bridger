@@ -1,3 +1,5 @@
+from bridger.deterministic.context_plan.builder import ContextPlanBuilder
+from bridger.deterministic.context_plan.factory import create_context_plan_builder
 from bridger.deterministic.context_plan.validation import (
     ContextPlanValidationError,
     ContextPlanWriteResult,
@@ -8,6 +10,8 @@ from bridger.deterministic.context_plan.validation import (
 )
 
 __all__ = [
+    "ContextPlanBuilder",
+    "create_context_plan_builder",
     "ContextPlanValidationError",
     "ContextPlanWriteResult",
     "normalize_context_plan",

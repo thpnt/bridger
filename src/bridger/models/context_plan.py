@@ -365,6 +365,14 @@ class ContextPlanRun(ContextPlanModel):
     phase: ContextPlanRunPhase
     model_profile: NonEmptyString | None
     model_name: NonEmptyString | None
+    model_turns: Annotated[int, Field(ge=0)] = 0
+    tool_call_count: Annotated[int, Field(ge=0)] = 0
+    token_usage: Annotated[int, Field(ge=0)] = 0
+    input_tokens: Annotated[int, Field(ge=0)] = 0
+    output_tokens: Annotated[int, Field(ge=0)] = 0
+    cached_input_tokens: Annotated[int, Field(ge=0)] = 0
+    reasoning_tokens: Annotated[int, Field(ge=0)] = 0
+    model_latency_ms: Annotated[int, Field(ge=0)] = 0
     inspection: ContextPlanRunInspection
     finalization_requests: list[ContextPlanFinalizationRecord]
     validation_attempts: list[ContextPlanValidationAttempt]

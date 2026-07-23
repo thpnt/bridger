@@ -190,9 +190,22 @@ class OpenAILLMClient:
         incomplete_reason = _get(
             _get(provider_response, "incomplete_details"), "reason"
         )
+        text = _extract_text(provider_response)
+        usage = _extract_usage(provider_response)
+        if status == "failed":
+            raise LLMProviderError(
+                "OpenAI response failed",
+                retryable=False,
+                provider=self._profile.provider,
+                model=self._profile.model,
+                operation=request.operation,
+            )
         if output_type is not None and status == "incomplete":
             raise LLMStructuredOutputError(
                 f"Structured output was incomplete: {incomplete_reason or 'unknown'}",
+                invalid_output=text,
+                usage=usage,
+                latency_ms=latency_ms,
                 provider=self._profile.provider,
                 model=self._profile.model,
                 operation=request.operation,
@@ -202,18 +215,30 @@ class OpenAILLMClient:
         if output_type is not None and refusal is not None:
             raise LLMStructuredOutputError(
                 "Provider refused a structured-output request",
+                invalid_output=text,
+                usage=usage,
+                latency_ms=latency_ms,
                 provider=self._profile.provider,
                 model=self._profile.model,
                 operation=request.operation,
             )
 
         tool_calls = self._extract_tool_calls(provider_response, request)
-        text = _extract_text(provider_response)
+        if output_type is None and not text and not tool_calls and refusal is None:
+            raise LLMInvalidResponseError(
+                "Provider response did not contain text, tool calls, or a refusal",
+                provider=self._profile.provider,
+                model=self._profile.model,
+                operation=request.operation,
+            )
         structured_output: StructuredOutputT | None = None
         if output_type is not None:
             if not text:
                 raise LLMStructuredOutputError(
                     "Structured-output request returned empty output",
+                    invalid_output=text,
+                    usage=usage,
+                    latency_ms=latency_ms,
                     provider=self._profile.provider,
                     model=self._profile.model,
                     operation=request.operation,
@@ -223,6 +248,9 @@ class OpenAILLMClient:
             except json.JSONDecodeError as error:
                 raise LLMStructuredOutputError(
                     "Structured-output request returned invalid JSON",
+                    invalid_output=text,
+                    usage=usage,
+                    latency_ms=latency_ms,
                     provider=self._profile.provider,
                     model=self._profile.model,
                     operation=request.operation,
@@ -232,6 +260,9 @@ class OpenAILLMClient:
             except ValidationError as error:
                 raise LLMStructuredOutputError(
                     "Structured-output request failed schema validation",
+                    invalid_output=raw_data,
+                    usage=usage,
+                    latency_ms=latency_ms,
                     provider=self._profile.provider,
                     model=self._profile.model,
                     operation=request.operation,
@@ -244,7 +275,7 @@ class OpenAILLMClient:
             tool_calls=tool_calls,
             refusal=refusal,
             finish_reason=status or incomplete_reason,
-            usage=_extract_usage(provider_response),
+            usage=usage,
             provider=self._profile.provider,
             model=model,
             response_id=_get(provider_response, "id"),
@@ -259,6 +290,22 @@ class OpenAILLMClient:
         for item in _iter_output(provider_response):
             if _get(item, "type") != "function_call":
                 continue
+            call_id = _get(item, "call_id") or _get(item, "id")
+            name = _get(item, "name")
+            if not isinstance(call_id, str) or not call_id:
+                raise LLMInvalidResponseError(
+                    "Provider tool call did not include a stable call ID",
+                    provider=self._profile.provider,
+                    model=self._profile.model,
+                    operation=request.operation,
+                )
+            if not isinstance(name, str) or not name:
+                raise LLMInvalidResponseError(
+                    "Provider tool call did not include a name",
+                    provider=self._profile.provider,
+                    model=self._profile.model,
+                    operation=request.operation,
+                )
             raw_arguments = _get(item, "arguments")
             if not isinstance(raw_arguments, str):
                 raise LLMInvalidResponseError(
@@ -285,8 +332,8 @@ class OpenAILLMClient:
                 )
             tool_calls.append(
                 LLMToolCall(
-                    id=_get(item, "call_id") or _get(item, "id"),
-                    name=_get(item, "name"),
+                    id=call_id,
+                    name=name,
                     arguments=arguments,
                     raw_arguments=raw_arguments,
                 )
@@ -493,6 +540,9 @@ def _extract_error_code(error: Exception) -> str | None:
             return nested["code"]
         if isinstance(body.get("code"), str):
             return body["code"]
+    code = getattr(error, "code", None)
+    if isinstance(code, str):
+        return code
     return None
 
 

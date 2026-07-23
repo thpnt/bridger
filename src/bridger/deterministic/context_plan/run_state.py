@@ -269,14 +269,25 @@ class DiscoveryBudgetPolicy:
         )
 
     def preflight_model_turn(
-        self, state: ContextPlanRunState, *, now: datetime | None = None
+        self,
+        state: ContextPlanRunState,
+        *,
+        reserved_turns: int = 0,
+        now: datetime | None = None,
     ) -> BudgetPreflightDecision:
+        if reserved_turns < 0:
+            raise ValueError("reserved_turns must be non-negative")
         reasons: list[str] = []
         if (
             self.limits.model_turns is not None
-            and state.model_turns >= self.limits.model_turns
+            and state.model_turns + 1 + reserved_turns > self.limits.model_turns
         ):
             reasons.append("model_turns")
+        if (
+            self.limits.token_usage is not None
+            and state.token_usage >= self.limits.token_usage
+        ):
+            reasons.append("token_usage")
         if (
             self.limits.elapsed_seconds is not None
             and state.elapsed_seconds(now) >= self.limits.elapsed_seconds
@@ -370,6 +381,11 @@ class ContextPlanRunState:
         self.coverage = InspectionCoverageTracker(safe_file_count)
         self.model_turns = 0
         self.token_usage = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cached_input_tokens = 0
+        self.reasoning_tokens = 0
+        self.model_latency_ms = 0
         self.consumed_cost = ToolBudgetCost(tool_calls=0)
         self.fingerprint_counts: dict[str, int] = {}
         self.consecutive_no_progress = 0
@@ -399,13 +415,38 @@ class ContextPlanRunState:
         self._record_runtime_event("model_call_started", now)
 
     def record_model_call_completed(
-        self, token_usage: int, *, now: datetime | None = None
+        self,
+        token_usage: int,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_input_tokens: int = 0,
+        reasoning_tokens: int = 0,
+        latency_ms: int = 0,
+        now: datetime | None = None,
     ) -> None:
-        if token_usage < 0:
-            raise ValueError("token_usage must be non-negative")
+        usage = {
+            "token_usage": token_usage,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_input_tokens": cached_input_tokens,
+            "reasoning_tokens": reasoning_tokens,
+            "latency_ms": latency_ms,
+        }
+        if any(value < 0 for value in usage.values()):
+            raise ValueError("model usage and latency must be non-negative")
         self.model_turns += 1
         self.token_usage += token_usage
-        self._record_runtime_event("model_call_completed", now, token_usage=token_usage)
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
+        self.cached_input_tokens += cached_input_tokens
+        self.reasoning_tokens += reasoning_tokens
+        self.model_latency_ms += latency_ms
+        self._record_runtime_event("model_call_completed", now, **usage)
+
+    def record_no_progress_turn(self, *, now: datetime | None = None) -> None:
+        self.consecutive_no_progress += 1
+        self._record_runtime_event("model_turn_no_progress", now)
 
     def record_tool_request(
         self,
@@ -485,6 +526,27 @@ class ContextPlanRunState:
         self.phase = ContextPlanRunPhase.SYNTHESIS
         self._record_runtime_event("synthesis_started", now)
 
+    def record_repair_started(self, *, now: datetime | None = None) -> None:
+        self.phase = ContextPlanRunPhase.SYNTHESIS
+        self._record_runtime_event("repair_started", now)
+
+    def record_repair_completed(
+        self, succeeded: bool, *, now: datetime | None = None
+    ) -> None:
+        self._record_runtime_event("repair_completed", now, succeeded=succeeded)
+
+    def record_repair_budget_rejected(
+        self,
+        reasons: tuple[str, ...],
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        self._record_runtime_event(
+            "repair_budget_rejected",
+            now,
+            reasons=",".join(reasons),
+        )
+
     def record_validation_attempt(
         self,
         succeeded: bool,
@@ -511,10 +573,8 @@ class ContextPlanRunState:
         self.phase = ContextPlanRunPhase.WRITING
         self._record_runtime_event("artifact_written", now)
 
-    def fail(self, message: str, *, now: datetime | None = None) -> None:
+    def record_error(self, message: str, *, now: datetime | None = None) -> None:
         timestamp = self._touch(now)
-        self.status = ContextPlanRunStatus.FAILED
-        self.completed_at = timestamp
         self.errors.append(
             ContextPlanRunError(
                 occurred_at=timestamp,
@@ -522,6 +582,12 @@ class ContextPlanRunState:
                 message=message,
             )
         )
+
+    def fail(self, message: str, *, now: datetime | None = None) -> None:
+        timestamp = self._touch(now)
+        self.status = ContextPlanRunStatus.FAILED
+        self.completed_at = timestamp
+        self.record_error(message, now=timestamp)
         self._record_runtime_event("run_failed", timestamp)
 
     def interrupt(
@@ -585,6 +651,14 @@ class ContextPlanRunState:
             phase=self.phase,
             model_profile=self.model_profile,
             model_name=self.model_name,
+            model_turns=self.model_turns,
+            tool_call_count=self.consumed_cost.tool_calls,
+            token_usage=self.token_usage,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cached_input_tokens=self.cached_input_tokens,
+            reasoning_tokens=self.reasoning_tokens,
+            model_latency_ms=self.model_latency_ms,
             inspection=self.coverage.snapshot(),
             finalization_requests=sorted(
                 self.finalization_requests, key=lambda item: item.recorded_at
