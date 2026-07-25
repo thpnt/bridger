@@ -12,10 +12,14 @@ from pydantic import JsonValue, ValidationError
 from bridger.deterministic.context_plan.completion_policy import (
     ContextPlanCompletionPolicy,
 )
+from bridger.deterministic.context_plan.control_tools import (
+    CONTROL_TOOL_NAMES,
+    WorkingStateOperationExecutor,
+    control_tool_definitions,
+)
 from bridger.deterministic.context_plan.discovery_tools import (
     DiscoveryToolExecutor,
     FileExcerptOutput,
-    ManifestOutput,
     tool_call_request_from_llm_call,
     tool_result_to_llm_message,
 )
@@ -36,11 +40,19 @@ from bridger.deterministic.context_plan.run_state import (
     DiscoveryBudgetPolicy,
     ToolCallFingerprinter,
 )
+from bridger.deterministic.context_plan.synthesis_projector import (
+    SynthesisProjector,
+)
 from bridger.deterministic.context_plan.validation import (
     ContextPlanValidationError,
     ContextPlanWriteResult,
     validate_context_plan,
+    validate_context_plan_inspection,
     write_context_plan,
+)
+from bridger.deterministic.context_plan.working_state import (
+    WorkingStateMutationService,
+    WorkingStateStore,
 )
 from bridger.llm.client import LLMClient
 from bridger.llm.errors import LLMStructuredOutputError
@@ -51,11 +63,13 @@ from bridger.llm.models import (
     LLMRequest,
     LLMResponse,
     LLMToolCall,
+    LLMToolDefinition,
     LLMUsage,
 )
 from bridger.models.context_plan import (
     ContextPlan,
     ContextPlanFinalizationRequest,
+    ContextPlanInspectedSymbol,
     ContextPlanRepository,
     ContextPlanRun,
     ContextPlanRunOutput,
@@ -73,6 +87,12 @@ from bridger.models.file_index import FileIndexArtifact
 from bridger.models.graph_summary import GraphSummaryArtifact
 from bridger.models.repo_context import ManifestFile, RepoContextArtifact
 from bridger.models.repo_discovery import RepoDiscoveryArtifact
+from bridger.models.working_state import (
+    ContextPlanWorkingState,
+    ContextPlanWorkingStateSummary,
+    EvidenceKind,
+    EvidenceRecord,
+)
 from bridger.tools.services.artifact_store import ArtifactStore
 
 FINALIZATION_TOOL_NAME = "request_context_plan_finalization"
@@ -123,6 +143,8 @@ class ContextPlanBuilder:
         repair_prompt_builder: RepairPromptBuilder = build_context_plan_repair_prompt,
         context_plan_validator: ContextPlanValidator = validate_context_plan,
         context_plan_writer: ContextPlanWriter = write_context_plan,
+        working_state_destination: Path | None = None,
+        synthesis_projector: SynthesisProjector | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._artifact_store = artifact_store
@@ -141,6 +163,14 @@ class ContextPlanBuilder:
         self._build_repair_prompt = repair_prompt_builder
         self._validate_context_plan = context_plan_validator
         self._write_context_plan = context_plan_writer
+        self._working_state_destination = (
+            working_state_destination
+            or run_recorder.destination.with_name(
+                "context-plan-working-state.json"
+            )
+        )
+        self._synthesis_projector = synthesis_projector or SynthesisProjector()
+        self._control_executor: WorkingStateOperationExecutor | None = None
 
     async def build(
         self,
@@ -164,13 +194,7 @@ class ContextPlanBuilder:
             state.start()
             self._run_recorder.persist(state)
 
-            (
-                finalization,
-                results,
-                warnings,
-                questions,
-                findings,
-            ) = await self._run_investigation(
+            finalization, warnings, questions = await self._run_investigation(
                 state=state,
                 repo_discovery=repo_discovery,
                 repo_context=repo_context,
@@ -184,12 +208,9 @@ class ContextPlanBuilder:
             return await self._run_synthesis(
                 state=state,
                 finalization=finalization,
-                tool_results=results,
                 warnings=warnings,
                 open_questions=questions,
-                findings=findings,
                 file_index=file_index,
-                repo_context=repo_context,
                 graph_summary=graph_summary,
                 repo_discovery=repo_discovery,
             )
@@ -230,7 +251,7 @@ class ContextPlanBuilder:
         file_index: FileIndexArtifact,
         repo_discovery: RepoDiscoveryArtifact,
     ) -> ContextPlanRunState:
-        return self._run_state_factory(
+        state = self._run_state_factory(
             run_id=run_id,
             repo=ContextPlanRepository(
                 root_name=repo_discovery.repo.root_name,
@@ -240,6 +261,24 @@ class ContextPlanBuilder:
             model_profile=self._model_profile,
             model_name=self._model_name,
         )
+        working_state = ContextPlanWorkingState(
+            run_id=run_id,
+            repository_revision=repo_discovery.repo.revision,
+            updated_at=state.updated_at,
+        )
+        service = WorkingStateMutationService(
+            working_state,
+            WorkingStateStore(self._working_state_destination),
+            total_lines_by_path={
+                item.path: item.line_count for item in file_index.files
+            },
+        )
+        state.configure_working_state(
+            service,
+            self._artifact_relative_path(self._working_state_destination),
+        )
+        self._control_executor = WorkingStateOperationExecutor(service)
+        return state
 
     async def _run_investigation(
         self,
@@ -252,14 +291,11 @@ class ContextPlanBuilder:
         open_questions: list[str],
     ) -> tuple[
         ContextPlanFinalizationRequest | None,
-        list[ToolExecutionResult],
-        list[str],
         list[str],
         list[str],
     ]:
         history: list[LLMMessage] = []
         latest_results: list[ToolExecutionResult] = []
-        all_results: list[ToolExecutionResult] = []
         warnings = list(initial_warnings)
         questions = list(open_questions)
         findings: list[str] = []
@@ -275,7 +311,7 @@ class ContextPlanBuilder:
                         repository_bootstrap=repo_discovery,
                         repository_context=repo_context,
                         graph_summary=graph_summary,
-                        available_tools=self._tool_executor.registry.llm_definitions(),
+                        available_tools=self._available_tools(),
                         run_budget_limits=self._budget_policy.limits,
                         initial_warnings=warnings,
                     )
@@ -295,7 +331,9 @@ class ContextPlanBuilder:
                         warnings=warnings,
                         open_questions=questions,
                         investigation_notes=findings,
-                        available_tools=self._tool_executor.registry.llm_definitions(),
+                        working_state_summary=self._working_state_summary(state),
+                        working_state_entities=self._working_state_entities(state),
+                        available_tools=self._available_tools(),
                     )
                 )
 
@@ -329,7 +367,6 @@ class ContextPlanBuilder:
                 latest_results = self._reject_mixed_tool_calls(
                     state, response.tool_calls
                 )
-                all_results.extend(latest_results)
                 history.extend(
                     tool_result_to_llm_message(item) for item in latest_results
                 )
@@ -352,11 +389,10 @@ class ContextPlanBuilder:
                     state, finalization_call
                 )
                 latest_results.append(result)
-                all_results.append(result)
                 history.append(tool_result_to_llm_message(result))
                 self._run_recorder.persist(state)
                 if decision.accepted and request is not None:
-                    return request, all_results, warnings, questions, findings
+                    return request, warnings, questions
                 warnings.extend(
                     f"{issue.code}: {issue.message}" for issue in decision.issues
                 )
@@ -370,7 +406,6 @@ class ContextPlanBuilder:
                     state, tool_call
                 )
                 latest_results.append(result)
-                all_results.append(result)
                 history.append(tool_result_to_llm_message(result))
                 if duplicate_warning is not None:
                     warnings.append(duplicate_warning)
@@ -384,7 +419,7 @@ class ContextPlanBuilder:
 
             orientation = False
 
-        return None, all_results, warnings, questions, findings
+        return None, warnings, questions
 
     def _process_repository_tool_call(
         self,
@@ -394,7 +429,9 @@ class ContextPlanBuilder:
         request = tool_call_request_from_llm_call(tool_call)
         definition = self._tool_executor.registry.get(request.name)
         estimated_cost = (
-            definition.estimated_cost if definition is not None else ToolBudgetCost()
+            definition.estimated_cost
+            if definition is not None
+            else ToolBudgetCost()
         )
         fingerprint = self._fingerprint(request)
         duplicate = state.fingerprint_counts.get(fingerprint, 0) > 0
@@ -409,6 +446,8 @@ class ContextPlanBuilder:
             result = self._preflight_rejection(
                 request, estimated_cost, preflight.reasons
             )
+        elif request.name in CONTROL_TOOL_NAMES:
+            result = self._execute_control_tool(request, estimated_cost)
         else:
             result = self._tool_executor.execute(request)
         state.record_tool_result(result, fingerprint)
@@ -550,45 +589,89 @@ class ContextPlanBuilder:
         *,
         state: ContextPlanRunState,
         finalization: ContextPlanFinalizationRequest,
-        tool_results: list[ToolExecutionResult],
         warnings: list[str],
         open_questions: list[str],
-        findings: list[str],
         file_index: FileIndexArtifact,
-        repo_context: RepoContextArtifact,
         graph_summary: GraphSummaryArtifact,
         repo_discovery: RepoDiscoveryArtifact,
     ) -> ContextPlanRun:
-        selected_paths = set(finalization.key_evidence_paths)
-        excerpts = self._validated_excerpts(tool_results, selected_paths)
-        manifests = self._validated_manifests(tool_results, selected_paths)
-        inspection = state.coverage.snapshot()
-        graph_was_inspected = bool(
-            selected_paths.intersection(state.coverage.graph_paths_inspected)
+        if state.working_state_service is None:
+            raise ValueError("working state is not configured")
+        projection = self._synthesis_projector.project(
+            state.working_state_service.state,
+            priority_paths=finalization.key_evidence_paths,
         )
-        evidence_file_index = self._evidence_file_index(
-            file_index,
-            selected_paths,
+        state.record_synthesis_manifest(projection.manifest)
+        self._run_recorder.persist(state)
+        selected_paths = {
+            item.path for item in projection.evidence if item.path is not None
+        }
+        excerpts = [
+            FileExcerptOutput(
+                source_artifact=str(
+                    item.structured_payload.get(
+                        "source_artifact", "context-plan-working-state"
+                    )
+                ),
+                path=item.path,
+                line_start=item.line_ranges[0].line_start,
+                line_end=item.line_ranges[0].line_end,
+                content=item.content or "",
+                truncated=item.truncated,
+            )
+            for item in projection.evidence
+            if (
+                item.kind is EvidenceKind.FILE_EXCERPT
+                and item.path is not None
+                and item.line_ranges
+            )
+        ]
+        manifests = [
+            ManifestFile.model_validate(item.structured_payload)
+            for item in projection.evidence
+            if item.kind is EvidenceKind.MANIFEST_FACT
+        ]
+        omitted_warning = (
+            [
+                "Synthesis projection omitted "
+                f"{projection.manifest.omitted_record_count} evidence records; "
+                "see synthesis_input_manifest for explicit reasons."
+            ]
+            if projection.manifest.omitted_record_count
+            else []
         )
         synthesis_input = FinalSynthesisPromptInput(
             repository_bootstrap=repo_discovery,
             validated_evidence_paths=sorted(selected_paths),
             inspected_excerpts=excerpts,
             inspected_symbols=[
-                symbol
-                for symbol in inspection.inspected_symbols
-                if symbol.path in selected_paths
+                self._inspected_symbol(item)
+                for item in projection.evidence
+                if item.kind is EvidenceKind.SYMBOL_METADATA
+                and item.symbol_id is not None
             ],
             manifest_evidence=manifests,
-            graph_evidence=graph_summary if graph_was_inspected else None,
-            collected_findings=findings,
+            graph_evidence=graph_summary,
+            collected_findings=[
+                item.statement for item in projection.findings
+            ],
             confirmed_entrypoints=[
                 entrypoint
                 for entrypoint in graph_summary.declared_entrypoints
                 if entrypoint.path in selected_paths
             ],
-            warnings=warnings,
-            unknowns=[*open_questions, *finalization.unresolved_areas],
+            warnings=[*warnings, *omitted_warning],
+            unknowns=[
+                *open_questions,
+                *finalization.unresolved_areas,
+                *(item.question for item in projection.questions),
+            ],
+            synthesis_manifest=projection.manifest,
+            selected_candidates=list(projection.candidates),
+            selected_findings=list(projection.findings),
+            selected_relationships=list(projection.relationships),
+            selected_questions=list(projection.questions),
+            selected_evidence=list(projection.evidence),
         )
         prompt = self._build_synthesis_prompt(synthesis_input)
 
@@ -604,7 +687,7 @@ class ContextPlanBuilder:
         except LLMStructuredOutputError as error:
             invalid_output, issues = self._structured_output_failure(
                 error,
-                evidence_file_index,
+                file_index,
                 location=["synthesis"],
             )
             state.record_validation_attempt(False, issues)
@@ -614,7 +697,7 @@ class ContextPlanBuilder:
                 synthesis_input=synthesis_input,
                 invalid_output=invalid_output,
                 validation_issues=issues,
-                validation_file_index=evidence_file_index,
+                validation_file_index=file_index,
                 write_file_index=file_index,
             )
 
@@ -639,14 +722,13 @@ class ContextPlanBuilder:
                     )
                 },
                 validation_issues=[issue],
-                validation_file_index=evidence_file_index,
+                validation_file_index=file_index,
                 write_file_index=file_index,
             )
 
         try:
-            plan = self._validate_context_plan(
-                response.structured_output,
-                evidence_file_index,
+            plan = self._validate_synthesized_plan(
+                state, response.structured_output, file_index
             )
         except ContextPlanValidationError as error:
             state.record_validation_attempt(False, error.issues)
@@ -656,7 +738,7 @@ class ContextPlanBuilder:
                 synthesis_input=synthesis_input,
                 invalid_output=response.structured_output.model_dump(mode="json"),
                 validation_issues=error.issues,
-                validation_file_index=evidence_file_index,
+                validation_file_index=file_index,
                 write_file_index=file_index,
             )
 
@@ -721,7 +803,8 @@ class ContextPlanBuilder:
             raise ContextPlanValidationError([issue])
 
         try:
-            plan = self._validate_context_plan(
+            plan = self._validate_synthesized_plan(
+                state,
                 response.structured_output,
                 validation_file_index,
             )
@@ -836,62 +919,118 @@ class ContextPlanBuilder:
             return True
         return False
 
-    @staticmethod
-    def _evidence_file_index(
-        file_index: FileIndexArtifact,
-        evidence_paths: set[str],
-    ) -> FileIndexArtifact:
-        files = [item for item in file_index.files if item.path in evidence_paths]
-        stats = file_index.stats.model_copy(
-            update={
-                "files_included": len(files),
-                "total_included_bytes": sum(item.size_bytes for item in files),
-            }
+    def _available_tools(self) -> list[LLMToolDefinition]:
+        return [
+            *self._tool_executor.registry.llm_definitions(),
+            *control_tool_definitions(),
+        ]
+
+    def _execute_control_tool(
+        self,
+        request: ToolCallRequest,
+        estimated_cost: ToolBudgetCost,
+    ) -> ToolExecutionResult:
+        if self._control_executor is None:
+            raise ValueError("working-state operation executor is not configured")
+        operation_result = self._control_executor.execute(
+            request.name,
+            request.arguments,
         )
-        return file_index.model_copy(update={"files": files, "stats": stats})
+        return ToolExecutionResult(
+            call_id=request.call_id,
+            tool_name=request.name,
+            status=(
+                ToolExecutionStatus.COMPLETED
+                if operation_result.status == "completed"
+                else ToolExecutionStatus.REJECTED
+            ),
+            output=cast(
+                dict[str, JsonValue],
+                operation_result.model_dump(mode="json"),
+            ),
+            issues=operation_result.issues,
+            estimated_cost=estimated_cost,
+            actual_cost=ToolBudgetCost(),
+        )
 
-    def _validated_excerpts(
-        self,
-        results: list[ToolExecutionResult],
-        selected_paths: set[str],
-    ) -> list[FileExcerptOutput]:
-        excerpts: list[FileExcerptOutput] = []
-        for result in results:
-            if (
-                result.status is not ToolExecutionStatus.COMPLETED
-                or result.tool_name != "read_file_excerpt"
-                or result.output is None
-            ):
-                continue
-            excerpt = FileExcerptOutput.model_validate(result.output)
-            if (
-                excerpt.path in selected_paths
-                and excerpt.path in result.inspection_delta.evidence_paths
-            ):
-                excerpts.append(excerpt)
-        return excerpts
+    @staticmethod
+    def _working_state_summary(
+        state: ContextPlanRunState,
+    ) -> ContextPlanWorkingStateSummary | None:
+        if state.working_state_service is None:
+            return None
+        return state.working_state_service.state.summary()
 
-    def _validated_manifests(
+    @staticmethod
+    def _working_state_entities(
+        state: ContextPlanRunState,
+    ) -> dict[str, JsonValue]:
+        if state.working_state_service is None:
+            return {}
+        working_state = state.working_state_service.state
+        recent_evidence = sorted(
+            working_state.evidence,
+            key=lambda item: (item.sequence_number, item.evidence_id),
+            reverse=True,
+        )[:25]
+        return cast(
+            dict[str, JsonValue],
+            {
+                "recent_evidence": [
+                    {
+                        "evidence_id": item.evidence_id,
+                        "kind": item.kind.value,
+                        "path": item.path,
+                        "line_ranges": [
+                            value.model_dump(mode="json")
+                            for value in item.line_ranges
+                        ],
+                        "symbol_id": item.symbol_id,
+                        "inspection_level": item.inspection_level.value,
+                        "area_key": item.area_key,
+                    }
+                    for item in recent_evidence
+                ],
+                "findings": [
+                    item.model_dump(mode="json")
+                    for item in working_state.findings
+                ],
+                "relationships": [
+                    item.model_dump(mode="json")
+                    for item in working_state.relationships
+                ],
+                "open_questions": [
+                    item.model_dump(mode="json")
+                    for item in working_state.open_questions
+                ],
+                "package_candidates": [
+                    item.model_dump(mode="json")
+                    for item in working_state.package_candidates
+                ],
+            },
+        )
+
+    @staticmethod
+    def _inspected_symbol(record: EvidenceRecord) -> ContextPlanInspectedSymbol:
+        assert record.symbol_id is not None
+        return ContextPlanInspectedSymbol(
+            identifier=record.symbol_id,
+            path=record.path,
+        )
+
+    def _validate_synthesized_plan(
         self,
-        results: list[ToolExecutionResult],
-        selected_paths: set[str],
-    ) -> list[ManifestFile]:
-        manifests: list[ManifestFile] = []
-        for result in results:
-            if (
-                result.status is not ToolExecutionStatus.COMPLETED
-                or result.tool_name != "inspect_manifest"
-                or result.output is None
-            ):
-                continue
-            output = ManifestOutput.model_validate(result.output)
-            manifest = ManifestFile.model_validate(output.manifest)
-            if (
-                manifest.path in selected_paths
-                and manifest.path in result.inspection_delta.evidence_paths
-            ):
-                manifests.append(manifest)
-        return manifests
+        state: ContextPlanRunState,
+        payload: ContextPlan | dict[str, object],
+        file_index: FileIndexArtifact,
+    ) -> ContextPlan:
+        plan = self._validate_context_plan(payload, file_index)
+        if state.working_state_service is None:
+            raise ValueError("working state is not configured")
+        return validate_context_plan_inspection(
+            plan,
+            state.working_state_service.state,
+        )
 
     def _preflight_rejection(
         self,

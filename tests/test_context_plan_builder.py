@@ -617,3 +617,44 @@ def test_artifact_write_failure_does_not_report_completion(
     assert run.status.value == "failed"
     assert run.output is None
     assert run.phase.value == "writing"
+
+
+def test_synthesis_and_repair_reuse_persisted_manifest(
+    context_with_repo: tuple[Path, BridgerToolContext],
+) -> None:
+    root, context = context_with_repo
+    client = DummyLLMClient(
+        [
+            tool_response(
+                LLMToolCall(
+                    id="read",
+                    name="read_file_excerpt",
+                    arguments={"path": "src/app.py", "end_line": 2},
+                )
+            ),
+            tool_response(finalization_call()),
+            synthesis_response(valid_plan(line_end=99)),
+            synthesis_response(valid_plan()),
+        ]
+    )
+    builder = make_builder(
+        root,
+        context,
+        client,
+        limits=DiscoveryBudgetLimits(
+            model_turns=4, consecutive_no_progress_threshold=10
+        ),
+    )
+
+    run = asyncio.run(builder.build(run_id="run-manifest-repair"))
+
+    assert run.synthesis_input_manifest is not None
+    manifest_id = run.synthesis_input_manifest.manifest_id
+    synthesis_text = client.requests[-2].messages[-1].content or ""
+    repair_text = client.requests[-1].messages[-1].content or ""
+    assert manifest_id in synthesis_text
+    assert manifest_id in repair_text
+    assert run.working_state_checksum is not None
+    assert (
+        root / ".bridger/artifacts/context-plan-working-state.json"
+    ).is_file()

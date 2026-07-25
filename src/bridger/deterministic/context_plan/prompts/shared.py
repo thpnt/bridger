@@ -56,6 +56,18 @@ def render_json_section(title: str, value: object) -> str:
     return f"{title}:\n```json\n{serialized}\n```"
 
 
+def render_exact_json_section(title: str, value: object) -> str:
+    """Render a projector-bounded value without applying generic prefix clipping."""
+
+    serialized = json.dumps(
+        _normalize(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return f"{title}:\n```json\n{serialized}\n```"
+
+
 def render_tool_catalog(tools: list[LLMToolDefinition]) -> str:
     """Describe supplied tools while their schemas remain in the prompt payload."""
 

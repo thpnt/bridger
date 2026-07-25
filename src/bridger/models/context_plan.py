@@ -13,6 +13,8 @@ from pydantic import (
 )
 
 from bridger.models.repository_path import RepositoryPath, validate_repository_path
+from bridger.models.synthesis_manifest import SynthesisInputManifest
+from bridger.models.working_state import ContextPlanWorkingStateSummary
 
 NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 TopicSlug = Annotated[
@@ -378,9 +380,17 @@ class ContextPlanRun(ContextPlanModel):
     validation_attempts: list[ContextPlanValidationAttempt]
     errors: list[ContextPlanRunError]
     output: ContextPlanRunOutput | None
+    working_state_path: RepositoryPath | None = None
+    working_state_checksum: Checksum | None = None
+    working_state_summary: ContextPlanWorkingStateSummary | None = None
+    synthesis_input_manifest: SynthesisInputManifest | None = None
 
     _validate_started_at = field_validator("started_at")(validate_aware_datetime)
     _validate_updated_at = field_validator("updated_at")(validate_aware_datetime)
+
+    _validate_working_state_path = field_validator("working_state_path")(
+        lambda path: validate_context_plan_path(path) if path is not None else None
+    )
 
     @field_validator("completed_at")
     @classmethod

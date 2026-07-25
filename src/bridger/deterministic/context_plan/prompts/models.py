@@ -22,6 +22,15 @@ from bridger.models.graph_summary import (
 from bridger.models.repo_context import ManifestFile, RepoContextArtifact
 from bridger.models.repo_discovery import RepoDiscoveryArtifact
 from bridger.models.repository_path import RepositoryPath
+from bridger.models.synthesis_manifest import SynthesisInputManifest
+from bridger.models.working_state import (
+    ContextPlanWorkingStateSummary,
+    EstablishedFinding,
+    EvidenceRecord,
+    OpenQuestion,
+    PackageCandidate,
+    RelationshipRecord,
+)
 
 
 class ContextPlanPromptInput(BaseModel):
@@ -58,6 +67,8 @@ class InvestigationPromptInput(ContextPlanPromptInput):
     warnings: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
     investigation_notes: list[str] = Field(default_factory=list)
+    working_state_summary: ContextPlanWorkingStateSummary | None = None
+    working_state_entities: dict[str, JsonValue] = Field(default_factory=dict)
     available_tools: list[LLMToolDefinition] = Field(default_factory=list)
 
 
@@ -75,6 +86,12 @@ class FinalSynthesisPromptInput(ContextPlanPromptInput):
     warnings: list[str] = Field(default_factory=list)
     unknowns: list[str] = Field(default_factory=list)
     intentionally_excluded: list[ContextPlanExclusion] = Field(default_factory=list)
+    synthesis_manifest: SynthesisInputManifest | None = None
+    selected_candidates: list[PackageCandidate] = Field(default_factory=list)
+    selected_findings: list[EstablishedFinding] = Field(default_factory=list)
+    selected_relationships: list[RelationshipRecord] = Field(default_factory=list)
+    selected_questions: list[OpenQuestion] = Field(default_factory=list)
+    selected_evidence: list[EvidenceRecord] = Field(default_factory=list)
 
 
 class ContextPlanRepairPromptInput(ContextPlanPromptInput):

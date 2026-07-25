@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -164,7 +165,7 @@ class OpenAILLMClient:
                 "format": {
                     "type": "json_schema",
                     "name": output_type.__name__,
-                    "schema": output_type.model_json_schema(),
+                    "schema": _openai_strict_schema(output_type.model_json_schema()),
                     "strict": True,
                 }
             }
@@ -470,9 +471,36 @@ def _tool_to_openai(tool: LLMToolDefinition) -> dict[str, Any]:
         "type": "function",
         "name": tool.name,
         "description": tool.description,
-        "parameters": tool.input_schema,
+        "parameters": (
+            _openai_strict_schema(tool.input_schema)
+            if tool.strict
+            else tool.input_schema
+        ),
         "strict": tool.strict,
     }
+
+
+def _openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Adapt a Pydantic JSON Schema to OpenAI strict structured-output rules."""
+    normalized = copy.deepcopy(schema)
+    _normalize_schema_node(normalized)
+    return normalized
+
+
+def _normalize_schema_node(node: Any) -> None:
+    if isinstance(node, dict):
+        node.pop("default", None)
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            node["required"] = list(properties)
+            node["additionalProperties"] = False
+        elif node.get("type") == "object":
+            node["additionalProperties"] = False
+        for value in node.values():
+            _normalize_schema_node(value)
+    elif isinstance(node, list):
+        for value in node:
+            _normalize_schema_node(value)
 
 
 def _extract_usage(provider_response: Any) -> LLMUsage:

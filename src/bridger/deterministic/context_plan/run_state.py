@@ -17,6 +17,10 @@ from pathlib import Path
 from pydantic import JsonValue
 
 from bridger.artifacts import write_artifact
+from bridger.deterministic.context_plan.evidence import EvidenceExtractor
+from bridger.deterministic.context_plan.working_state import (
+    WorkingStateMutationService,
+)
 from bridger.models.context_plan import (
     ContextPlanFinalizationRecord,
     ContextPlanFinalizationRequest,
@@ -43,6 +47,7 @@ from bridger.models.context_plan import (
     ToolInspectionDelta,
 )
 from bridger.models.repository_path import RepositoryPath, validate_repository_path
+from bridger.models.synthesis_manifest import SynthesisInputManifest
 
 _COST_FIELDS = (
     "tool_calls",
@@ -388,13 +393,28 @@ class ContextPlanRunState:
         self.model_latency_ms = 0
         self.consumed_cost = ToolBudgetCost(tool_calls=0)
         self.fingerprint_counts: dict[str, int] = {}
+        self._tool_requests: dict[str, ToolCallRequest] = {}
         self.consecutive_no_progress = 0
         self.finalization_requests: list[ContextPlanFinalizationRecord] = []
         self.validation_attempts: list[ContextPlanValidationAttempt] = []
         self.errors: list[ContextPlanRunError] = []
         self.events: list[ToolExecutionEvent | ContextPlanRunEvent] = []
         self.output: ContextPlanRunOutput | None = None
+        self.working_state_service: WorkingStateMutationService | None = None
+        self.working_state_path: RepositoryPath | None = None
+        self.synthesis_input_manifest: SynthesisInputManifest | None = None
+        self._evidence_extractor = EvidenceExtractor()
+        self._last_working_mutation_sequence = 0
         self._record_runtime_event("run_started", timestamp)
+
+    def configure_working_state(
+        self,
+        service: WorkingStateMutationService,
+        path: RepositoryPath,
+    ) -> None:
+        self.working_state_service = service
+        self.working_state_path = validate_repository_path(path)
+        self._last_working_mutation_sequence = service.state.mutation_sequence
 
     def start(self, *, now: datetime | None = None) -> None:
         self.status = ContextPlanRunStatus.RUNNING
@@ -460,6 +480,7 @@ class ContextPlanRunState:
         self.fingerprint_counts[fingerprint] = (
             self.fingerprint_counts.get(fingerprint, 0) + 1
         )
+        self._tool_requests[request.call_id] = request
         self.events.append(
             ToolExecutionEvent(
                 event_type=ToolExecutionEventType.TOOL_CALL_REQUESTED,
@@ -485,6 +506,36 @@ class ContextPlanRunState:
             result.status is ToolExecutionStatus.COMPLETED
             and self.coverage.apply(result.inspection_delta)
         )
+        if (
+            result.status is ToolExecutionStatus.COMPLETED
+            and self.working_state_service is not None
+        ):
+            source_request = self._tool_requests.get(result.call_id)
+            extracted = self._evidence_extractor.extract(
+                result,
+                starting_sequence=(
+                    self.working_state_service.state.mutation_sequence
+                ),
+                source_arguments=(
+                    source_request.arguments
+                    if source_request is not None
+                    else None
+                ),
+            )
+            evidence_ids = self.working_state_service.apply_evidence(
+                extracted,
+                now=timestamp,
+            )
+            progress = progress or bool(evidence_ids)
+            current_sequence = (
+                self.working_state_service.state.mutation_sequence
+            )
+            progress = (
+                progress
+                or current_sequence > self._last_working_mutation_sequence
+            )
+            self._last_working_mutation_sequence = current_sequence
+        self._tool_requests.pop(result.call_id, None)
         if progress:
             self.consecutive_no_progress = 0
         else:
@@ -525,6 +576,21 @@ class ContextPlanRunState:
     def record_synthesis_started(self, *, now: datetime | None = None) -> None:
         self.phase = ContextPlanRunPhase.SYNTHESIS
         self._record_runtime_event("synthesis_started", now)
+
+    def record_synthesis_manifest(
+        self,
+        manifest: SynthesisInputManifest,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        if manifest.run_id != self.run_id:
+            raise ValueError("synthesis manifest run_id does not match run state")
+        self.synthesis_input_manifest = manifest
+        self._record_runtime_event(
+            "synthesis_manifest_recorded",
+            now,
+            manifest_id=manifest.manifest_id,
+        )
 
     def record_repair_started(self, *, now: datetime | None = None) -> None:
         self.phase = ContextPlanRunPhase.SYNTHESIS
@@ -668,6 +734,18 @@ class ContextPlanRunState:
             ),
             errors=sorted(self.errors, key=lambda item: item.occurred_at),
             output=self.output,
+            working_state_path=self.working_state_path,
+            working_state_checksum=(
+                self.working_state_service.store.checksum
+                if self.working_state_service is not None
+                else None
+            ),
+            working_state_summary=(
+                self.working_state_service.state.summary()
+                if self.working_state_service is not None
+                else None
+            ),
+            synthesis_input_manifest=self.synthesis_input_manifest,
         )
 
     def is_stalled(self, policy: DiscoveryBudgetPolicy) -> bool:

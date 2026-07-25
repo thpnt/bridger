@@ -128,7 +128,10 @@ def test_openai_client_runs_the_same_builder_through_repair_and_accounting(
     repair_payload = fake.responses.calls[-1]
     assert "tools" not in repair_payload
     assert repair_payload["text"]["format"]["name"] == "ContextPlan"
-    assert repair_payload["text"]["format"]["schema"] == ContextPlan.model_json_schema()
+    schema = repair_payload["text"]["format"]["schema"]
+    assert schema["required"] == list(schema["properties"])
+    assert schema["additionalProperties"] is False
+    assert "default" not in schema["properties"]["artifact"]
 
 
 def test_openai_timeout_fails_the_generic_run_and_preserves_the_plan(

@@ -131,3 +131,7 @@ __all__ = [
     "SymbolParseError",
     "SymbolRecord",
 ]
+from bridger.models.synthesis_manifest import SynthesisInputManifest
+from bridger.models.working_state import ContextPlanWorkingState
+
+__all__ = ["ContextPlanWorkingState", "SynthesisInputManifest"]

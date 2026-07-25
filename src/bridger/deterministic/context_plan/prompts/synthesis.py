@@ -6,7 +6,7 @@ from bridger.deterministic.context_plan.prompts.models import (
 )
 from bridger.deterministic.context_plan.prompts.shared import (
     build_system_message,
-    render_json_section,
+    render_exact_json_section,
     sorted_paths,
     sorted_strings,
 )
@@ -34,6 +34,44 @@ def build_final_synthesis_prompt(input: FinalSynthesisPromptInput) -> ContextPla
         input.intentionally_excluded,
         key=lambda exclusion: (exclusion.path_or_pattern, exclusion.reason),
     )
+    selected_evidence = [
+        record.model_dump(mode="json", exclude={"content"})
+        for record in input.selected_evidence
+    ]
+    projected_sections = [
+        render_exact_json_section(
+            "Synthesis input manifest", input.synthesis_manifest
+        ),
+        render_exact_json_section(
+            "Selected package candidates", input.selected_candidates
+        ),
+        render_exact_json_section(
+            "Selected established findings", input.selected_findings
+        ),
+        render_exact_json_section(
+            "Selected relationships", input.selected_relationships
+        ),
+        render_exact_json_section(
+            "Selected unresolved questions", input.selected_questions
+        ),
+        render_exact_json_section("Selected typed evidence", selected_evidence),
+        render_exact_json_section(
+            "Deterministic graph substrate", input.graph_evidence
+        ),
+    ]
+    legacy_sections = [
+        render_exact_json_section(
+            "Validated evidence paths", sorted_paths(input.validated_evidence_paths)
+        ),
+        render_exact_json_section("Inspected excerpts", excerpts),
+        render_exact_json_section("Inspected symbols", symbols),
+        render_exact_json_section("Manifest evidence", manifests),
+        render_exact_json_section("Graph evidence", input.graph_evidence),
+        render_exact_json_section(
+            "Collected findings", sorted_strings(input.collected_findings)
+        ),
+        render_exact_json_section("Confirmed entrypoints", entrypoints),
+    ]
     sections = [
         "Return only a structured ContextPlan matching the supplied schema. Build "
         "neutral, reusable packages; group files by coherent repository topic, "
@@ -45,22 +83,18 @@ def build_final_synthesis_prompt(input: FinalSynthesisPromptInput) -> ContextPla
         "five-memory-target design. Distinguish confirmed facts from interpretation, "
         "preserve warnings and unknowns, and include only paths and provenance backed "
         "by the supplied validated evidence.",
-        render_json_section("Repository bootstrap facts", input.repository_bootstrap),
-        render_json_section(
-            "Validated evidence paths", sorted_paths(input.validated_evidence_paths)
+        render_exact_json_section(
+            "Repository bootstrap facts", input.repository_bootstrap
         ),
-        render_json_section("Inspected excerpts", excerpts),
-        render_json_section("Inspected symbols", symbols),
-        render_json_section("Manifest evidence", manifests),
-        render_json_section("Graph evidence", input.graph_evidence),
-        render_json_section(
-            "Collected findings", sorted_strings(input.collected_findings)
+        *(
+            projected_sections
+            if input.synthesis_manifest is not None
+            else legacy_sections
         ),
-        render_json_section("Confirmed entrypoints", entrypoints),
-        render_json_section("Warnings", sorted_strings(input.warnings)),
-        render_json_section("Unknowns", sorted_strings(input.unknowns)),
-        render_json_section("Intentionally excluded candidates", exclusions),
-        render_json_section(
+        render_exact_json_section("Warnings", sorted_strings(input.warnings)),
+        render_exact_json_section("Unknowns", sorted_strings(input.unknowns)),
+        render_exact_json_section("Intentionally excluded candidates", exclusions),
+        render_exact_json_section(
             "ContextPlan output schema", ContextPlan.model_json_schema()
         ),
     ]

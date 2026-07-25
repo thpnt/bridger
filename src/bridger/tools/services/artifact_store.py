@@ -9,6 +9,7 @@ from bridger.models.repo_context import RepoContextArtifact
 from bridger.models.repo_discovery import RepoDiscoveryArtifact
 from bridger.models.repo_graph import RepoGraphArtifact
 from bridger.models.symbol_index import SymbolIndexArtifact
+from bridger.models.working_state import ContextPlanWorkingState
 from bridger.tools.errors import BridgerToolError
 
 ArtifactT = TypeVar("ArtifactT", bound=BaseModel)
@@ -37,6 +38,12 @@ class ArtifactStore:
 
     def load_repo_discovery(self) -> RepoDiscoveryArtifact:
         return self._load("repo-discovery.json", RepoDiscoveryArtifact)
+
+    def load_context_plan_working_state(self) -> ContextPlanWorkingState:
+        return self._load(
+            "context-plan-working-state.json",
+            ContextPlanWorkingState,
+        )
 
     def _load(self, name: str, model: type[ArtifactT]) -> ArtifactT:
         cached = self._cache.get(name)

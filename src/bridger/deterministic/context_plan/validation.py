@@ -1,11 +1,16 @@
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 import orjson
 from pydantic import JsonValue, ValidationError
 
 from bridger.artifacts import write_artifact
+from bridger.deterministic.context_plan.working_state import (
+    WorkingStateValidationError,
+    merge_line_ranges,
+    validate_working_state,
+)
 from bridger.deterministic.repo_discovery.checksums import sha256_file
 from bridger.models.context_plan import (
     ContextPackageItem,
@@ -13,6 +18,101 @@ from bridger.models.context_plan import (
     ContextPlanValidationIssue,
 )
 from bridger.models.file_index import FileIndexArtifact
+from bridger.models.working_state import (
+    ContextPlanWorkingState,
+    EvidenceKind,
+    EvidenceLineRange,
+    EvidenceStatus,
+)
+
+__all__ = [
+    "ContextPlanValidationError",
+    "ContextPlanWriteResult",
+    "WorkingStateValidationError",
+    "validate_context_plan",
+    "validate_context_plan_inspection",
+    "validate_working_state",
+    "write_context_plan",
+]
+
+
+def validate_context_plan_inspection(
+    plan: ContextPlan,
+    working_state: ContextPlanWorkingState,
+) -> ContextPlan:
+    """Require every synthesized range to be backed by an inspected excerpt."""
+
+    ranges_by_path: dict[str, list[tuple[int, int]]] = {}
+    for evidence in working_state.evidence:
+        if (
+            evidence.status is EvidenceStatus.ACTIVE
+            and evidence.kind is EvidenceKind.FILE_EXCERPT
+            and evidence.path is not None
+        ):
+            ranges_by_path.setdefault(evidence.path, []).extend(
+                (item.line_start, item.line_end) for item in evidence.line_ranges
+            )
+    for path, ranges in ranges_by_path.items():
+        merged = merge_line_ranges(
+            [
+                EvidenceLineRange(line_start=line_start, line_end=line_end)
+                for line_start, line_end in ranges
+            ]
+        )
+        ranges_by_path[path] = [
+            (item.line_start, item.line_end) for item in merged
+        ]
+
+    issues: list[ContextPlanValidationIssue] = []
+    for package_index, package in enumerate(plan.packages):
+        values = [
+            *(
+                (
+                    ["packages", package_index, "ordered_items", item_index],
+                    item.path,
+                    item.line_start,
+                    item.line_end,
+                )
+                for item_index, item in enumerate(package.ordered_items)
+            ),
+            *(
+                (
+                    ["packages", package_index, "provenance", item_index],
+                    item.path,
+                    item.line_start,
+                    item.line_end,
+                )
+                for item_index, item in enumerate(package.provenance)
+            ),
+        ]
+        for location, path, line_start, line_end in values:
+            if any(
+                observed_start <= line_start and line_end <= observed_end
+                for observed_start, observed_end in ranges_by_path.get(path, [])
+            ):
+                continue
+            issues.append(
+                ContextPlanValidationIssue(
+                    code=(
+                        "range_not_inspected"
+                        if path in ranges_by_path
+                        else "unknown_path"
+                    ),
+                    location=cast(list[str | int], location),
+                    message=(
+                        f"line range {line_start}-{line_end} is not covered by an "
+                        f"inspected excerpt for {path}"
+                    ),
+                    context={
+                        "path": path,
+                        "line_start": line_start,
+                        "line_end": line_end,
+                    },
+                )
+            )
+    if issues:
+        raise ContextPlanValidationError(issues)
+    return plan
 
 
 @dataclass(frozen=True)

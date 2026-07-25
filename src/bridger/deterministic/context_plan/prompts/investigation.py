@@ -34,9 +34,17 @@ def build_investigation_prompt(input: InvestigationPromptInput) -> ContextPlanPr
         render_json_section(
             "Investigation notes", sorted_strings(input.investigation_notes)
         ),
+        render_json_section(
+            "Durable working-state summary", input.working_state_summary
+        ),
+        render_json_section(
+            "Durable working-state entities", input.working_state_entities
+        ),
         render_tool_catalog(list(tools)),
-        "Choose exactly one next-action category: make additional repository tool "
-        "calls, or call request_context_plan_finalization. Request finalization "
+        "Use the state-management tools to externalize durable findings, "
+        "relationships, questions, and package candidates with stable evidence IDs. "
+        "Choose additional repository tool calls, state-management tool calls, or call "
+        "request_context_plan_finalization. Request finalization "
         "only when you believe the grounded evidence can support a useful neutral "
         "Context Plan. Use that structured control tool; never return a prose final "
         "answer. Do not decide whether finalization will be accepted.",

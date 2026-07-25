@@ -235,6 +235,48 @@ def test_openai_adapter_translates_messages_tools_privacy_and_normalizes_text() 
     assert isinstance(response.model_dump(), dict)
 
 
+def test_openai_adapter_normalizes_optional_nested_tool_schema_for_strict_mode() -> (
+    None
+):
+    tool = LLMToolDefinition(
+        name="list_files",
+        description="List files",
+        input_schema={
+            "$defs": {
+                "Filters": {
+                    "type": "object",
+                    "properties": {
+                        "extension": {
+                            "type": ["string", "null"],
+                            "default": None,
+                        }
+                    },
+                }
+            },
+            "type": "object",
+            "properties": {"filters": {"$ref": "#/$defs/Filters"}},
+        },
+    )
+    fake = FakeOpenAI([text_response()])
+    client = OpenAILLMClient(openai_client=fake, profile=profile())
+
+    run_generate(
+        client,
+        LLMRequest(
+            operation=LLMOperation.REPO_DISCOVERY,
+            messages=[LLMMessage.user("List files")],
+            tools=[tool],
+        ),
+    )
+
+    parameters = fake.responses.calls[0]["tools"][0]["parameters"]
+    assert parameters["required"] == ["filters"]
+    assert parameters["additionalProperties"] is False
+    assert parameters["$defs"]["Filters"]["required"] == ["extension"]
+    assert parameters["$defs"]["Filters"]["additionalProperties"] is False
+    assert "default" not in parameters["$defs"]["Filters"]["properties"]["extension"]
+
+
 def test_openai_adapter_parses_tool_calls_and_rejects_malformed_arguments() -> None:
     response_payload = text_response(
         output=[
@@ -407,7 +449,10 @@ def test_openai_adapter_uses_context_plan_schema_for_synthesis_and_repair() -> N
         assert "tools" not in payload
         assert payload["text"]["format"]["type"] == "json_schema"
         assert payload["text"]["format"]["name"] == "ContextPlan"
-        assert payload["text"]["format"]["schema"] == ContextPlan.model_json_schema()
+        schema = payload["text"]["format"]["schema"]
+        assert schema["required"] == list(schema["properties"])
+        assert schema["additionalProperties"] is False
+        assert "default" not in schema["properties"]["artifact"]
 
 
 def test_openai_adapter_maps_errors_and_retries_without_real_sleep() -> None:
