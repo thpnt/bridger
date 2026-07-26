@@ -31,16 +31,16 @@ class ProjectPaths:
         return self.bridger_dir / "artifacts" / "symbol-index.json"
 
     @property
-    def repo_graph_artifact(self) -> Path:
-        return self.bridger_dir / "artifacts" / "repo-graph.json"
+    def context_plan_bootstrap_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "context-plan-bootstrap.json"
 
     @property
-    def graph_summary_artifact(self) -> Path:
-        return self.bridger_dir / "artifacts" / "graph-summary.json"
+    def context_plan_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "context-plan.json"
 
     @property
-    def repo_discovery_artifact(self) -> Path:
-        return self.bridger_dir / "artifacts" / "repo-discovery.json"
+    def context_plan_run_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "context-plan-run.json"
 
     @property
     def directories(self) -> tuple[Path, ...]:

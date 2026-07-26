@@ -24,10 +24,48 @@ class RepoContextService:
             raise BridgerToolError(
                 "manifest_not_found", f"No parsed manifest exists for: {normalized}"
             )
+        entries = self._declarations(normalized, manifest.parsed)
         return {
             "source_artifact": "repo-context.json",
             "manifest": manifest.model_dump(mode="json"),
+            "declarations": entries,
         }
+
+    def _declarations(
+        self, path: str, parsed: dict[str, object]
+    ) -> list[dict[str, object]]:
+        """Attach only literal manifest declarations, never inferred entrypoints."""
+        try:
+            lines = self.paths.resolve_for_read(path).read_text().splitlines()
+        except (BridgerToolError, OSError, UnicodeError):
+            return []
+        entries: list[dict[str, object]] = []
+        for key, value in sorted(parsed.items()):
+            line_number = next(
+                (
+                    index
+                    for index, line in enumerate(lines, start=1)
+                    if key.replace("_", "-") in line or f'"{key}"' in line
+                ),
+                None,
+            )
+            if line_number is None:
+                continue
+            raw_value = lines[line_number - 1].strip()
+            entry: dict[str, object] = {
+                "name": key,
+                "source_path": path,
+                "source_range": {
+                    "start_line": line_number,
+                    "end_line": line_number,
+                },
+                "raw_value": raw_value,
+                "value": value,
+            }
+            if key in {"bin", "main", "module", "scripts", "entry_points"}:
+                entry["declaration_type"] = "explicit"
+            entries.append(entry)
+        return entries
 
     def list_config_files(self) -> dict[str, object]:
         return self._list("config_files")

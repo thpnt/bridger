@@ -1,5 +1,7 @@
 from fnmatch import fnmatch
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+
+from pathspec import PathSpec
 
 from bridger.models.file_index import SkipReason
 
@@ -35,6 +37,28 @@ SENSITIVE_FILE_PATTERNS = (
     "*.sqlite",
     "*.db",
 )
+
+
+def is_explicitly_excluded(path: PurePosixPath) -> bool:
+    return bool(path.parts) and path.parts[0] == ".bridger"
+
+
+def load_gitignore(repo_root: Path) -> PathSpec | None:
+    gitignore_path = repo_root / ".gitignore"
+    if not gitignore_path.is_file():
+        return None
+
+    try:
+        lines = gitignore_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None
+    return PathSpec.from_lines("gitignore", lines)
+
+
+def is_gitignored(
+    gitignore: PathSpec | None, path: PurePosixPath
+) -> bool:
+    return gitignore is not None and gitignore.match_file(path.as_posix())
 
 
 def directory_skip_reason(path: PurePosixPath) -> SkipReason | None:

@@ -17,10 +17,15 @@ QUERY = """
 
 class PythonExtractor:
     extensions = frozenset({".py"})
+    language = "python"
     extractor_name = "tree_sitter_python"
 
     def __init__(self) -> None:
-        self._adapter = TreeSitterAdapter(Language(tree_sitter_python.language()))
+        self._adapter = TreeSitterAdapter(
+            Language(tree_sitter_python.language()),
+            self.language,
+            self.extractor_name,
+        )
 
     def extract(self, path: str, source: bytes) -> ExtractionResult:
         tree = self._adapter.parse(source)
@@ -36,14 +41,15 @@ class PythonExtractor:
                 symbol = None
             if symbol is not None:
                 symbols.append(symbol)
-        return ExtractionResult(
-            symbols=symbols, has_parse_error=tree.root_node.has_error
-        )
+        return self._adapter.extraction_result(tree, symbols)
 
     def _declaration(self, path: str, source: bytes, node: Node) -> SymbolRecord | None:
         name = named_child_text(source, node, "name")
         if name is None:
             return None
+        scope_names = self._adapter.enclosing_scope_names(
+            source, node, {"class_definition", "function_definition"}
+        )
         parent_class = self._adapter.ancestor(node, {"class_definition"})
         kind = (
             SymbolKind.CLASS
@@ -52,18 +58,13 @@ class PythonExtractor:
             if parent_class is not None
             else SymbolKind.FUNCTION
         )
-        parent = (
-            named_child_text(source, parent_class, "name")
-            if parent_class is not None
-            else None
-        )
         return self._adapter.record(
             path=path,
             source=source,
             node=node,
             name=name,
             kind=kind,
-            parent=parent,
+            parent_scope_names=scope_names,
             decorators=self._decorators(source, node),
             extractor=self.extractor_name,
         )

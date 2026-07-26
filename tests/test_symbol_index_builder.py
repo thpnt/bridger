@@ -195,7 +195,7 @@ def test_builder_uses_only_included_file_index_paths(tmp_path: Path) -> None:
     artifact = build_symbol_index_for_project(tmp_path)
 
     assert [symbol.name for symbol in artifact.symbols] == ["included"]
-    assert artifact.parse_errors == []
+    assert all(not result.errors for result in artifact.files)
 
 
 def test_builder_rejects_invalid_file_index_paths(tmp_path: Path) -> None:
@@ -218,14 +218,18 @@ def test_builder_rejects_invalid_file_index_paths(tmp_path: Path) -> None:
 
 def test_malformed_file_records_error_and_keeps_partial_results(tmp_path: Path) -> None:
     write_file(tmp_path, "valid.py", "def valid(): pass\n")
-    write_file(tmp_path, "broken.ts", "export function broken( {\n")
+    write_file(tmp_path, "broken.py", "def broken(:\n")
     write_file_index(tmp_path)
 
     artifact = build_symbol_index_for_project(tmp_path)
 
     assert any(symbol.name == "valid" for symbol in artifact.symbols)
-    assert [(error.path, error.error) for error in artifact.parse_errors] == [
-        ("broken.ts", "parse_error")
+    assert [
+        (result.path, result.status.value)
+        for result in artifact.files
+        if result.errors
+    ] == [
+        ("broken.py", "partial")
     ]
 
 

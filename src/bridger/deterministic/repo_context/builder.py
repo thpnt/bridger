@@ -6,7 +6,7 @@ from bridger.deterministic.repo_context.parsers import (
     ManifestParseFailure,
     parse_manifest,
 )
-from bridger.models.file_index import FileIndexArtifact
+from bridger.models.file_index import FileIndexArtifact, ReadPolicy
 from bridger.models.repo_context import (
     CiFile,
     CiKind,
@@ -56,6 +56,8 @@ def build_repo_context_for_project(
         if indexed_file.path in processed_paths:
             continue
         processed_paths.add(indexed_file.path)
+        if indexed_file.read_policy is not ReadPolicy.READABLE:
+            continue
         kind = detect_file_kind(indexed_file.path)
         if isinstance(kind, ManifestKind):
             parsed = {}

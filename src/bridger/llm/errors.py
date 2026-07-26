@@ -1,4 +1,6 @@
-from bridger.llm.models import LLMOperation
+from pydantic import JsonValue
+
+from bridger.llm.models import LLMOperation, LLMUsage
 
 
 class LLMError(RuntimeError):
@@ -55,6 +57,29 @@ class LLMInvalidResponseError(LLMError):
 
 class LLMStructuredOutputError(LLMInvalidResponseError):
     """Provider output failed requested structured-output validation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        invalid_output: JsonValue | None = None,
+        usage: LLMUsage | None = None,
+        latency_ms: int | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        operation: LLMOperation | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(
+            message,
+            provider=provider,
+            model=model,
+            operation=operation,
+            retryable=retryable,
+        )
+        self.invalid_output = invalid_output
+        self.usage = usage or LLMUsage()
+        self.latency_ms = latency_ms
 
 
 class LLMProviderError(LLMError):

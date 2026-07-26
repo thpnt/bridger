@@ -16,9 +16,12 @@ class DummyLLMExhaustedError(AssertionError):
 class DummyLLMClient:
     """Deterministic scripted LLM client for unit and orchestration tests."""
 
-    def __init__(self, outcomes: Sequence[LLMResponse[BaseModel] | Exception]) -> None:
+    def __init__(
+        self, outcomes: Sequence[LLMResponse[BaseModel] | BaseException]
+    ) -> None:
         self._outcomes = list(outcomes)
         self.requests: list[LLMRequest] = []
+        self.output_types: list[type[BaseModel] | None] = []
 
     async def generate(
         self,
@@ -27,11 +30,12 @@ class DummyLLMClient:
         output_type: type[StructuredOutputT] | None = None,
     ) -> LLMResponse[StructuredOutputT]:
         self.requests.append(request)
+        self.output_types.append(output_type)
         if not self._outcomes:
             raise DummyLLMExhaustedError("DummyLLMClient has no scripted outcomes left")
 
         outcome = self._outcomes.pop(0)
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, BaseException):
             raise outcome
         if output_type is not None:
             if outcome.structured_output is None:
@@ -43,8 +47,14 @@ class DummyLLMClient:
                     outcome.structured_output
                 )
             except ValidationError as error:
+                invalid_output = outcome.structured_output.model_dump(mode="json")
                 raise LLMStructuredOutputError(
-                    "Scripted structured output failed schema validation"
+                    "Scripted structured output failed schema validation",
+                    invalid_output=invalid_output,
+                    usage=outcome.usage,
+                    latency_ms=outcome.latency_ms,
+                    provider=outcome.provider,
+                    model=outcome.model,
                 ) from error
             return cast(
                 LLMResponse[StructuredOutputT],

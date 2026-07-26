@@ -22,6 +22,10 @@ TYPESCRIPT_QUERY = (
 (interface_declaration) @declaration
 (type_alias_declaration) @declaration
 (enum_declaration) @declaration
+(internal_module) @declaration
+(module) @declaration
+(method_signature) @method
+(function_signature) @declaration
 """
 )
 
@@ -42,13 +46,15 @@ class EcmaScriptExtractor:
         self,
         *,
         language: Language,
+        language_name: str,
         extensions: frozenset[str],
         extractor_name: str,
         supports_types: bool,
     ) -> None:
         self.extensions = extensions
+        self.language = language_name
         self.extractor_name = extractor_name
-        self._adapter = TreeSitterAdapter(language)
+        self._adapter = TreeSitterAdapter(language, language_name, extractor_name)
         self._query = TYPESCRIPT_QUERY if supports_types else COMMON_QUERY
 
     def extract(self, path: str, source: bytes) -> ExtractionResult:
@@ -59,9 +65,7 @@ class EcmaScriptExtractor:
             symbol = self._symbol(path, source, node)
             if symbol is not None:
                 symbols.append(symbol)
-        return ExtractionResult(
-            symbols=symbols, has_parse_error=tree.root_node.has_error
-        )
+        return self._adapter.extraction_result(tree, symbols)
 
     def _symbol(self, path: str, source: bytes, node: Node) -> SymbolRecord | None:
         if node.type == "variable_declarator":
@@ -73,24 +77,33 @@ class EcmaScriptExtractor:
             "function_declaration": SymbolKind.FUNCTION,
             "class_declaration": SymbolKind.CLASS,
             "method_definition": SymbolKind.METHOD,
+            "method_signature": SymbolKind.METHOD,
+            "function_signature": SymbolKind.FUNCTION,
             "interface_declaration": SymbolKind.INTERFACE,
             "type_alias_declaration": SymbolKind.TYPE_ALIAS,
             "enum_declaration": SymbolKind.ENUM,
+            "internal_module": SymbolKind.NAMESPACE,
+            "module": SymbolKind.MODULE,
         }
-        parent_class = self._adapter.ancestor(node, {"class_declaration"})
+        scope_names = self._adapter.enclosing_scope_names(
+            source,
+            node,
+            {
+                "class_declaration",
+                "function_declaration",
+                "internal_module",
+                "module",
+            },
+        )
         return self._adapter.record(
             path=path,
             source=source,
             node=node,
             name=name,
             kind=kinds[node.type],
-            parent=(
-                named_child_text(source, parent_class, "name")
-                if parent_class is not None
-                else None
-            ),
+            parent_scope_names=scope_names,
             modifiers=self._modifiers(source, node),
-            is_exported=self._is_exported(node),
+            exported=self._is_exported(node),
             extractor=self.extractor_name,
         )
 
@@ -131,7 +144,7 @@ class EcmaScriptExtractor:
                 else SymbolKind.VARIABLE
             ),
             modifiers=self._modifiers(source, declaration),
-            is_exported=self._is_exported(declaration),
+            exported=self._is_exported(declaration),
             extractor=self.extractor_name,
         )
 

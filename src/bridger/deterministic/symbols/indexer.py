@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -5,10 +6,12 @@ from bridger.deterministic.symbols.registry import (
     build_extractor_registry,
     extractor_for_path,
 )
-from bridger.models.file_index import FileIndexArtifact
+from bridger.models.file_index import FileIndexArtifact, ReadPolicy
 from bridger.models.symbol_index import (
+    FileExtractionStatus,
+    SymbolExtractionError,
+    SymbolFileExtraction,
     SymbolIndexArtifact,
-    SymbolParseError,
     SymbolRecord,
 )
 
@@ -25,20 +28,83 @@ def _read_indexed_file(repo_root: Path, relative_path: str) -> bytes:
     return resolved_path.read_bytes()
 
 
-def _deduplicate_symbols(symbols: list[SymbolRecord]) -> list[SymbolRecord]:
-    unique: dict[tuple[object, ...], SymbolRecord] = {}
-    for symbol in symbols:
-        key = (
+def _source_order_key(symbol: SymbolRecord) -> tuple[object, ...]:
+    source_range = symbol.declaration_range
+    if source_range.start_byte is not None:
+        position: tuple[object, ...] = (0, source_range.start_byte)
+    else:
+        position = (1, source_range.start_line, source_range.start_column)
+    return (
+        symbol.path,
+        *position,
+        symbol.kind.value,
+        symbol.qualified_name,
+        symbol.id,
+    )
+
+
+def _identity_key(symbol: SymbolRecord) -> tuple[str, ...]:
+    return (
+        symbol.language,
+        symbol.path,
+        symbol.qualified_name,
+        symbol.kind.value,
+        symbol.signature,
+    )
+
+
+def _symbol_id(symbol: SymbolRecord, discriminator: int) -> str:
+    canonical = "\x1f".join(
+        (
+            "bridger-symbol-index/v2",
+            symbol.language,
             symbol.path,
-            symbol.line_start,
-            symbol.line_end,
-            symbol.kind,
-            symbol.name,
-            symbol.parent,
-            symbol.declaration,
+            symbol.qualified_name,
+            symbol.kind.value,
+            symbol.signature,
+            str(discriminator),
         )
-        unique.setdefault(key, symbol)
-    return list(unique.values())
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+    return f"sym2:{digest}"
+
+
+def _finalize_symbols(symbols: list[SymbolRecord]) -> list[SymbolRecord]:
+    ordered = sorted(symbols, key=_source_order_key)
+    occurrence_by_key: dict[tuple[str, ...], int] = {}
+    finalized: list[SymbolRecord] = []
+    for symbol in ordered:
+        identity_key = _identity_key(symbol)
+        discriminator = occurrence_by_key.get(identity_key, 0)
+        occurrence_by_key[identity_key] = discriminator + 1
+        finalized.append(
+            symbol.model_copy(
+                update={"id": _symbol_id(symbol, discriminator), "parent_id": None}
+            )
+        )
+
+    by_parent_name: dict[tuple[str, str], list[SymbolRecord]] = {}
+    for symbol in finalized:
+        by_parent_name.setdefault((symbol.path, symbol.qualified_name), []).append(
+            symbol
+        )
+
+    resolved: list[SymbolRecord] = []
+    for symbol in finalized:
+        parent_id: str | None = None
+        if symbol.parent_name is not None and "." in symbol.qualified_name:
+            parent_qualified_name = symbol.qualified_name.rsplit(".", 1)[0]
+            candidates = by_parent_name.get((symbol.path, parent_qualified_name), [])
+            if candidates:
+                parent_id = candidates[0].id
+        resolved.append(symbol.model_copy(update={"parent_id": parent_id}))
+    return resolved
+
+
+def _diagnostic(
+    code: str, message: str, extractor: str | None
+) -> SymbolExtractionError:
+    return SymbolExtractionError(code=code, message=message, extractor=extractor)
 
 
 def build_symbol_index_for_project(
@@ -50,8 +116,8 @@ def build_symbol_index_for_project(
     file_index_path = root / ".bridger" / "artifacts" / "file-index.json"
     file_index = FileIndexArtifact.model_validate_json(file_index_path.read_bytes())
     registry = build_extractor_registry()
-    symbols: list[SymbolRecord] = []
-    parse_errors: list[SymbolParseError] = []
+    raw_symbols: list[SymbolRecord] = []
+    file_results: list[SymbolFileExtraction] = []
     processed_paths: set[str] = set()
 
     for indexed_file in file_index.files:
@@ -59,53 +125,80 @@ def build_symbol_index_for_project(
             continue
         processed_paths.add(indexed_file.path)
         extractor = extractor_for_path(indexed_file.path, registry)
+        if indexed_file.read_policy is not ReadPolicy.READABLE:
+            file_results.append(
+                SymbolFileExtraction(
+                    path=indexed_file.path,
+                    language=getattr(extractor, "language", None),
+                    status=FileExtractionStatus.SKIPPED,
+                    symbol_count=0,
+                )
+            )
+            continue
         if extractor is None:
+            file_results.append(
+                SymbolFileExtraction(
+                    path=indexed_file.path,
+                    status=FileExtractionStatus.UNSUPPORTED,
+                    symbol_count=0,
+                )
+            )
             continue
         try:
             source = _read_indexed_file(root, indexed_file.path)
             result = extractor.extract(indexed_file.path, source)
-            symbols.extend(result.symbols)
-            if result.has_parse_error:
-                parse_errors.append(
-                    SymbolParseError(
-                        path=indexed_file.path,
-                        extractor=extractor.extractor_name,
-                        error="parse_error",
-                    )
-                )
-        except OSError:
-            parse_errors.append(
-                SymbolParseError(
+            raw_symbols.extend(result.symbols)
+            file_results.append(
+                SymbolFileExtraction(
                     path=indexed_file.path,
-                    extractor=extractor.extractor_name,
-                    error="read_error",
+                    language=extractor.language,
+                    status=result.status,
+                    symbol_count=len(result.symbols),
+                    errors=result.errors or [],
                 )
             )
-        except Exception:
-            parse_errors.append(
-                SymbolParseError(
+        except OSError as error:
+            file_results.append(
+                SymbolFileExtraction(
                     path=indexed_file.path,
-                    extractor=extractor.extractor_name,
-                    error="extractor_error",
+                    language=extractor.language,
+                    status=FileExtractionStatus.READ_ERROR,
+                    symbol_count=0,
+                    errors=[
+                        _diagnostic("read_error", str(error), extractor.extractor_name)
+                    ],
+                )
+            )
+        except Exception as error:
+            file_results.append(
+                SymbolFileExtraction(
+                    path=indexed_file.path,
+                    language=extractor.language,
+                    status=FileExtractionStatus.EXTRACTOR_ERROR,
+                    symbol_count=0,
+                    errors=[
+                        _diagnostic(
+                            "extractor_error", str(error), extractor.extractor_name
+                        )
+                    ],
                 )
             )
 
-    sorted_symbols = sorted(
-        _deduplicate_symbols(symbols),
-        key=lambda symbol: (
-            symbol.path,
-            symbol.line_start,
-            symbol.line_end,
-            symbol.kind,
-            symbol.name,
-            symbol.id,
-        ),
-    )
+    for skipped_file in file_index.skipped_files:
+        if skipped_file.path in processed_paths:
+            continue
+        processed_paths.add(skipped_file.path)
+        file_results.append(
+            SymbolFileExtraction(
+                path=skipped_file.path,
+                status=FileExtractionStatus.SKIPPED,
+                symbol_count=0,
+            )
+        )
+
+    finalized_symbols = _finalize_symbols(raw_symbols)
     return SymbolIndexArtifact(
         generated_at=generated_at or datetime.now(UTC),
-        symbols=sorted_symbols,
-        parse_errors=sorted(
-            parse_errors,
-            key=lambda error: (error.path, error.extractor, error.error),
-        ),
+        symbols=finalized_symbols,
+        files=sorted(file_results, key=lambda result: result.path),
     )
