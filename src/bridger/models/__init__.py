@@ -57,9 +57,13 @@ from bridger.models.repo_context import (
 )
 from bridger.models.repository_path import RepositoryPath
 from bridger.models.symbol_index import (
+    FileExtractionStatus,
+    SourceRange,
+    SymbolExtractionError,
+    SymbolExtractionStatus,
+    SymbolFileExtraction,
     SymbolIndexArtifact,
     SymbolKind,
-    SymbolParseError,
     SymbolRecord,
 )
 
@@ -114,9 +118,13 @@ __all__ = [
     "ManifestFile",
     "ManifestParseError",
     "RepoContextArtifact",
+    "FileExtractionStatus",
+    "SourceRange",
+    "SymbolExtractionError",
+    "SymbolExtractionStatus",
+    "SymbolFileExtraction",
     "SymbolIndexArtifact",
     "SymbolKind",
-    "SymbolParseError",
     "SymbolRecord",
 ]
 from bridger.models.synthesis_manifest import SynthesisInputManifest

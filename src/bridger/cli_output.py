@@ -26,7 +26,9 @@ class InitRunSummary:
 
     @property
     def symbol_parse_error_count(self) -> int:
-        return len(self.symbol_index.parse_errors)
+        return sum(
+            len(result.errors) for result in self.symbol_index.files if result.errors
+        )
 
     @property
     def has_warnings(self) -> bool:

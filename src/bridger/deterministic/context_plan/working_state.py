@@ -294,7 +294,7 @@ class WorkingStateMutationService:
         inspected = set(current.symbol_ids_inspected)
         if record.symbol_id is not None:
             seen.add(record.symbol_id)
-            if record.source_tool == "get_symbol":
+            if record.source_tool == "read_symbol_excerpt":
                 inspected.add(record.symbol_id)
         status = current.inspection_status
         if record.inspection_level is InspectionLevel.IMPLEMENTATION_INSPECTED:
@@ -305,10 +305,13 @@ class WorkingStateMutationService:
         }:
             if status is not FileInspectionStatus.IMPLEMENTATION_INSPECTED:
                 status = FileInspectionStatus.PARTIALLY_INSPECTED
-        elif (
-            record.inspection_level is InspectionLevel.SYMBOL_ONLY
-            and status is FileInspectionStatus.DISCOVERED
-        ):
+        elif record.source_tool == "get_file_overview":
+            if status is FileInspectionStatus.DISCOVERED:
+                status = FileInspectionStatus.STRUCTURAL_OVERVIEW
+        elif record.inspection_level is InspectionLevel.SYMBOL_ONLY and status in {
+            FileInspectionStatus.DISCOVERED,
+            FileInspectionStatus.STRUCTURAL_OVERVIEW,
+        }:
             status = FileInspectionStatus.SYMBOL_ONLY
         observed_lines = sum(item.line_end - item.line_start + 1 for item in ranges)
         by_path[record.path] = current.model_copy(

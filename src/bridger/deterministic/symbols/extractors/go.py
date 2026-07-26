@@ -20,10 +20,13 @@ QUERY = """
 
 class GoExtractor:
     extensions = frozenset({".go"})
+    language = "go"
     extractor_name = "tree_sitter_go"
 
     def __init__(self) -> None:
-        self._adapter = TreeSitterAdapter(Language(tree_sitter_go.language()))
+        self._adapter = TreeSitterAdapter(
+            Language(tree_sitter_go.language()), self.language, self.extractor_name
+        )
 
     def extract(self, path: str, source: bytes) -> ExtractionResult:
         tree = self._adapter.parse(source)
@@ -33,9 +36,7 @@ class GoExtractor:
             if (symbol := self._symbol(path, source, captures["declaration"][0]))
             is not None
         ]
-        return ExtractionResult(
-            symbols=symbols, has_parse_error=tree.root_node.has_error
-        )
+        return self._adapter.extraction_result(tree, symbols)
 
     def _symbol(self, path: str, source: bytes, node: Node) -> SymbolRecord | None:
         if node.type in {"var_spec", "const_spec"} and self._adapter.ancestor(
@@ -46,8 +47,15 @@ class GoExtractor:
         if name is None:
             return None
         kind = self._kind(node)
-        parent = (
+        receiver = (
             self._receiver_type(source, node) if kind == SymbolKind.METHOD else None
+        )
+        scope_names = (
+            (receiver,)
+            if receiver is not None
+            else self._adapter.enclosing_scope_names(
+                source, node, {"function_declaration"}
+            )
         )
         declaration_node = (
             node.parent
@@ -61,9 +69,10 @@ class GoExtractor:
             node=declaration_node,
             name=name,
             kind=kind,
-            parent=parent,
-            is_exported=name[:1].isupper(),
+            parent_scope_names=scope_names,
+            exported=name[:1].isupper(),
             extractor=self.extractor_name,
+            include_body=kind not in {SymbolKind.INTERFACE, SymbolKind.TYPE_ALIAS},
         )
 
     def _kind(self, node: Node) -> SymbolKind:

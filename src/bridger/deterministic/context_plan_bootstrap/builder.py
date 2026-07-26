@@ -28,20 +28,17 @@ ARTIFACT_PATHS = ContextPlanBootstrapArtifacts(
 )
 
 AVAILABLE_TOOLS = [
-    "list_files",
-    "list_tree",
-    "search_paths",
-    "grep_contents",
-    "read_file_excerpt",
+    "inspect_repo_discovery",
     "inspect_manifest",
-    "list_config_files",
-    "list_docs_files",
-    "list_instruction_files",
-    "list_ci_files",
+    "list_files",
+    "get_file_overview",
     "search_symbols",
     "list_symbols",
-    "get_symbol",
     "read_symbol_excerpt",
+    "search_with_context",
+    "read_file_ranges",
+    "read_around_match",
+    "get_inspection_status",
     "validate_paths",
 ]
 

@@ -97,7 +97,7 @@ def write_prior_artifacts(root: Path) -> dict[str, Path]:
         "file-index.json": make_file_index(),
         "repo-context.json": make_repo_context(),
         "symbol-index.json": SymbolIndexArtifact(
-            generated_at=GENERATED_AT, symbols=[], parse_errors=[]
+            generated_at=GENERATED_AT, symbols=[], files=[]
         ),
     }
     paths: dict[str, Path] = {}

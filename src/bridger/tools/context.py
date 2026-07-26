@@ -4,6 +4,7 @@ from pathlib import Path
 from bridger.tools.services import (
     ArtifactStore,
     BudgetService,
+    CursorService,
     FileIndexService,
     FileReadService,
     PathSafetyService,
@@ -19,6 +20,7 @@ class BridgerToolContext:
     artifact_store: ArtifactStore
     path_safety: PathSafetyService
     budgets: BudgetService
+    cursors: CursorService
     file_index: FileIndexService
     file_read: FileReadService
     search: SearchService
@@ -34,17 +36,27 @@ def build_tool_context(repo_root: Path) -> BridgerToolContext:
     symbol_index_artifact = store.load_symbol_index()
     context_plan_bootstrap = store.load_context_plan_bootstrap()
     budgets = BudgetService(context_plan_bootstrap.budgets)
+    source_fingerprint = ":".join(
+        [
+            context_plan_bootstrap.repo.revision,
+            context_plan_bootstrap.artifact_checksums["file-index.json"],
+            context_plan_bootstrap.artifact_checksums["repo-context.json"],
+            context_plan_bootstrap.artifact_checksums["symbol-index.json"],
+        ]
+    )
+    cursors = CursorService(source_fingerprint)
     paths = PathSafetyService(file_index_artifact, root)
-    file_index = FileIndexService(file_index_artifact, paths, budgets)
+    file_index = FileIndexService(file_index_artifact, paths, budgets, cursors)
     file_read = FileReadService(root, paths, file_index, budgets)
     return BridgerToolContext(
         repo_root=root,
         artifact_store=store,
         path_safety=paths,
         budgets=budgets,
+        cursors=cursors,
         file_index=file_index,
         file_read=file_read,
-        search=SearchService(root, file_index, budgets),
+        search=SearchService(root, file_index, budgets, cursors),
         repo_context=RepoContextService(repo_context_artifact, paths, budgets),
-        symbols=SymbolService(symbol_index_artifact, paths, budgets),
+        symbols=SymbolService(symbol_index_artifact, paths, budgets, cursors),
     )

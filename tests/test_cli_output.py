@@ -62,7 +62,10 @@ def make_summary(*, symbol_parse_errors: int = 0) -> InitRunSummary:
         ),
         symbol_index=SimpleNamespace(
             symbols=[object()] * 791,
-            parse_errors=[object()] * symbol_parse_errors,
+            files=[
+                SimpleNamespace(errors=[object()])
+                for _ in range(symbol_parse_errors)
+            ],
         ),
         context_plan_bootstrap=SimpleNamespace(
             artifact_checksums={str(index): "checksum" for index in range(3)},

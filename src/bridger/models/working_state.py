@@ -82,6 +82,7 @@ class PackageCandidateStatus(StrEnum):
 
 class FileInspectionStatus(StrEnum):
     DISCOVERED = "discovered"
+    STRUCTURAL_OVERVIEW = "structural_overview"
     SYMBOL_ONLY = "symbol_only"
     PARTIALLY_INSPECTED = "partially_inspected"
     IMPLEMENTATION_INSPECTED = "implementation_inspected"

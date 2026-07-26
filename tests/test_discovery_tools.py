@@ -35,7 +35,13 @@ from bridger.models.repo_context import (
     ManifestKind,
     RepoContextArtifact,
 )
-from bridger.models.symbol_index import SymbolIndexArtifact, SymbolKind, SymbolRecord
+from bridger.models.symbol_index import (
+    SourceRange,
+    SymbolFileExtraction,
+    SymbolIndexArtifact,
+    SymbolKind,
+    SymbolRecord,
+)
 from bridger.tools.context import BridgerToolContext, build_tool_context
 from bridger.tools.definitions.files import read_file_excerpt
 from bridger.tools.errors import BridgerToolError
@@ -136,25 +142,74 @@ def tool_repo(tmp_path: Path) -> tuple[Path, BridgerToolContext]:
             SymbolRecord(
                 id="sym:src/app.py:3:main",
                 path="src/app.py",
+                language="python",
                 name="main",
+                qualified_name="main",
                 kind=SymbolKind.FUNCTION,
-                line_start=3,
-                line_end=4,
-                declaration="def main()",
+                declaration_range=SourceRange(
+                    start_line=3,
+                    start_column=0,
+                    end_line=4,
+                    end_column=22,
+                    start_byte=32,
+                    end_byte=54,
+                ),
+                body_range=SourceRange(
+                    start_line=3,
+                    start_column=11,
+                    end_line=4,
+                    end_column=22,
+                    start_byte=43,
+                    end_byte=54,
+                ),
+                body_available=True,
+                declaration_preview="def main()",
+                signature="def main()",
                 extractor="tree_sitter_python",
             ),
             SymbolRecord(
                 id="sym:src/util.py:1:helper",
                 path="src/util.py",
+                language="python",
                 name="helper",
+                qualified_name="helper",
                 kind=SymbolKind.FUNCTION,
-                line_start=1,
-                line_end=2,
-                declaration="def helper()",
+                declaration_range=SourceRange(
+                    start_line=1,
+                    start_column=0,
+                    end_line=2,
+                    end_column=21,
+                    start_byte=0,
+                    end_byte=21,
+                ),
+                body_range=SourceRange(
+                    start_line=1,
+                    start_column=13,
+                    end_line=2,
+                    end_column=21,
+                    start_byte=13,
+                    end_byte=21,
+                ),
+                body_available=True,
+                declaration_preview="def helper()",
+                signature="def helper()",
                 extractor="tree_sitter_python",
             ),
         ],
-        parse_errors=[],
+        files=[
+            SymbolFileExtraction(
+                path="src/app.py",
+                language="python",
+                status="success",
+                symbol_count=1,
+            ),
+            SymbolFileExtraction(
+                path="src/util.py",
+                language="python",
+                status="success",
+                symbol_count=1,
+            ),
+        ],
     )
     budgets = ContextPlanBootstrapBudgets(
         max_files_read=3,

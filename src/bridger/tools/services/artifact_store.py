@@ -32,10 +32,10 @@ class ArtifactStore:
         return self._load("context-plan-bootstrap.json", ContextPlanBootstrapArtifact)
 
     def load_context_plan_working_state(self) -> ContextPlanWorkingState:
-        return self._load(
-            "context-plan-working-state.json",
-            ContextPlanWorkingState,
-        )
+        # Inspection state is mutated after every successful tool call.
+        # Do not retain a stale cached snapshot between investigation turns.
+        self._cache.pop("context-plan-working-state.json", None)
+        return self._load("context-plan-working-state.json", ContextPlanWorkingState)
 
     def _load(self, name: str, model: type[ArtifactT]) -> ArtifactT:
         cached = self._cache.get(name)

@@ -12,19 +12,67 @@ def search_symbols(
     ctx: RunContextWrapper[BridgerToolContext],
     query: Annotated[str, Field(min_length=1, description="Symbol text to find")],
     limit: Annotated[int | None, Field(ge=1)] = None,
+    cursor: Annotated[str | None, Field(min_length=1)] = None,
+    match_mode: Annotated[str | None, Field(min_length=1)] = None,
+    path: Annotated[str | None, Field(min_length=1)] = None,
+    path_prefix: Annotated[str | None, Field(min_length=1)] = None,
+    language: Annotated[str | None, Field(min_length=1)] = None,
+    kind: Annotated[str | None, Field(min_length=1)] = None,
+    parent_id: Annotated[str | None, Field(min_length=1)] = None,
+    exported: bool | None = None,
+    body_available: bool | None = None,
+    extraction_status: Annotated[str | None, Field(min_length=1)] = None,
 ) -> dict[str, object]:
     """Search syntactic symbol names and declarations."""
-    return serialize_tool_call(lambda: ctx.context.symbols.search(query, limit))
+    return serialize_tool_call(
+        lambda: ctx.context.symbols.search(
+            query,
+            limit,
+            cursor,
+            match_mode=match_mode,
+            path=path,
+            path_prefix=path_prefix,
+            language=language,
+            kind=kind,
+            parent_id=parent_id,
+            exported=exported,
+            body_available=body_available,
+            extraction_status=extraction_status,
+        )
+    )
 
 
 @function_tool
 def list_symbols(
     ctx: RunContextWrapper[BridgerToolContext],
-    path: Annotated[str, Field(min_length=1, description="Safe indexed file path")],
+    path: Annotated[
+        str | None, Field(min_length=1, description="Safe indexed file path")
+    ] = None,
     limit: Annotated[int | None, Field(ge=1)] = None,
+    cursor: Annotated[str | None, Field(min_length=1)] = None,
+    path_prefix: Annotated[str | None, Field(min_length=1)] = None,
+    language: Annotated[str | None, Field(min_length=1)] = None,
+    kind: Annotated[str | None, Field(min_length=1)] = None,
+    parent_id: Annotated[str | None, Field(min_length=1)] = None,
+    exported: bool | None = None,
+    body_available: bool | None = None,
+    extraction_status: Annotated[str | None, Field(min_length=1)] = None,
 ) -> dict[str, object]:
     """List bounded syntactic symbols declared in one safe file."""
-    return serialize_tool_call(lambda: ctx.context.symbols.list_for_path(path, limit))
+    return serialize_tool_call(
+        lambda: ctx.context.symbols.list_for_path(
+            path,
+            limit,
+            cursor,
+            path_prefix=path_prefix,
+            language=language,
+            kind=kind,
+            parent_id=parent_id,
+            exported=exported,
+            body_available=body_available,
+            extraction_status=extraction_status,
+        )
+    )
 
 
 @function_tool
@@ -47,8 +95,10 @@ def read_symbol_excerpt(
     def compose() -> dict[str, object]:
         symbol = ctx.context.symbols.get(symbol_id)
         metadata = ctx.context.file_index.get_file(symbol.path)
-        start = max(1, symbol.line_start - context_lines)
-        end = min(metadata.line_count, symbol.line_end + context_lines)
+        start = max(1, symbol.declaration_range.start_line - context_lines)
+        end = min(
+            metadata.line_count, symbol.declaration_range.end_line + context_lines
+        )
         excerpt = ctx.context.file_read.read_excerpt(symbol.path, start, end)
         return {
             "source_artifact": "symbol-index.json",

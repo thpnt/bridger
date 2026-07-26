@@ -59,7 +59,7 @@ def test_init_creates_project_files_in_fresh_mode(
     symbol_index_file = tmp_path / ".bridger" / "artifacts" / "symbol-index.json"
     symbol_index = json.loads(symbol_index_file.read_text())
     assert symbol_index_file.is_file()
-    assert symbol_index["schema_version"] == 1
+    assert symbol_index["schema_version"] == 2
     assert symbol_index["symbols"] == []
     assert not (tmp_path / ".bridger" / "artifacts" / "repo-graph.json").exists()
     assert not (tmp_path / ".bridger" / "artifacts" / "graph-summary.json").exists()

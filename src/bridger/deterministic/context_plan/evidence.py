@@ -17,15 +17,8 @@ from bridger.models.working_state import (
     InspectionLevel,
 )
 
-_SYMBOL_TOOLS = {"search_symbols", "list_symbols", "get_symbol"}
-_DISCOVERY_LIST_TOOLS = {
-    "list_files",
-    "search_paths",
-    "list_config_files",
-    "list_docs_files",
-    "list_instruction_files",
-    "validate_paths",
-}
+_SYMBOL_TOOLS = {"search_symbols", "list_symbols"}
+_DISCOVERY_LIST_TOOLS = {"list_files", "validate_paths"}
 _STATE_CONTROL_TOOLS = {
     "record_finding",
     "refine_finding",
@@ -161,12 +154,23 @@ class EvidenceExtractor:
                     line_ranges=self._line_ranges(
                         output.get("line_start"), output.get("line_end")
                     ),
-                    payload={
-                        key: value
-                        for key, value in output.items()
-                        if key not in {"content", "line_start", "line_end"}
-                    },
+                    payload=output,
                     content=self._string(output.get("content")),
+                    level=InspectionLevel.EXCERPT_INSPECTED,
+                )
+            ]
+        if result.tool_name in {"read_file_ranges", "read_around_match"}:
+            path = self._string(output.get("path"))
+            return [
+                self._record(
+                    EvidenceKind.FILE_EXCERPT,
+                    path=path,
+                    line_ranges=self._line_ranges_from_ranges(output.get("ranges")),
+                    payload=output,
+                    content="\n\n".join(
+                        self._string(item.get("content")) or ""
+                        for item in self._items_from_value(output.get("ranges"))
+                    ),
                     level=InspectionLevel.EXCERPT_INSPECTED,
                 )
             ]
@@ -178,6 +182,31 @@ class EvidenceExtractor:
                     path=self._string(manifest.get("path")),
                     payload=manifest,
                     level=InspectionLevel.IMPLEMENTATION_INSPECTED,
+                )
+            ]
+        if result.tool_name == "get_file_overview":
+            return [
+                self._record(
+                    EvidenceKind.FILE_METADATA,
+                    path=self._string(output.get("path")),
+                    payload=output,
+                    level=InspectionLevel.SYMBOL_ONLY,
+                )
+            ]
+        if result.tool_name == "read_symbol_excerpt":
+            symbol = self._mapping(output.get("symbol"))
+            returned = self._mapping(output.get("returned_source_range"))
+            return [
+                self._record(
+                    EvidenceKind.FILE_EXCERPT,
+                    path=self._string(symbol.get("path")),
+                    line_ranges=self._line_ranges(
+                        returned.get("line_start"), returned.get("line_end")
+                    ),
+                    symbol_id=self._string(symbol.get("symbol_id")),
+                    payload=symbol,
+                    content=self._string(output.get("content")),
+                    level=InspectionLevel.EXCERPT_INSPECTED,
                 )
             ]
         if result.tool_name == "grep_contents":
@@ -194,7 +223,38 @@ class EvidenceExtractor:
                 )
                 for item in self._items(output)
             ]
+        if result.tool_name == "search_with_context":
+            return [
+                self._record(
+                    EvidenceKind.SEARCH_HIT,
+                    path=self._string(item.get("path")),
+                    line_ranges=self._line_ranges(
+                        self._mapping(item.get("context_range")).get("line_start"),
+                        self._mapping(item.get("context_range")).get("line_end"),
+                    ),
+                    payload=item,
+                    content=self._string(item.get("content")),
+                    level=InspectionLevel.LINE_OBSERVED,
+                )
+                for item in self._items(output)
+            ]
         if result.tool_name in _SYMBOL_TOOLS:
+            return [
+                self._record(
+                    EvidenceKind.SYMBOL_METADATA,
+                    path=self._string(item.get("path")),
+                    line_ranges=self._line_ranges(
+                        item.get("line_start"), item.get("line_end")
+                    ),
+                    symbol_id=self._string(item.get("symbol_id")),
+                    payload=item,
+                    content=self._string(item.get("signature_preview")),
+                    level=InspectionLevel.SYMBOL_ONLY,
+                )
+                for item in self._items(output)
+            ]
+        if result.tool_name == "get_symbol":
+            item = self._mapping(output.get("symbol"))
             return [
                 self._record(
                     EvidenceKind.SYMBOL_METADATA,
@@ -207,7 +267,6 @@ class EvidenceExtractor:
                     content=self._string(item.get("declaration")),
                     level=InspectionLevel.SYMBOL_ONLY,
                 )
-                for item in self._items(output)
             ]
         if result.tool_name in _DISCOVERY_LIST_TOOLS:
             return [
@@ -227,6 +286,23 @@ class EvidenceExtractor:
                 level=InspectionLevel.LOCATED,
             )
         ]
+
+    @staticmethod
+    def _items_from_value(value: JsonValue | None) -> list[dict[str, JsonValue]]:
+        return (
+            [item for item in value if isinstance(item, dict)]
+            if isinstance(value, list)
+            else []
+        )
+
+    @classmethod
+    def _line_ranges_from_ranges(cls, value: JsonValue | None) -> list[dict[str, int]]:
+        ranges: list[dict[str, int]] = []
+        for item in cls._items_from_value(value):
+            ranges.extend(
+                cls._line_ranges(item.get("line_start"), item.get("line_end"))
+            )
+        return ranges
 
     @staticmethod
     def _record(
