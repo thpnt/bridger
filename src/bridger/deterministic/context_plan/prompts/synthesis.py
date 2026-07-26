@@ -26,10 +26,6 @@ def build_final_synthesis_prompt(input: FinalSynthesisPromptInput) -> ContextPla
         key=lambda symbol: (symbol.path or "", symbol.identifier),
     )
     manifests = sorted(input.manifest_evidence, key=lambda manifest: manifest.path)
-    entrypoints = sorted(
-        input.confirmed_entrypoints,
-        key=lambda entrypoint: (entrypoint.path, entrypoint.source),
-    )
     exclusions = sorted(
         input.intentionally_excluded,
         key=lambda exclusion: (exclusion.path_or_pattern, exclusion.reason),
@@ -39,9 +35,7 @@ def build_final_synthesis_prompt(input: FinalSynthesisPromptInput) -> ContextPla
         for record in input.selected_evidence
     ]
     projected_sections = [
-        render_exact_json_section(
-            "Synthesis input manifest", input.synthesis_manifest
-        ),
+        render_exact_json_section("Synthesis input manifest", input.synthesis_manifest),
         render_exact_json_section(
             "Selected package candidates", input.selected_candidates
         ),
@@ -55,9 +49,6 @@ def build_final_synthesis_prompt(input: FinalSynthesisPromptInput) -> ContextPla
             "Selected unresolved questions", input.selected_questions
         ),
         render_exact_json_section("Selected typed evidence", selected_evidence),
-        render_exact_json_section(
-            "Deterministic graph substrate", input.graph_evidence
-        ),
     ]
     legacy_sections = [
         render_exact_json_section(
@@ -66,11 +57,9 @@ def build_final_synthesis_prompt(input: FinalSynthesisPromptInput) -> ContextPla
         render_exact_json_section("Inspected excerpts", excerpts),
         render_exact_json_section("Inspected symbols", symbols),
         render_exact_json_section("Manifest evidence", manifests),
-        render_exact_json_section("Graph evidence", input.graph_evidence),
         render_exact_json_section(
             "Collected findings", sorted_strings(input.collected_findings)
         ),
-        render_exact_json_section("Confirmed entrypoints", entrypoints),
     ]
     sections = [
         "Return only a structured ContextPlan matching the supplied schema. Build "
@@ -84,7 +73,7 @@ def build_final_synthesis_prompt(input: FinalSynthesisPromptInput) -> ContextPla
         "preserve warnings and unknowns, and include only paths and provenance backed "
         "by the supplied validated evidence.",
         render_exact_json_section(
-            "Repository bootstrap facts", input.repository_bootstrap
+            "Context Plan bootstrap facts", input.context_plan_bootstrap
         ),
         *(
             projected_sections

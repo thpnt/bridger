@@ -1,6 +1,6 @@
 from pathlib import Path, PurePosixPath
 
-from bridger.models.file_index import FileIndexArtifact
+from bridger.models.file_index import FileIndexArtifact, ReadPolicy
 from bridger.tools.errors import BridgerToolError
 
 
@@ -12,6 +12,10 @@ class PathSafetyService:
         self._safe_paths = {item.path for item in file_index.files}
         self._skipped_paths = {
             item.path: item.skip_reason.value for item in file_index.skipped_files
+        }
+        self._read_policies = {
+            item.path: (item.read_policy, item.read_policy_reason)
+            for item in file_index.files
         }
 
     @property
@@ -66,6 +70,18 @@ class PathSafetyService:
 
     def resolve_for_read(self, path: str) -> Path:
         normalized = self.validate_file(path)
+        read_policy, reason = self._read_policies[normalized]
+        if read_policy is not ReadPolicy.READABLE:
+            reason_text = reason.value if reason is not None else read_policy.value
+            raise BridgerToolError(
+                "path_not_readable",
+                f"Path is metadata-only in the file index: {normalized}",
+                {
+                    "path": normalized,
+                    "read_policy": read_policy.value,
+                    "reason": reason_text,
+                },
+            )
         if self.repo_root is None:
             raise BridgerToolError(
                 "invalid_path", "Repository root is required for safe file reading"

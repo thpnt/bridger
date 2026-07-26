@@ -13,7 +13,7 @@ from bridger.deterministic.context_plan import (
     validate_context_plan,
     write_context_plan,
 )
-from bridger.deterministic.repo_discovery.checksums import sha256_file
+from bridger.deterministic.context_plan_bootstrap.checksums import sha256_file
 from bridger.models.context_plan import (
     ContextPlan,
     ContextPlanFinalizationRequest,
@@ -482,9 +482,6 @@ def test_context_plan_run_accepts_lightweight_metadata_only_contract() -> None:
                 ],
                 "search_records": [
                     {"tool": "search", "query": "create_app", "result_count": 1}
-                ],
-                "graph_query_records": [
-                    {"tool": "neighbors", "subject": "src/main.py", "result_count": 2}
                 ],
             },
             "finalization_requests": [],

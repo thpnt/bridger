@@ -41,11 +41,9 @@ def prompt(task: str = typer.Argument(..., help="Coding task to include.")) -> N
 
 
 @app.command("inspect")
-def inspect_project(
-    graph: bool = typer.Option(False, "--graph", help="Show graph status."),
-) -> None:
+def inspect_project() -> None:
     """Inspect Bridger project status."""
-    inspect_command.run(graph)
+    inspect_command.run()
 
 
 if __name__ == "__main__":

@@ -5,10 +5,9 @@ from rich.table import Table
 
 from bridger.console import console
 from bridger.models.context_plan import ContextPlanRun
+from bridger.models.context_plan_bootstrap import ContextPlanBootstrapArtifact
 from bridger.models.file_index import FileIndexArtifact
 from bridger.models.repo_context import RepoContextArtifact
-from bridger.models.repo_discovery import RepoDiscoveryArtifact
-from bridger.models.repo_graph import RepoGraphArtifact
 from bridger.models.symbol_index import SymbolIndexArtifact
 from bridger.paths import ProjectPaths
 
@@ -18,8 +17,7 @@ class InitRunSummary:
     file_index: FileIndexArtifact
     repo_context: RepoContextArtifact
     symbol_index: SymbolIndexArtifact
-    repo_graph: RepoGraphArtifact
-    repo_discovery: RepoDiscoveryArtifact
+    context_plan_bootstrap: ContextPlanBootstrapArtifact
     supported_file_count: int
     artifacts_dir: str
     artifact_paths: dict[str, str]
@@ -31,12 +29,8 @@ class InitRunSummary:
         return len(self.symbol_index.parse_errors)
 
     @property
-    def unresolved_import_count(self) -> int:
-        return len(self.repo_graph.unresolved_imports)
-
-    @property
     def has_warnings(self) -> bool:
-        return self.symbol_parse_error_count > 0 or self.unresolved_import_count > 0
+        return self.symbol_parse_error_count > 0
 
 
 def render_init_summary(summary: InitRunSummary, *, verbose: bool) -> None:
@@ -70,8 +64,7 @@ def build_init_run_summary(
     file_index: FileIndexArtifact,
     repo_context: RepoContextArtifact,
     symbol_index: SymbolIndexArtifact,
-    repo_graph: RepoGraphArtifact,
-    repo_discovery: RepoDiscoveryArtifact,
+    context_plan_bootstrap: ContextPlanBootstrapArtifact,
     supported_file_count: int,
     already_exists: bool,
 ) -> InitRunSummary:
@@ -79,17 +72,16 @@ def build_init_run_summary(
         file_index=file_index,
         repo_context=repo_context,
         symbol_index=symbol_index,
-        repo_graph=repo_graph,
-        repo_discovery=repo_discovery,
+        context_plan_bootstrap=context_plan_bootstrap,
         supported_file_count=supported_file_count,
         artifacts_dir=_relative_dir(paths.root, paths.file_index_artifact.parent),
         artifact_paths={
             "file-index": _relative_path(paths.root, paths.file_index_artifact),
             "repo-context": _relative_path(paths.root, paths.repo_context_artifact),
             "symbol-index": _relative_path(paths.root, paths.symbol_index_artifact),
-            "repo-graph": _relative_path(paths.root, paths.repo_graph_artifact),
-            "graph-summary": _relative_path(paths.root, paths.graph_summary_artifact),
-            "repo-discovery": _relative_path(paths.root, paths.repo_discovery_artifact),
+            "context-plan-bootstrap": _relative_path(
+                paths.root, paths.context_plan_bootstrap_artifact
+            ),
         },
         next_step="Context Plan generation",
         already_exists=already_exists,
@@ -218,31 +210,24 @@ def _build_substrate_table(summary: InitRunSummary) -> Table:
         ),
     )
     table.add_row(
-        "Graph",
-        _join_parts(
-            [
-                f"{_format_count(len(summary.repo_graph.nodes))} nodes",
-                f"{_format_count(len(summary.repo_graph.edges))} edges",
-                _optional_count(summary.unresolved_import_count, "unresolved imports"),
-            ]
-        ),
-    )
-    table.add_row(
         "Bootstrap",
         _join_parts(
             [
-                (
-                    f"{_format_count(len(summary.repo_discovery.artifact_checksums))} "
-                    "artifacts"
+                _format_bootstrap_count(
+                    len(summary.context_plan_bootstrap.artifact_checksums), "artifacts"
                 ),
-                (
-                    f"{_format_count(len(summary.repo_discovery.available_tools))} "
-                    "tools declared"
+                _format_bootstrap_count(
+                    len(summary.context_plan_bootstrap.available_tools),
+                    "tools declared",
                 ),
             ]
         ),
     )
     return table
+
+
+def _format_bootstrap_count(count: int, label: str) -> str:
+    return f"{_format_count(count)} {label}"
 
 
 def _build_warning_table(summary: InitRunSummary) -> Table:
@@ -251,11 +236,6 @@ def _build_warning_table(summary: InitRunSummary) -> Table:
         table.add_row(
             f"{_format_count(summary.symbol_parse_error_count)} "
             "files could not be parsed"
-        )
-    if summary.unresolved_import_count > 0:
-        table.add_row(
-            f"{_format_count(summary.unresolved_import_count)} "
-            "local imports could not be resolved"
         )
     return table
 

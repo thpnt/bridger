@@ -5,7 +5,7 @@ from bridger.paths import ProjectPaths
 from bridger.project import read_project_config
 
 
-def run(graph: bool) -> None:
+def run() -> None:
     paths = ProjectPaths.from_cwd()
     config = read_project_config(paths.config_file)
 
@@ -18,6 +18,3 @@ def run(graph: bool) -> None:
     table.add_row("config.json", "present" if paths.config_file.exists() else "missing")
     table.add_row("project mode", config.project_mode if config else "unknown")
     console.print(table)
-
-    if graph:
-        console.print("Graph inspection is wired but not implemented yet.")

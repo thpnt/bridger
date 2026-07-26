@@ -18,11 +18,6 @@ from bridger.models.working_state import (
 )
 
 _SYMBOL_TOOLS = {"search_symbols", "list_symbols", "get_symbol"}
-_GRAPH_TOOLS = {
-    "get_graph_neighbors",
-    "get_reverse_imports",
-    "list_file_imports",
-}
 _DISCOVERY_LIST_TOOLS = {
     "list_files",
     "search_paths",
@@ -214,26 +209,6 @@ class EvidenceExtractor:
                 )
                 for item in self._items(output)
             ]
-        if result.tool_name == "list_declared_entrypoints":
-            return [
-                self._record(
-                    EvidenceKind.ENTRYPOINT_FACT,
-                    path=self._string(item.get("path")),
-                    payload=item,
-                    level=InspectionLevel.LOCATED,
-                )
-                for item in self._items(output)
-            ]
-        if result.tool_name in _GRAPH_TOOLS:
-            return [
-                self._record(
-                    EvidenceKind.GRAPH_RELATIONSHIP,
-                    path=self._string(item.get("path")),
-                    payload=item,
-                    level=InspectionLevel.LOCATED,
-                )
-                for item in self._items(output)
-            ]
         if result.tool_name in _DISCOVERY_LIST_TOOLS:
             return [
                 self._record(
@@ -280,10 +255,6 @@ class EvidenceExtractor:
             "results",
             "files",
             "symbols",
-            "neighbors",
-            "imported_by",
-            "imports",
-            "entrypoints",
             "config_files",
             "docs_files",
             "instruction_files",

@@ -35,8 +35,8 @@ def make_state(context: BridgerToolContext) -> ContextPlanRunState:
     state = ContextPlanRunState(
         run_id="run-1",
         repo=ContextPlanRepository(
-            root_name=context.repo_discovery.artifact.repo.root_name,
-            revision=context.repo_discovery.artifact.repo.revision,
+            root_name=context.artifact_store.load_file_index().repo_root_name,
+            revision=context.artifact_store.load_file_index().revision,
         ),
         safe_file_count=len(context.path_safety.safe_paths),
         started_at=NOW,

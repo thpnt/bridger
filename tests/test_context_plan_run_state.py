@@ -94,7 +94,6 @@ def test_coverage_tracker_is_idempotent_and_distinguishes_evidence() -> None:
         searches_performed=[
             ContextPlanSearchRecord(tool="grep_contents", query="main", result_count=2)
         ],
-        graph_paths_inspected=["src/main.py"],
     )
 
     assert tracker.apply(delta) is True

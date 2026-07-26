@@ -11,7 +11,7 @@ from bridger.deterministic.context_plan.working_state import (
     merge_line_ranges,
     validate_working_state,
 )
-from bridger.deterministic.repo_discovery.checksums import sha256_file
+from bridger.deterministic.context_plan_bootstrap.checksums import sha256_file
 from bridger.models.context_plan import (
     ContextPackageItem,
     ContextPlan,
@@ -59,9 +59,7 @@ def validate_context_plan_inspection(
                 for line_start, line_end in ranges
             ]
         )
-        ranges_by_path[path] = [
-            (item.line_start, item.line_end) for item in merged
-        ]
+        ranges_by_path[path] = [(item.line_start, item.line_end) for item in merged]
 
     issues: list[ContextPlanValidationIssue] = []
     for package_index, package in enumerate(plan.packages):

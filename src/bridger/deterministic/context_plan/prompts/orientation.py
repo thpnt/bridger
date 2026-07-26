@@ -22,22 +22,21 @@ def build_orientation_prompt(input: OrientationPromptInput) -> ContextPlanPrompt
         "Context Plan mission: discover enough grounded repository context to "
         "eventually describe coherent, reusable packages by topic, subsystem, "
         "workflow, convention, or concern.",
-        render_json_section("Repository bootstrap facts", input.repository_bootstrap),
         render_json_section(
-            "Repository context facts", input.repository_context
+            "Context Plan bootstrap facts", input.context_plan_bootstrap
         )
+        if input.context_plan_bootstrap is not None
+        else "Context Plan bootstrap facts: no additional artifact supplied.",
+        render_json_section("File index", input.file_index)
+        if input.file_index is not None
+        else "File index: no additional artifact supplied.",
+        render_json_section("Symbol index", input.symbol_index)
+        if input.symbol_index is not None
+        else "Symbol index: no additional artifact supplied.",
+        render_json_section("Repository context facts", input.repository_context)
         if input.repository_context is not None
         else "Repository context facts: no additional artifact supplied.",
-        render_json_section("Graph facts", input.graph_summary)
-        if input.graph_summary is not None
-        else "Graph facts: use the bootstrap compact context until inspected.",
-        render_json_section(
-            "Configured budgets",
-            {
-                "repository_tool_output_limits": input.repository_bootstrap.budgets,
-                "run_budget_limits": input.run_budget_limits,
-            },
-        ),
+        render_json_section("Configured budgets", input.run_budget_limits),
         render_json_section("Initial warnings", sorted_strings(input.initial_warnings)),
         render_tool_catalog(list(tools)),
         "Begin investigating now by responding with repository tool calls. Do not "

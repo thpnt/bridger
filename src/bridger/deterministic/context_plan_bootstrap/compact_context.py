@@ -1,15 +1,13 @@
+from bridger.models.context_plan_bootstrap import ContextPlanBootstrapCompactContext
 from bridger.models.file_index import FileIndexArtifact
-from bridger.models.graph_summary import GraphSummaryArtifact
 from bridger.models.repo_context import RepoContextArtifact
-from bridger.models.repo_discovery import RepoDiscoveryCompactContext
 
 
 def extract_compact_context(
     file_index: FileIndexArtifact,
     repo_context: RepoContextArtifact,
-    graph_summary: GraphSummaryArtifact,
-) -> RepoDiscoveryCompactContext:
-    return RepoDiscoveryCompactContext(
+) -> ContextPlanBootstrapCompactContext:
+    return ContextPlanBootstrapCompactContext(
         file_count=len(file_index.files),
         skipped_file_count=len(file_index.skipped_files),
         manifest_files=[manifest.path for manifest in repo_context.manifests],
@@ -19,6 +17,4 @@ def extract_compact_context(
         ],
         docs_files=[docs.path for docs in repo_context.docs_files],
         ci_files=[ci.path for ci in repo_context.ci_files],
-        declared_entrypoints=graph_summary.declared_entrypoints,
-        graph_counts=graph_summary.counts,
     )

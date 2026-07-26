@@ -47,7 +47,6 @@ def test_shared_contract_path_fields_use_repository_path() -> None:
 
     assert delta_hints["discovered_paths"] == list[RepositoryPath]
     assert delta_hints["evidence_paths"] == list[RepositoryPath]
-    assert delta_hints["graph_paths_inspected"] == list[RepositoryPath]
     assert delta_hints["manifests_inspected"] == list[RepositoryPath]
     assert delta_hints["excerpts_read"] == list[ContextPlanInspectedExcerpt]
     assert delta_hints["symbols_inspected"] == list[ContextPlanInspectedSymbol]
@@ -83,7 +82,6 @@ def test_repository_relative_path_contract_is_not_introduced() -> None:
         "excerpts",
         "searches",
         "symbol_queries",
-        "graph_queries",
     ],
 )
 def test_tool_budget_cost_rejects_negative_counters(field_name: str) -> None:
@@ -218,9 +216,7 @@ def test_tool_inspection_delta_keeps_discovery_and_evidence_distinct() -> None:
         discovered_paths=["src/main.py", "src/settings.py"],
         evidence_paths=["src/main.py"],
         excerpts_read=[
-            ContextPlanInspectedExcerpt(
-                path="src/main.py", line_start=1, line_end=5
-            )
+            ContextPlanInspectedExcerpt(path="src/main.py", line_start=1, line_end=5)
         ],
         symbols_inspected=[
             ContextPlanInspectedSymbol(identifier="main", path="src/main.py")

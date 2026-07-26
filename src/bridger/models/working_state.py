@@ -35,8 +35,6 @@ class EvidenceKind(StrEnum):
     SEARCH_HIT = "search_hit"
     SYMBOL_METADATA = "symbol_metadata"
     MANIFEST_FACT = "manifest_fact"
-    GRAPH_RELATIONSHIP = "graph_relationship"
-    ENTRYPOINT_FACT = "entrypoint_fact"
     FILE_METADATA = "file_metadata"
     REPOSITORY_FACT = "repository_fact"
 

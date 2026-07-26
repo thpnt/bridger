@@ -257,22 +257,6 @@ class DiscoveryToolExecutor:
         cost = ToolBudgetCost()
         return [
             self._repository(
-                "inspect_repo_discovery",
-                "Return the factual repository discovery bootstrap manifest.",
-                EmptyInput,
-                DiscoveryToolOutput,
-                lambda _: self._result(self.context.repo_discovery.inspect(), cost),
-                cost,
-            ),
-            self._repository(
-                "inspect_graph_summary",
-                "Return deterministic graph counts and bounded summary facts.",
-                EmptyInput,
-                DiscoveryToolOutput,
-                lambda _: self._result(self.context.graph_summary.inspect(), cost),
-                cost,
-            ),
-            self._repository(
                 "inspect_manifest",
                 "Return mechanically parsed facts for an indexed manifest.",
                 PathInput,
@@ -361,38 +345,6 @@ class DiscoveryToolExecutor:
                 ToolBudgetCost(symbol_queries=1),
             ),
             self._repository(
-                "get_graph_neighbors",
-                "Return bounded factual graph neighbors for one safe file.",
-                PathInput,
-                RepositoryListingOutput,
-                self._graph_neighbors,
-                ToolBudgetCost(graph_queries=1),
-            ),
-            self._repository(
-                "get_reverse_imports",
-                "List safe files that import the selected file.",
-                PathInput,
-                RepositoryListingOutput,
-                self._reverse_imports,
-                ToolBudgetCost(graph_queries=1),
-            ),
-            self._repository(
-                "list_file_imports",
-                "List safe local files imported by the selected file.",
-                PathInput,
-                RepositoryListingOutput,
-                self._file_imports,
-                ToolBudgetCost(graph_queries=1),
-            ),
-            self._repository(
-                "list_declared_entrypoints",
-                "List file entrypoints directly declared by manifests.",
-                EmptyInput,
-                RepositoryListingOutput,
-                self._declared_entrypoints,
-                ToolBudgetCost(graph_queries=1),
-            ),
-            self._repository(
                 "validate_paths",
                 "Report whether repository-relative paths are safe indexed files.",
                 ValidatePathsInput,
@@ -442,8 +394,6 @@ class DiscoveryToolExecutor:
             return budgets.max_grep_results
         if cost.symbol_queries:
             return budgets.max_symbol_results
-        if cost.graph_queries:
-            return budgets.max_graph_neighbors
         return budgets.max_files_read
 
     def _result(
@@ -592,63 +542,6 @@ class DiscoveryToolExecutor:
             ToolBudgetCost(symbol_queries=1),
             ToolInspectionDelta(
                 evidence_paths=[path], symbols_inspected=self._symbols([symbol])
-            ),
-        )
-
-    def _graph_neighbors(self, tool_input: BaseModel) -> ToolHandlerResult:
-        value = cast(PathInput, tool_input)
-        output = self.context.graph.neighbors(value.path)
-        paths = self._paths(output.get("neighbors"))
-        return self._result(
-            output,
-            ToolBudgetCost(graph_queries=1),
-            ToolInspectionDelta(
-                discovered_paths=paths,
-                evidence_paths=[value.path, *paths],
-                graph_paths_inspected=[value.path, *paths],
-            ),
-        )
-
-    def _reverse_imports(self, tool_input: BaseModel) -> ToolHandlerResult:
-        value = cast(PathInput, tool_input)
-        output = self.context.graph.reverse_imports(value.path)
-        paths = self._paths(output.get("imported_by"))
-        return self._result(
-            output,
-            ToolBudgetCost(graph_queries=1),
-            ToolInspectionDelta(
-                discovered_paths=paths,
-                evidence_paths=[value.path, *paths],
-                graph_paths_inspected=[value.path, *paths],
-            ),
-        )
-
-    def _file_imports(self, tool_input: BaseModel) -> ToolHandlerResult:
-        value = cast(PathInput, tool_input)
-        output = self.context.graph.imports(value.path)
-        paths = self._paths(output.get("imports"))
-        return self._result(
-            output,
-            ToolBudgetCost(graph_queries=1),
-            ToolInspectionDelta(
-                discovered_paths=paths,
-                evidence_paths=[value.path, *paths],
-                graph_paths_inspected=[value.path, *paths],
-            ),
-        )
-
-    def _declared_entrypoints(self, _: BaseModel) -> ToolHandlerResult:
-        output = self.context.graph.declared_entrypoints()
-        paths = self._paths(output.get("entrypoints"))
-        source_paths = self._paths(output.get("entrypoints"), key="source_path")
-        inspected = [*paths, *source_paths]
-        return self._result(
-            output,
-            ToolBudgetCost(graph_queries=1),
-            ToolInspectionDelta(
-                discovered_paths=inspected,
-                evidence_paths=inspected,
-                graph_paths_inspected=inspected,
             ),
         )
 

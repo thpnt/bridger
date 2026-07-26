@@ -239,7 +239,6 @@ class ToolBudgetCost(ContextPlanModel):
     excerpts: Annotated[int, Field(ge=0)] = 0
     searches: Annotated[int, Field(ge=0)] = 0
     symbol_queries: Annotated[int, Field(ge=0)] = 0
-    graph_queries: Annotated[int, Field(ge=0)] = 0
 
 
 class ToolInspectionDelta(ContextPlanModel):
@@ -248,13 +247,11 @@ class ToolInspectionDelta(ContextPlanModel):
     excerpts_read: list[ContextPlanInspectedExcerpt] = Field(default_factory=list)
     symbols_inspected: list[ContextPlanInspectedSymbol] = Field(default_factory=list)
     searches_performed: list[ContextPlanSearchRecord] = Field(default_factory=list)
-    graph_paths_inspected: list[RepositoryPath] = Field(default_factory=list)
     manifests_inspected: list[RepositoryPath] = Field(default_factory=list)
 
     _validate_paths = field_validator(
         "discovered_paths",
         "evidence_paths",
-        "graph_paths_inspected",
         "manifests_inspected",
     )(lambda paths: [validate_context_plan_path(path) for path in paths])
 
@@ -304,12 +301,6 @@ class FinalizationDecision(ContextPlanModel):
     issues: list[ContextPlanValidationIssue] = Field(default_factory=list)
 
 
-class ContextPlanGraphQueryRecord(ContextPlanModel):
-    tool: NonEmptyString
-    subject: NonEmptyString
-    result_count: Annotated[int, Field(ge=0)]
-
-
 class ContextPlanRunInspection(ContextPlanModel):
     safe_file_count: Annotated[int, Field(ge=0)]
     inspected_file_count: Annotated[int, Field(ge=0)]
@@ -318,7 +309,6 @@ class ContextPlanRunInspection(ContextPlanModel):
     inspected_excerpts: list[ContextPlanInspectedExcerpt]
     inspected_symbols: list[ContextPlanInspectedSymbol]
     search_records: list[ContextPlanSearchRecord]
-    graph_query_records: list[ContextPlanGraphQueryRecord]
 
     _validate_paths = field_validator("inspected_files")(
         lambda paths: [validate_context_plan_path(path) for path in paths]

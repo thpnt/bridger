@@ -83,10 +83,10 @@ from bridger.models.context_plan import (
     ToolExecutionResult,
     ToolExecutionStatus,
 )
+from bridger.models.context_plan_bootstrap import ContextPlanBootstrapArtifact
 from bridger.models.file_index import FileIndexArtifact
-from bridger.models.graph_summary import GraphSummaryArtifact
 from bridger.models.repo_context import ManifestFile, RepoContextArtifact
-from bridger.models.repo_discovery import RepoDiscoveryArtifact
+from bridger.models.symbol_index import SymbolIndexArtifact
 from bridger.models.working_state import (
     ContextPlanWorkingState,
     ContextPlanWorkingStateSummary,
@@ -165,9 +165,7 @@ class ContextPlanBuilder:
         self._write_context_plan = context_plan_writer
         self._working_state_destination = (
             working_state_destination
-            or run_recorder.destination.with_name(
-                "context-plan-working-state.json"
-            )
+            or run_recorder.destination.with_name("context-plan-working-state.json")
         )
         self._synthesis_projector = synthesis_projector or SynthesisProjector()
         self._control_executor: WorkingStateOperationExecutor | None = None
@@ -186,19 +184,20 @@ class ContextPlanBuilder:
             (
                 file_index,
                 repo_context,
-                graph_summary,
-                repo_discovery,
+                symbol_index,
+                context_plan_bootstrap,
             ) = self._load_required_artifacts()
-            state = self._initialize_state(run_id, file_index, repo_discovery)
+            state = self._initialize_state(run_id, context_plan_bootstrap, file_index)
             self._run_recorder.persist(state)
             state.start()
             self._run_recorder.persist(state)
 
             finalization, warnings, questions = await self._run_investigation(
                 state=state,
-                repo_discovery=repo_discovery,
+                context_plan_bootstrap=context_plan_bootstrap,
+                file_index=file_index,
+                symbol_index=symbol_index,
                 repo_context=repo_context,
-                graph_summary=graph_summary,
                 initial_warnings=list(initial_warnings),
                 open_questions=list(open_questions),
             )
@@ -211,8 +210,7 @@ class ContextPlanBuilder:
                 warnings=warnings,
                 open_questions=questions,
                 file_index=file_index,
-                graph_summary=graph_summary,
-                repo_discovery=repo_discovery,
+                context_plan_bootstrap=context_plan_bootstrap,
             )
         except (asyncio.CancelledError, KeyboardInterrupt):
             if state is not None:
@@ -234,28 +232,26 @@ class ContextPlanBuilder:
     ) -> tuple[
         FileIndexArtifact,
         RepoContextArtifact,
-        GraphSummaryArtifact,
-        RepoDiscoveryArtifact,
+        SymbolIndexArtifact,
+        ContextPlanBootstrapArtifact,
     ]:
         file_index = self._artifact_store.load_file_index()
         repo_context = self._artifact_store.load_repo_context()
-        self._artifact_store.load_symbol_index()
-        self._artifact_store.load_repo_graph()
-        graph_summary = self._artifact_store.load_graph_summary()
-        repo_discovery = self._artifact_store.load_repo_discovery()
-        return file_index, repo_context, graph_summary, repo_discovery
+        symbol_index = self._artifact_store.load_symbol_index()
+        context_plan_bootstrap = self._artifact_store.load_context_plan_bootstrap()
+        return file_index, repo_context, symbol_index, context_plan_bootstrap
 
     def _initialize_state(
         self,
         run_id: str,
+        context_plan_bootstrap: ContextPlanBootstrapArtifact,
         file_index: FileIndexArtifact,
-        repo_discovery: RepoDiscoveryArtifact,
     ) -> ContextPlanRunState:
         state = self._run_state_factory(
             run_id=run_id,
             repo=ContextPlanRepository(
-                root_name=repo_discovery.repo.root_name,
-                revision=repo_discovery.repo.revision,
+                root_name=context_plan_bootstrap.repo.root_name,
+                revision=context_plan_bootstrap.repo.revision,
             ),
             safe_file_count=len(file_index.files),
             model_profile=self._model_profile,
@@ -263,7 +259,7 @@ class ContextPlanBuilder:
         )
         working_state = ContextPlanWorkingState(
             run_id=run_id,
-            repository_revision=repo_discovery.repo.revision,
+            repository_revision=context_plan_bootstrap.repo.revision,
             updated_at=state.updated_at,
         )
         service = WorkingStateMutationService(
@@ -284,9 +280,10 @@ class ContextPlanBuilder:
         self,
         *,
         state: ContextPlanRunState,
-        repo_discovery: RepoDiscoveryArtifact,
+        context_plan_bootstrap: ContextPlanBootstrapArtifact,
+        file_index: FileIndexArtifact,
+        symbol_index: SymbolIndexArtifact,
         repo_context: RepoContextArtifact,
-        graph_summary: GraphSummaryArtifact,
         initial_warnings: list[str],
         open_questions: list[str],
     ) -> tuple[
@@ -308,9 +305,10 @@ class ContextPlanBuilder:
             if orientation:
                 prompt = self._build_orientation_prompt(
                     OrientationPromptInput(
-                        repository_bootstrap=repo_discovery,
+                        context_plan_bootstrap=context_plan_bootstrap,
+                        file_index=file_index,
+                        symbol_index=symbol_index,
                         repository_context=repo_context,
-                        graph_summary=graph_summary,
                         available_tools=self._available_tools(),
                         run_budget_limits=self._budget_policy.limits,
                         initial_warnings=warnings,
@@ -429,9 +427,7 @@ class ContextPlanBuilder:
         request = tool_call_request_from_llm_call(tool_call)
         definition = self._tool_executor.registry.get(request.name)
         estimated_cost = (
-            definition.estimated_cost
-            if definition is not None
-            else ToolBudgetCost()
+            definition.estimated_cost if definition is not None else ToolBudgetCost()
         )
         fingerprint = self._fingerprint(request)
         duplicate = state.fingerprint_counts.get(fingerprint, 0) > 0
@@ -592,8 +588,7 @@ class ContextPlanBuilder:
         warnings: list[str],
         open_questions: list[str],
         file_index: FileIndexArtifact,
-        graph_summary: GraphSummaryArtifact,
-        repo_discovery: RepoDiscoveryArtifact,
+        context_plan_bootstrap: ContextPlanBootstrapArtifact,
     ) -> ContextPlanRun:
         if state.working_state_service is None:
             raise ValueError("working state is not configured")
@@ -641,7 +636,7 @@ class ContextPlanBuilder:
             else []
         )
         synthesis_input = FinalSynthesisPromptInput(
-            repository_bootstrap=repo_discovery,
+            context_plan_bootstrap=context_plan_bootstrap,
             validated_evidence_paths=sorted(selected_paths),
             inspected_excerpts=excerpts,
             inspected_symbols=[
@@ -651,15 +646,7 @@ class ContextPlanBuilder:
                 and item.symbol_id is not None
             ],
             manifest_evidence=manifests,
-            graph_evidence=graph_summary,
-            collected_findings=[
-                item.statement for item in projection.findings
-            ],
-            confirmed_entrypoints=[
-                entrypoint
-                for entrypoint in graph_summary.declared_entrypoints
-                if entrypoint.path in selected_paths
-            ],
+            collected_findings=[item.statement for item in projection.findings],
             warnings=[*warnings, *omitted_warning],
             unknowns=[
                 *open_questions,
@@ -982,8 +969,7 @@ class ContextPlanBuilder:
                         "kind": item.kind.value,
                         "path": item.path,
                         "line_ranges": [
-                            value.model_dump(mode="json")
-                            for value in item.line_ranges
+                            value.model_dump(mode="json") for value in item.line_ranges
                         ],
                         "symbol_id": item.symbol_id,
                         "inspection_level": item.inspection_level.value,
@@ -992,12 +978,10 @@ class ContextPlanBuilder:
                     for item in recent_evidence
                 ],
                 "findings": [
-                    item.model_dump(mode="json")
-                    for item in working_state.findings
+                    item.model_dump(mode="json") for item in working_state.findings
                 ],
                 "relationships": [
-                    item.model_dump(mode="json")
-                    for item in working_state.relationships
+                    item.model_dump(mode="json") for item in working_state.relationships
                 ],
                 "open_questions": [
                     item.model_dump(mode="json")

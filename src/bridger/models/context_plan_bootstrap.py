@@ -8,10 +8,6 @@ from bridger.models.file_index import (
     RepositoryPath,
     validate_repository_path,
 )
-from bridger.models.graph_summary import (
-    DeclaredEntrypointSummary,
-    GraphSummaryCounts,
-)
 
 Checksum = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
@@ -19,33 +15,27 @@ REQUIRED_ARTIFACT_CHECKSUM_KEYS = {
     "file-index.json",
     "repo-context.json",
     "symbol-index.json",
-    "repo-graph.json",
-    "graph-summary.json",
 }
 
 
-class RepoDiscoveryRepo(ArtifactModel):
+class ContextPlanBootstrapRepo(ArtifactModel):
     root_name: str
     revision: str
 
 
-class RepoDiscoveryArtifacts(ArtifactModel):
+class ContextPlanBootstrapArtifacts(ArtifactModel):
     file_index: RepositoryPath
     repo_context: RepositoryPath
     symbol_index: RepositoryPath
-    repo_graph: RepositoryPath
-    graph_summary: RepositoryPath
 
     _validate_paths = field_validator(
         "file_index",
         "repo_context",
         "symbol_index",
-        "repo_graph",
-        "graph_summary",
     )(validate_repository_path)
 
 
-class RepoDiscoveryCompactContext(ArtifactModel):
+class ContextPlanBootstrapCompactContext(ArtifactModel):
     file_count: Annotated[int, Field(ge=0)]
     skipped_file_count: Annotated[int, Field(ge=0)]
     manifest_files: list[RepositoryPath]
@@ -53,8 +43,6 @@ class RepoDiscoveryCompactContext(ArtifactModel):
     instruction_files: list[RepositoryPath]
     docs_files: list[RepositoryPath]
     ci_files: list[RepositoryPath]
-    declared_entrypoints: list[DeclaredEntrypointSummary]
-    graph_counts: GraphSummaryCounts
 
     _validate_paths = field_validator(
         "manifest_files",
@@ -65,7 +53,7 @@ class RepoDiscoveryCompactContext(ArtifactModel):
     )(lambda paths: [validate_repository_path(path) for path in paths])
 
     @model_validator(mode="after")
-    def sort_paths(self) -> "RepoDiscoveryCompactContext":
+    def sort_paths(self) -> "ContextPlanBootstrapCompactContext":
         self.manifest_files.sort()
         self.config_files.sort()
         self.instruction_files.sort()
@@ -74,24 +62,23 @@ class RepoDiscoveryCompactContext(ArtifactModel):
         return self
 
 
-class RepoDiscoveryBudgets(ArtifactModel):
+class ContextPlanBootstrapBudgets(ArtifactModel):
     max_files_read: Annotated[int, Field(gt=0)] = 80
     max_excerpts: Annotated[int, Field(gt=0)] = 200
     max_grep_results: Annotated[int, Field(gt=0)] = 100
     max_symbol_results: Annotated[int, Field(gt=0)] = 100
-    max_graph_neighbors: Annotated[int, Field(gt=0)] = 50
     max_file_excerpt_lines: Annotated[int, Field(gt=0)] = 200
 
 
-class RepoDiscoveryArtifact(ArtifactModel):
+class ContextPlanBootstrapArtifact(ArtifactModel):
     schema_version: Literal[1] = 1
     generated_at: datetime
-    repo: RepoDiscoveryRepo
-    artifacts: RepoDiscoveryArtifacts
+    repo: ContextPlanBootstrapRepo
+    artifacts: ContextPlanBootstrapArtifacts
     artifact_checksums: dict[str, Checksum]
-    compact_context: RepoDiscoveryCompactContext
+    compact_context: ContextPlanBootstrapCompactContext
     available_tools: list[str]
-    budgets: RepoDiscoveryBudgets
+    budgets: ContextPlanBootstrapBudgets
 
     @field_validator("artifact_checksums")
     @classmethod

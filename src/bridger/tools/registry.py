@@ -1,19 +1,12 @@
 from agents import FunctionTool
 
 from bridger.tools.definitions import (
-    get_file_overview,
-    get_graph_neighbors,
-    get_reverse_imports,
     get_symbol,
     grep_contents,
-    inspect_graph_summary,
     inspect_manifest,
-    inspect_repo_discovery,
     list_ci_files,
     list_config_files,
-    list_declared_entrypoints,
     list_docs_files,
-    list_file_imports,
     list_files,
     list_instruction_files,
     list_symbols,
@@ -28,7 +21,6 @@ from bridger.tools.definitions import (
 
 def get_discovery_tools() -> list[FunctionTool]:
     return [
-        inspect_repo_discovery,
         list_files,
         list_tree,
         search_paths,
@@ -43,11 +35,5 @@ def get_discovery_tools() -> list[FunctionTool]:
         list_symbols,
         get_symbol,
         read_symbol_excerpt,
-        get_file_overview,
-        get_graph_neighbors,
-        get_reverse_imports,
-        list_file_imports,
-        list_declared_entrypoints,
-        inspect_graph_summary,
         validate_paths,
     ]

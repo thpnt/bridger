@@ -31,16 +31,8 @@ class ProjectPaths:
         return self.bridger_dir / "artifacts" / "symbol-index.json"
 
     @property
-    def repo_graph_artifact(self) -> Path:
-        return self.bridger_dir / "artifacts" / "repo-graph.json"
-
-    @property
-    def graph_summary_artifact(self) -> Path:
-        return self.bridger_dir / "artifacts" / "graph-summary.json"
-
-    @property
-    def repo_discovery_artifact(self) -> Path:
-        return self.bridger_dir / "artifacts" / "repo-discovery.json"
+    def context_plan_bootstrap_artifact(self) -> Path:
+        return self.bridger_dir / "artifacts" / "context-plan-bootstrap.json"
 
     @property
     def context_plan_artifact(self) -> Path:

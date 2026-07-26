@@ -39,6 +39,10 @@ SENSITIVE_FILE_PATTERNS = (
 )
 
 
+def is_explicitly_excluded(path: PurePosixPath) -> bool:
+    return bool(path.parts) and path.parts[0] == ".bridger"
+
+
 def load_gitignore(repo_root: Path) -> PathSpec | None:
     gitignore_path = repo_root / ".gitignore"
     if not gitignore_path.is_file():

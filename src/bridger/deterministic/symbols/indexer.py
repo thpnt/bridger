@@ -5,7 +5,7 @@ from bridger.deterministic.symbols.registry import (
     build_extractor_registry,
     extractor_for_path,
 )
-from bridger.models.file_index import FileIndexArtifact
+from bridger.models.file_index import FileIndexArtifact, ReadPolicy
 from bridger.models.symbol_index import (
     SymbolIndexArtifact,
     SymbolParseError,
@@ -58,6 +58,8 @@ def build_symbol_index_for_project(
         if indexed_file.path in processed_paths:
             continue
         processed_paths.add(indexed_file.path)
+        if indexed_file.read_policy is not ReadPolicy.READABLE:
+            continue
         extractor = extractor_for_path(indexed_file.path, registry)
         if extractor is None:
             continue

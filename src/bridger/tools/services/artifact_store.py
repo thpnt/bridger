@@ -3,11 +3,9 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from bridger.models.context_plan_bootstrap import ContextPlanBootstrapArtifact
 from bridger.models.file_index import FileIndexArtifact
-from bridger.models.graph_summary import GraphSummaryArtifact
 from bridger.models.repo_context import RepoContextArtifact
-from bridger.models.repo_discovery import RepoDiscoveryArtifact
-from bridger.models.repo_graph import RepoGraphArtifact
 from bridger.models.symbol_index import SymbolIndexArtifact
 from bridger.models.working_state import ContextPlanWorkingState
 from bridger.tools.errors import BridgerToolError
@@ -30,14 +28,8 @@ class ArtifactStore:
     def load_symbol_index(self) -> SymbolIndexArtifact:
         return self._load("symbol-index.json", SymbolIndexArtifact)
 
-    def load_repo_graph(self) -> RepoGraphArtifact:
-        return self._load("repo-graph.json", RepoGraphArtifact)
-
-    def load_graph_summary(self) -> GraphSummaryArtifact:
-        return self._load("graph-summary.json", GraphSummaryArtifact)
-
-    def load_repo_discovery(self) -> RepoDiscoveryArtifact:
-        return self._load("repo-discovery.json", RepoDiscoveryArtifact)
+    def load_context_plan_bootstrap(self) -> ContextPlanBootstrapArtifact:
+        return self._load("context-plan-bootstrap.json", ContextPlanBootstrapArtifact)
 
     def load_context_plan_working_state(self) -> ContextPlanWorkingState:
         return self._load(

@@ -210,7 +210,7 @@ def test_dummy_workflow_recovers_from_rejection_and_writes_both_artifacts(
     assert len(client.requests) == 6
     assert client.requests[0].reasoning is not None
     assert client.requests[0].reasoning.effort == "high"
-    assert "Repository bootstrap facts" in client.requests[0].messages[-1].content
+    assert "File index" in client.requests[0].messages[-1].content
     assert any(
         message.role == "tool" and message.tool_call_id == "list"
         for message in client.requests[1].messages
@@ -655,6 +655,4 @@ def test_synthesis_and_repair_reuse_persisted_manifest(
     assert manifest_id in synthesis_text
     assert manifest_id in repair_text
     assert run.working_state_checksum is not None
-    assert (
-        root / ".bridger/artifacts/context-plan-working-state.json"
-    ).is_file()
+    assert (root / ".bridger/artifacts/context-plan-working-state.json").is_file()

@@ -15,11 +15,11 @@ from bridger.deterministic.context_plan import (
     ContextPlanValidationError,
     create_context_plan_builder,
 )
+from bridger.deterministic.context_plan_bootstrap import (
+    build_context_plan_bootstrap_for_project,
+)
 from bridger.deterministic.file_index import build_file_index_for_project
-from bridger.deterministic.graph_summary import build_graph_summary_for_project
 from bridger.deterministic.repo_context import build_repo_context_for_project
-from bridger.deterministic.repo_discovery import build_repo_discovery_for_project
-from bridger.deterministic.repo_graph import build_repo_graph_for_project
 from bridger.deterministic.symbols import (
     TreeSitterCompatibilityError,
     build_extractor_registry,
@@ -67,12 +67,8 @@ def run(fresh: bool, verbose: bool, llm_profile: str | None = None) -> int:
         write_artifact(paths.repo_context_artifact, repo_context)
         symbol_index = build_symbol_index_for_project(paths.root)
         write_artifact(paths.symbol_index_artifact, symbol_index)
-        repo_graph = build_repo_graph_for_project(paths.root)
-        write_artifact(paths.repo_graph_artifact, repo_graph)
-        graph_summary = build_graph_summary_for_project(paths.root)
-        write_artifact(paths.graph_summary_artifact, graph_summary)
-        repo_discovery = build_repo_discovery_for_project(paths.root)
-        write_artifact(paths.repo_discovery_artifact, repo_discovery)
+        context_plan_bootstrap = build_context_plan_bootstrap_for_project(paths.root)
+        write_artifact(paths.context_plan_bootstrap_artifact, context_plan_bootstrap)
         extractor_registry = build_extractor_registry()
         supported_files = sum(
             extractor_for_path(file.path, extractor_registry) is not None
@@ -84,8 +80,7 @@ def run(fresh: bool, verbose: bool, llm_profile: str | None = None) -> int:
             file_index=file_index,
             repo_context=repo_context,
             symbol_index=symbol_index,
-            repo_graph=repo_graph,
-            repo_discovery=repo_discovery,
+            context_plan_bootstrap=context_plan_bootstrap,
             supported_file_count=supported_files,
             already_exists=already_exists,
         )

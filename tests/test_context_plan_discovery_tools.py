@@ -21,8 +21,6 @@ from bridger.models.context_plan import (
 from bridger.tools.context import BridgerToolContext
 
 REQUIRED_TOOLS = {
-    "inspect_repo_discovery",
-    "inspect_graph_summary",
     "inspect_manifest",
     "list_files",
     "search_paths",
@@ -34,10 +32,6 @@ REQUIRED_TOOLS = {
     "search_symbols",
     "list_symbols",
     "get_symbol",
-    "get_graph_neighbors",
-    "get_reverse_imports",
-    "list_file_imports",
-    "list_declared_entrypoints",
     "validate_paths",
     "request_context_plan_finalization",
 }

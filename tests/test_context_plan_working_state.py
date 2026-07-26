@@ -108,36 +108,6 @@ def make_service(tmp_path: Path) -> WorkingStateMutationService:
             EvidenceKind.MANIFEST_FACT,
         ),
         (
-            "get_graph_neighbors",
-            {
-                "source_artifact": "repo-graph",
-                "neighbors": [
-                    {
-                        "path": "src/worker.py",
-                        "kind": "imports",
-                        "direction": "outgoing",
-                    }
-                ],
-                "total_matches": 1,
-                "limit_applied": 10,
-                "truncated": False,
-            },
-            EvidenceKind.GRAPH_RELATIONSHIP,
-        ),
-        (
-            "list_declared_entrypoints",
-            {
-                "source_artifact": "repo-graph",
-                "entrypoints": [
-                    {"path": "src/app.py", "source": "pyproject.toml:project.scripts"}
-                ],
-                "total_matches": 1,
-                "limit_applied": 10,
-                "truncated": False,
-            },
-            EvidenceKind.ENTRYPOINT_FACT,
-        ),
-        (
             "list_files",
             {
                 "source_artifact": "file-index",
@@ -147,11 +117,6 @@ def make_service(tmp_path: Path) -> WorkingStateMutationService:
                 "truncated": False,
             },
             EvidenceKind.FILE_METADATA,
-        ),
-        (
-            "inspect_repo_discovery",
-            {"repo": {"root_name": "fixture"}, "truncated": False},
-            EvidenceKind.REPOSITORY_FACT,
         ),
     ],
 )

@@ -24,7 +24,6 @@ from bridger.deterministic.context_plan.working_state import (
 from bridger.models.context_plan import (
     ContextPlanFinalizationRecord,
     ContextPlanFinalizationRequest,
-    ContextPlanGraphQueryRecord,
     ContextPlanInspectedExcerpt,
     ContextPlanInspectedSymbol,
     ContextPlanRepository,
@@ -55,7 +54,6 @@ _COST_FIELDS = (
     "excerpts",
     "searches",
     "symbol_queries",
-    "graph_queries",
 )
 
 
@@ -87,7 +85,6 @@ class DiscoveryBudgetLimits:
     excerpts: int | None = None
     searches: int | None = None
     symbol_queries: int | None = None
-    graph_queries: int | None = None
     duplicate_call_threshold: int | None = None
     consecutive_no_progress_threshold: int | None = None
 
@@ -162,7 +159,6 @@ class InspectionCoverageTracker:
         self.excerpts_read: set[tuple[RepositoryPath, int, int]] = set()
         self.symbols_inspected: set[tuple[str, RepositoryPath | None]] = set()
         self.searches_performed: dict[tuple[str, str], ContextPlanSearchRecord] = {}
-        self.graph_paths_inspected: set[RepositoryPath] = set()
         self.manifests_inspected: set[RepositoryPath] = set()
 
     def apply(self, delta: ToolInspectionDelta) -> bool:
@@ -179,7 +175,6 @@ class InspectionCoverageTracker:
         )
         for item in delta.searches_performed:
             self.searches_performed.setdefault((item.tool, item.query), item)
-        self.graph_paths_inspected.update(delta.graph_paths_inspected)
         self.manifests_inspected.update(delta.manifests_inspected)
         return before != self._identity_set()
 
@@ -190,14 +185,6 @@ class InspectionCoverageTracker:
             | {path for path, _, _ in self.excerpts_read}
             | {path for _, path in self.symbols_inspected if path is not None}
         )
-        graph_records = [
-            ContextPlanGraphQueryRecord(
-                tool="graph_inspection",
-                subject=path,
-                result_count=1,
-            )
-            for path in sorted(self.graph_paths_inspected)
-        ]
         return ContextPlanRunInspection(
             safe_file_count=self.safe_file_count,
             inspected_file_count=len(inspected_files),
@@ -222,7 +209,6 @@ class InspectionCoverageTracker:
                 self.searches_performed.values(),
                 key=lambda item: (item.tool, item.query, item.result_count),
             ),
-            graph_query_records=graph_records,
         )
 
     def _identity_set(self) -> set[tuple[str, object]]:
@@ -232,7 +218,6 @@ class InspectionCoverageTracker:
             *(("excerpt", item) for item in self.excerpts_read),
             *(("symbol", item) for item in self.symbols_inspected),
             *(("search", item) for item in self.searches_performed),
-            *(("graph", path) for path in self.graph_paths_inspected),
             *(("manifest", path) for path in self.manifests_inspected),
         }
 
@@ -513,13 +498,9 @@ class ContextPlanRunState:
             source_request = self._tool_requests.get(result.call_id)
             extracted = self._evidence_extractor.extract(
                 result,
-                starting_sequence=(
-                    self.working_state_service.state.mutation_sequence
-                ),
+                starting_sequence=(self.working_state_service.state.mutation_sequence),
                 source_arguments=(
-                    source_request.arguments
-                    if source_request is not None
-                    else None
+                    source_request.arguments if source_request is not None else None
                 ),
             )
             evidence_ids = self.working_state_service.apply_evidence(
@@ -527,12 +508,9 @@ class ContextPlanRunState:
                 now=timestamp,
             )
             progress = progress or bool(evidence_ids)
-            current_sequence = (
-                self.working_state_service.state.mutation_sequence
-            )
+            current_sequence = self.working_state_service.state.mutation_sequence
             progress = (
-                progress
-                or current_sequence > self._last_working_mutation_sequence
+                progress or current_sequence > self._last_working_mutation_sequence
             )
             self._last_working_mutation_sequence = current_sequence
         self._tool_requests.pop(result.call_id, None)

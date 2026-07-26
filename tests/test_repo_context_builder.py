@@ -3,7 +3,7 @@ from pathlib import Path
 from bridger.artifacts import write_artifact
 from bridger.deterministic.file_index import build_file_index_for_project
 from bridger.deterministic.repo_context import build_repo_context_for_project
-from bridger.models.file_index import FileIndexArtifact, SkipReason
+from bridger.models.file_index import FileIndexArtifact, ReadPolicy, SkipReason
 from bridger.models.repo_context import ManifestKind
 
 
@@ -89,17 +89,20 @@ def test_builder_does_not_rescan_for_files_absent_from_index(tmp_path: Path) -> 
     assert [docs.path for docs in artifact.docs_files] == ["README.md"]
 
 
-def test_builder_never_includes_or_reads_skipped_files(tmp_path: Path) -> None:
+def test_builder_keeps_metadata_only_files_out_of_content_parsing(
+    tmp_path: Path,
+) -> None:
     write_file(tmp_path, ".env", "SECRET=value")
     write_file(tmp_path, "secret/package.json", "value\0binary")
     write_file_index(tmp_path)
 
     file_index_path = tmp_path / ".bridger/artifacts/file-index.json"
     file_index = build_file_index_for_project(tmp_path)
-    assert {file.skip_reason for file in file_index.skipped_files} >= {
-        SkipReason.SENSITIVE_FILE,
-        SkipReason.BINARY_FILE,
-    }
+    indexed = {file.path: file for file in file_index.files}
+    assert indexed[".env"].read_policy is ReadPolicy.METADATA_ONLY
+    assert indexed[".env"].read_policy_reason is SkipReason.SENSITIVE_FILE
+    assert indexed["secret/package.json"].read_policy is ReadPolicy.METADATA_ONLY
+    assert indexed["secret/package.json"].read_policy_reason is SkipReason.BINARY_FILE
 
     artifact = build_repo_context_for_project(tmp_path)
 
