@@ -5,6 +5,7 @@ import pytest
 from pydantic import JsonValue, RootModel
 from test_context_plan_builder import (
     finalization_call,
+    read_app_ranges_call,
     synthesis_response,
     tool_response,
     valid_plan,
@@ -27,7 +28,7 @@ from bridger.deterministic.context_plan.run_state import (
     DiscoveryBudgetPolicy,
 )
 from bridger.deterministic.context_plan.validation import ContextPlanValidationError
-from bridger.llm.models import LLMResponse, LLMToolCall, LLMUsage
+from bridger.llm.models import LLMResponse, LLMUsage
 from bridger.llm.testing import DummyLLMClient
 from bridger.models.context_plan import ContextPlan
 from bridger.tools.context import BridgerToolContext
@@ -61,13 +62,7 @@ def invalid_schema_response(
 
 def discovery_responses() -> list[LLMResponse]:
     return [
-        tool_response(
-            LLMToolCall(
-                id="read",
-                name="read_file_excerpt",
-                arguments={"path": "src/app.py", "end_line": 2},
-            )
-        ),
+        tool_response(read_app_ranges_call()),
         tool_response(finalization_call()),
     ]
 

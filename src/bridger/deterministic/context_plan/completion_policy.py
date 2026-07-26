@@ -154,10 +154,10 @@ class ContextPlanCompletionPolicy:
         location: list[str | int],
         error: BridgerToolError,
     ) -> ContextPlanValidationIssue:
-        if error.payload.error == "path_not_indexed":
+        if error.payload.error in {"path_not_found", "path_not_indexed"}:
             code = "unknown_evidence_path"
             message = "evidence path is not in the safe file index"
-        elif error.payload.error == "path_skipped":
+        elif error.payload.error in {"path_excluded", "path_skipped"}:
             code = "skipped_evidence_path"
             message = "evidence path was skipped from the safe file index"
         else:
@@ -165,7 +165,7 @@ class ContextPlanCompletionPolicy:
             message = "evidence path must be a safe repository-relative path"
 
         context: dict[str, JsonValue] = {"path": path}
-        if error.payload.error == "path_skipped":
+        if error.payload.error in {"path_excluded", "path_skipped"}:
             details = error.payload.details or {}
             skip_reason = details.get("skip_reason")
             if isinstance(skip_reason, str):

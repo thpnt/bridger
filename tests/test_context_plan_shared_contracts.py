@@ -33,7 +33,7 @@ def make_cost() -> ToolBudgetCost:
 def make_result(status: ToolExecutionStatus) -> ToolExecutionResult:
     return ToolExecutionResult(
         call_id="call_1",
-        tool_name="read_file_excerpt",
+        tool_name="read_file_ranges",
         status=status,
         output={"path": "src/main.py"},
         estimated_cost=make_cost(),
@@ -105,14 +105,14 @@ def test_collection_defaults_are_independent() -> None:
     first_event = ToolExecutionEvent(
         event_type=ToolExecutionEventType.TOOL_CALL_REQUESTED,
         call_id="call_1",
-        tool_name="read_file_excerpt",
+        tool_name="read_file_ranges",
         fingerprint="fingerprint",
         occurred_at=datetime(2026, 7, 23, tzinfo=UTC),
     )
     second_event = ToolExecutionEvent(
         event_type=ToolExecutionEventType.TOOL_CALL_REQUESTED,
         call_id="call_2",
-        tool_name="read_file_excerpt",
+        tool_name="read_file_ranges",
         fingerprint="fingerprint",
         occurred_at=datetime(2026, 7, 23, tzinfo=UTC),
     )
@@ -234,7 +234,7 @@ def test_tool_execution_event_serializes_compact_operational_fields() -> None:
     event = ToolExecutionEvent(
         event_type=ToolExecutionEventType.TOOL_CALL_COMPLETED,
         call_id="call_1",
-        tool_name="read_file_excerpt",
+        tool_name="read_file_ranges",
         fingerprint="fingerprint",
         estimated_cost=make_cost(),
         actual_cost=make_cost(),

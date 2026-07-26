@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from test_context_plan_builder import (
     finalization_call,
+    read_app_ranges_call,
     synthesis_response,
     tool_response,
     valid_plan,
@@ -20,7 +21,6 @@ from bridger.llm.errors import (
     LLMProviderError,
     LLMTimeoutError,
 )
-from bridger.llm.models import LLMToolCall
 from bridger.llm.testing import DummyLLMClient
 from bridger.models.context_plan import (
     ContextPlanRepository,
@@ -363,13 +363,7 @@ def test_init_preserves_existing_context_plan_after_validation_failure(
     plan_path.write_bytes(b"previous valid plan")
     client = DummyLLMClient(
         [
-            tool_response(
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={"path": "src/app.py", "end_line": 2},
-                )
-            ),
+            tool_response(read_app_ranges_call()),
             tool_response(finalization_call()),
             synthesis_response(valid_plan(line_end=99)),
             synthesis_response(valid_plan(line_end=99)),
@@ -387,13 +381,7 @@ def test_init_preserves_existing_context_plan_after_validation_failure(
 def dummy_client_for_success() -> DummyLLMClient:
     return DummyLLMClient(
         [
-            tool_response(
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={"path": "src/app.py", "end_line": 2},
-                )
-            ),
+            tool_response(read_app_ranges_call()),
             tool_response(finalization_call()),
             synthesis_response(valid_plan()),
         ]

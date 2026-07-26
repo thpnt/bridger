@@ -20,7 +20,7 @@ def evidence(sequence: int, area: str) -> EvidenceRecord:
     return EvidenceRecord(
         evidence_id=stable_id("ev", identity),
         kind=EvidenceKind.FILE_EXCERPT,
-        source_tool="read_file_excerpt",
+        source_tool="read_file_ranges",
         source_call_id=f"call-{sequence}",
         path=path,
         line_ranges=[EvidenceLineRange(line_start=1, line_end=1)],

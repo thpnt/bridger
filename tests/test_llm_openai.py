@@ -277,13 +277,37 @@ def test_openai_adapter_normalizes_optional_nested_tool_schema_for_strict_mode()
     assert "default" not in parameters["$defs"]["Filters"]["properties"]["extension"]
 
 
+def test_openai_adapter_omits_required_for_empty_tool_schema() -> None:
+    tool = LLMToolDefinition(
+        name="inspect_repo_discovery",
+        description="Inspect repository discovery",
+        input_schema={"type": "object", "properties": {}},
+    )
+    fake = FakeOpenAI([text_response()])
+    client = OpenAILLMClient(openai_client=fake, profile=profile())
+
+    run_generate(
+        client,
+        LLMRequest(
+            operation=LLMOperation.REPO_DISCOVERY,
+            messages=[LLMMessage.user("Inspect the repository")],
+            tools=[tool],
+        ),
+    )
+
+    parameters = fake.responses.calls[0]["tools"][0]["parameters"]
+    assert parameters["properties"] == {}
+    assert "required" not in parameters
+    assert parameters["additionalProperties"] is False
+
+
 def test_openai_adapter_parses_tool_calls_and_rejects_malformed_arguments() -> None:
     response_payload = text_response(
         output=[
             {
                 "type": "function_call",
                 "call_id": "call_2",
-                "name": "search_paths",
+                "name": "search_with_context",
                 "arguments": '{"query":"main"}',
             }
         ]
@@ -302,7 +326,7 @@ def test_openai_adapter_parses_tool_calls_and_rejects_malformed_arguments() -> N
             {
                 "type": "function_call",
                 "call_id": "call_3",
-                "name": "search_paths",
+                "name": "search_with_context",
                 "arguments": "{bad",
             }
         ]

@@ -62,6 +62,17 @@ def finalization_call(call_id: str = "finalize") -> LLMToolCall:
     )
 
 
+def read_app_ranges_call(call_id: str = "read") -> LLMToolCall:
+    return LLMToolCall(
+        id=call_id,
+        name="read_file_ranges",
+        arguments={
+            "path": "src/app.py",
+            "ranges": [{"line_start": 1, "line_end": 2}],
+        },
+    )
+
+
 def valid_plan(*, line_end: int = 2) -> ContextPlan:
     return ContextPlan.model_validate(
         {
@@ -165,22 +176,12 @@ def test_dummy_workflow_recovers_from_rejection_and_writes_both_artifacts(
             tool_response(
                 LLMToolCall(
                     id="search",
-                    name="search_paths",
-                    arguments={"query": "src/app.py"},
+                    name="search_symbols",
+                    arguments={"query": "main", "path": "src/app.py"},
                 )
             ),
             tool_response(finalization_call("premature")),
-            tool_response(
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={
-                        "path": "src/app.py",
-                        "start_line": 1,
-                        "end_line": 2,
-                    },
-                )
-            ),
+            tool_response(read_app_ranges_call()),
             tool_response(finalization_call("grounded")),
             synthesis_response(valid_plan()),
         ]
@@ -245,14 +246,10 @@ def test_tool_calls_execute_in_response_order_and_keep_conversation(
             tool_response(
                 LLMToolCall(
                     id="search",
-                    name="search_paths",
-                    arguments={"query": "src/app.py"},
+                    name="search_with_context",
+                    arguments={"query": "return", "path_prefix": "src"},
                 ),
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={"path": "src/app.py", "end_line": 2},
-                ),
+                read_app_ranges_call(),
             ),
             tool_response(finalization_call()),
             synthesis_response(valid_plan()),
@@ -271,7 +268,7 @@ def test_tool_calls_execute_in_response_order_and_keep_conversation(
     run = asyncio.run(builder.build(run_id="run-order"))
 
     assert run.status.value == "completed"
-    assert executed == ["search_paths", "read_file_excerpt"]
+    assert executed == ["search_with_context", "read_file_ranges"]
     tool_messages = [
         message.tool_call_id
         for message in client.requests[1].messages
@@ -324,13 +321,7 @@ def test_mixed_finalization_response_rejects_every_call_without_execution(
                 LLMToolCall(id="list", name="list_files", arguments={}),
                 finalization_call(),
             ),
-            tool_response(
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={"path": "src/app.py", "end_line": 2},
-                )
-            ),
+            tool_response(read_app_ranges_call()),
             tool_response(finalization_call("grounded")),
             synthesis_response(valid_plan()),
         ]
@@ -348,7 +339,7 @@ def test_mixed_finalization_response_rejects_every_call_without_execution(
     run = asyncio.run(builder.build(run_id="run-mixed"))
 
     assert run.status.value == "completed"
-    assert executed == ["read_file_excerpt"]
+    assert executed == ["read_file_ranges"]
     assert len(run.finalization_requests) == 1
 
 
@@ -376,11 +367,11 @@ def test_tool_preflight_prevents_handler_execution(
 ) -> None:
     root, context = context_with_repo
     executor = DiscoveryToolExecutor(context)
-    definition = executor.registry.get("read_file_excerpt")
+    definition = executor.registry.get("read_file_ranges")
     assert definition is not None
-    executor.registry._definitions["read_file_excerpt"] = replace(
+    executor.registry._definitions["read_file_ranges"] = replace(
         definition,
-        estimated_cost=ToolBudgetCost(file_reads=2, excerpts=1),
+        cost=ToolBudgetCost(file_reads=2, excerpts=1),
     )
     executed: list[str] = []
     monkeypatch.setattr(
@@ -388,17 +379,7 @@ def test_tool_preflight_prevents_handler_execution(
         "execute",
         lambda request: executed.append(request.name),
     )
-    client = DummyLLMClient(
-        [
-            tool_response(
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={"path": "src/app.py"},
-                )
-            )
-        ]
-    )
+    client = DummyLLMClient([tool_response(read_app_ranges_call())])
     builder = make_builder(
         root,
         context,
@@ -418,13 +399,15 @@ def test_duplicate_warning_reaches_a_later_investigation_prompt(
 ) -> None:
     root, context = context_with_repo
     repeated = LLMToolCall(
-        id="search-1", name="search_paths", arguments={"query": "src/app.py"}
+        id="search-1",
+        name="search_with_context",
+        arguments={"query": "return", "path_prefix": "src"},
     )
     client = DummyLLMClient(
         [
             tool_response(repeated),
             tool_response(repeated.model_copy(update={"id": "search-2"})),
-            tool_response(finalization_call()),
+            text_response("Continue investigating."),
         ]
     )
     builder = make_builder(
@@ -441,7 +424,7 @@ def test_duplicate_warning_reaches_a_later_investigation_prompt(
     run = asyncio.run(builder.build(run_id="run-duplicate"))
 
     assert run.status.value == "stalled"
-    assert "Duplicate tool call detected for search_paths" in (
+    assert "Duplicate tool call detected for search_with_context" in (
         client.requests[2].messages[-1].content or ""
     )
 
@@ -460,13 +443,7 @@ def test_invalid_synthesis_never_creates_or_replaces_plan(
         destination.write_bytes(existing)
     client = DummyLLMClient(
         [
-            tool_response(
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={"path": "src/app.py", "end_line": 2},
-                )
-            ),
+            tool_response(read_app_ranges_call()),
             tool_response(finalization_call()),
             synthesis_response(valid_plan(line_end=99)),
         ]
@@ -552,18 +529,8 @@ def test_tool_failure_is_persisted_before_stall(
     def fail_read(*args, **kwargs):
         raise RuntimeError("read failed")
 
-    monkeypatch.setattr(context.file_read, "read_excerpt", fail_read)
-    client = DummyLLMClient(
-        [
-            tool_response(
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={"path": "src/app.py"},
-                )
-            )
-        ]
-    )
+    monkeypatch.setattr(context.file_read, "read_ranges", fail_read)
+    client = DummyLLMClient([tool_response(read_app_ranges_call())])
     builder = make_builder(
         root,
         context,
@@ -576,7 +543,9 @@ def test_tool_failure_is_persisted_before_stall(
     run = asyncio.run(builder.build(run_id="run-tool-failure"))
 
     assert run.status.value == "stalled"
-    assert any("tool_execution_failed" in error.message for error in run.errors)
+    assert read_run(root) == run
+    assert run.tool_call_count == 1
+    assert run.output is None
 
 
 def test_artifact_write_failure_does_not_report_completion(
@@ -589,13 +558,7 @@ def test_artifact_write_failure_does_not_report_completion(
 
     client = DummyLLMClient(
         [
-            tool_response(
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={"path": "src/app.py", "end_line": 2},
-                )
-            ),
+            tool_response(read_app_ranges_call()),
             tool_response(finalization_call()),
             synthesis_response(valid_plan()),
         ]
@@ -625,13 +588,7 @@ def test_synthesis_and_repair_reuse_persisted_manifest(
     root, context = context_with_repo
     client = DummyLLMClient(
         [
-            tool_response(
-                LLMToolCall(
-                    id="read",
-                    name="read_file_excerpt",
-                    arguments={"path": "src/app.py", "end_line": 2},
-                )
-            ),
+            tool_response(read_app_ranges_call()),
             tool_response(finalization_call()),
             synthesis_response(valid_plan(line_end=99)),
             synthesis_response(valid_plan()),

@@ -492,7 +492,10 @@ def _normalize_schema_node(node: Any) -> None:
         node.pop("default", None)
         properties = node.get("properties")
         if isinstance(properties, dict):
-            node["required"] = list(properties)
+            if properties:
+                node["required"] = list(properties)
+            else:
+                node.pop("required", None)
             node["additionalProperties"] = False
         elif node.get("type") == "object":
             node["additionalProperties"] = False

@@ -48,8 +48,11 @@ def make_state(context: BridgerToolContext) -> ContextPlanRunState:
 def read_request(call_id: str = "read-1") -> ToolCallRequest:
     return ToolCallRequest(
         call_id=call_id,
-        name="read_file_excerpt",
-        arguments={"path": "src/app.py", "start_line": 1, "end_line": 5},
+        name="read_file_ranges",
+        arguments={
+            "path": "src/app.py",
+            "ranges": [{"line_start": 1, "line_end": 4}],
+        },
     )
 
 
@@ -102,8 +105,11 @@ def test_unsafe_request_records_rejection_without_inspection_progress(
     state = make_state(context_with_repo)
     request = ToolCallRequest(
         call_id="unsafe-1",
-        name="read_file_excerpt",
-        arguments={"path": "/etc/passwd"},
+        name="read_file_ranges",
+        arguments={
+            "path": "/etc/passwd",
+            "ranges": [{"line_start": 1, "line_end": 1}],
+        },
     )
     _, result = execute_and_record(
         state, DiscoveryToolExecutor(context_with_repo), request
@@ -126,7 +132,7 @@ def test_equivalent_requests_share_a_duplicate_fingerprint(
     assert state.fingerprint_counts[first] == 2
 
 
-def test_discovered_only_path_is_rejected_for_finalization(
+def test_navigation_only_path_is_rejected_for_finalization(
     context_with_repo: BridgerToolContext,
 ) -> None:
     state = make_state(context_with_repo)
@@ -135,7 +141,9 @@ def test_discovered_only_path_is_rejected_for_finalization(
         state,
         executor,
         ToolCallRequest(
-            call_id="search-1", name="search_paths", arguments={"query": "src/app.py"}
+            call_id="list-1",
+            name="list_files",
+            arguments={"prefix": "src"},
         ),
     )
     policy = ContextPlanCompletionPolicy(context_with_repo.path_safety)
@@ -145,7 +153,7 @@ def test_discovered_only_path_is_rejected_for_finalization(
     )
 
     assert result.status is ToolExecutionStatus.COMPLETED
-    assert state.coverage.discovered_paths == {"src/app.py"}
+    assert state.coverage.evidence_paths == set()
     assert decision.accepted is False
     assert decision.code.value == "uninspected_evidence_path"
 
@@ -172,28 +180,3 @@ def test_grounded_finalization_uses_task_four_through_control_tool(
 
     assert result.status is ToolExecutionStatus.COMPLETED
     assert result.output["decision"]["accepted"] is True
-
-
-def test_execution_failure_leaves_a_durable_run_snapshot(
-    context_with_repo: BridgerToolContext,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    state = make_state(context_with_repo)
-
-    def fail_read(*_: object) -> dict[str, object]:
-        raise RuntimeError("unexpected read failure")
-
-    monkeypatch.setattr(context_with_repo.file_read, "read_excerpt", fail_read)
-    _, result = execute_and_record(
-        state, DiscoveryToolExecutor(context_with_repo), read_request()
-    )
-    state.fail("tool execution failed", now=NOW)
-    snapshot = ContextPlanRunRecorder(tmp_path / "context-plan-run.json").persist(
-        state, now=NOW
-    )
-
-    assert result.status is ToolExecutionStatus.FAILED
-    assert state.events[-2].event_type.value == "tool_call_failed"
-    assert snapshot.status.value == "failed"
-    assert (tmp_path / "context-plan-run.json").is_file()

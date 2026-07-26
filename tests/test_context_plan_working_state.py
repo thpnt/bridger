@@ -57,43 +57,37 @@ def make_service(tmp_path: Path) -> WorkingStateMutationService:
     ("tool_name", "output", "expected_kind"),
     [
         (
-            "read_file_excerpt",
+            "read_file_ranges",
             {
-                "source_artifact": "file-index",
+                "source_artifact": "file-index.json",
                 "path": "src/app.py",
-                "line_start": 3,
-                "line_end": 4,
-                "content": "def main():\n    pass",
+                "ranges": [
+                    {
+                        "line_start": 3,
+                        "line_end": 4,
+                        "content": "def main():\n    pass",
+                    }
+                ],
                 "truncated": False,
             },
             EvidenceKind.FILE_EXCERPT,
         ),
         (
-            "grep_contents",
+            "search_with_context",
             {
-                "source_artifact": "file-index",
                 "results": [
-                    {"path": "src/app.py", "line_number": 3, "match": "def main"}
+                    {
+                        "path": "src/app.py",
+                        "match_line": 3,
+                        "context_range": {"line_start": 3, "line_end": 4},
+                        "content": "def main():\n    pass",
+                    }
                 ],
-                "total_matches": 1,
-                "limit_applied": 10,
+                "total_available": 1,
+                "returned_count": 1,
                 "truncated": False,
             },
             EvidenceKind.SEARCH_HIT,
-        ),
-        (
-            "get_symbol",
-            {
-                "source_artifact": "symbol-index",
-                "symbol": {
-                    "id": "sym:src/app.py:3:main",
-                    "path": "src/app.py",
-                    "line_start": 3,
-                    "line_end": 4,
-                    "declaration": "def main()",
-                },
-            },
-            EvidenceKind.SYMBOL_METADATA,
         ),
         (
             "inspect_manifest",
@@ -134,13 +128,17 @@ def test_evidence_extraction_preserves_tool_meaning(
 def test_stable_ids_deduplicate_repeated_results(tmp_path: Path) -> None:
     extractor = EvidenceExtractor()
     first = completed_result(
-        "read_file_excerpt",
+        "read_file_ranges",
         {
-            "source_artifact": "file-index",
+            "source_artifact": "file-index.json",
             "path": "src/app.py",
-            "line_start": 1,
-            "line_end": 2,
-            "content": "one\ntwo",
+            "ranges": [
+                {
+                    "line_start": 1,
+                    "line_end": 2,
+                    "content": "one\ntwo",
+                }
+            ],
             "truncated": False,
         },
         call_id="provider-call-a",
@@ -167,13 +165,17 @@ def test_ranges_merge_but_symbol_metadata_stays_symbol_only(
         service.apply_evidence(
             extractor.extract(
                 completed_result(
-                    "read_file_excerpt",
+                    "read_file_ranges",
                     {
-                        "source_artifact": "file-index",
+                        "source_artifact": "file-index.json",
                         "path": "src/app.py",
-                        "line_start": start,
-                        "line_end": end,
-                        "content": content,
+                        "ranges": [
+                            {
+                                "line_start": start,
+                                "line_end": end,
+                                "content": content,
+                            }
+                        ],
                         "truncated": False,
                     },
                     call_id=f"read-{start}",
@@ -203,9 +205,14 @@ def test_ranges_merge_but_symbol_metadata_stays_symbol_only(
                         {
                             "id": "sym:src/app.py:3:main",
                             "path": "src/app.py",
-                            "line_start": 3,
-                            "line_end": 4,
-                            "declaration": "def main()",
+                            "declaration_range": {
+                                "start_line": 3,
+                                "start_column": 0,
+                                "end_line": 4,
+                                "end_column": 17,
+                            },
+                            "declaration_preview": "def main()",
+                            "signature": "def main()",
                         }
                     ],
                     "total_matches": 1,
@@ -230,13 +237,17 @@ def test_findings_validate_references_and_candidate_lifecycle(
     extractor = EvidenceExtractor()
     records = extractor.extract(
         completed_result(
-            "read_file_excerpt",
+            "read_file_ranges",
             {
-                "source_artifact": "file-index",
+                "source_artifact": "file-index.json",
                 "path": "src/app.py",
-                "line_start": 1,
-                "line_end": 2,
-                "content": "one\ntwo",
+                "ranges": [
+                    {
+                        "line_start": 1,
+                        "line_end": 2,
+                        "content": "one\ntwo",
+                    }
+                ],
                 "truncated": False,
             },
         )
@@ -347,18 +358,18 @@ def test_relationships_and_questions_are_evidence_backed_and_resolvable(
     service = make_service(tmp_path)
     records = EvidenceExtractor().extract(
         completed_result(
-            "grep_contents",
+            "search_with_context",
             {
-                "source_artifact": "file-index",
                 "results": [
                     {
                         "path": "src/app.py",
-                        "line_number": 4,
-                        "match": "worker.run()",
+                        "match_line": 4,
+                        "context_range": {"line_start": 4, "line_end": 4},
+                        "content": "worker.run()",
                     }
                 ],
-                "total_matches": 1,
-                "limit_applied": 10,
+                "total_available": 1,
+                "returned_count": 1,
                 "truncated": False,
             },
         )

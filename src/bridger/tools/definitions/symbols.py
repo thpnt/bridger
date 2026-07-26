@@ -99,7 +99,10 @@ def read_symbol_excerpt(
         end = min(
             metadata.line_count, symbol.declaration_range.end_line + context_lines
         )
-        excerpt = ctx.context.file_read.read_excerpt(symbol.path, start, end)
+        excerpt = ctx.context.file_read.read_ranges(
+            symbol.path,
+            [{"line_start": start, "line_end": end}],
+        )
         return {
             "source_artifact": "symbol-index.json",
             "symbol": symbol.model_dump(mode="json"),

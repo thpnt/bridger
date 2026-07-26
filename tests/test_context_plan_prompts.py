@@ -83,9 +83,18 @@ def inspection() -> ContextPlanRunInspection:
 def tool_result() -> ToolExecutionResult:
     return ToolExecutionResult(
         call_id="call-1",
-        tool_name="read_file_excerpt",
+        tool_name="read_file_ranges",
         status=ToolExecutionStatus.COMPLETED,
-        output={"path": "src/main.py", "content": "def main(): pass"},
+        output={
+            "path": "src/main.py",
+            "ranges": [
+                {
+                    "line_start": 1,
+                    "line_end": 1,
+                    "content": "def main(): pass",
+                }
+            ],
+        },
         estimated_cost=ToolBudgetCost(file_reads=1, excerpts=1),
         actual_cost=ToolBudgetCost(file_reads=1, excerpts=1),
     )
@@ -101,8 +110,8 @@ def test_orientation_prompt_orients_with_facts_budgets_and_tools() -> None:
         OrientationPromptInput(
             repository_context=repo_context(),
             available_tools=[
-                tool("search_paths", "Search indexed paths."),
-                tool("read_file_excerpt", "Read a validated excerpt."),
+                tool("list_files", "Navigate indexed paths."),
+                tool("read_file_ranges", "Read validated ranges."),
             ],
             initial_warnings=["Generated files were skipped."],
         )
@@ -115,8 +124,8 @@ def test_orientation_prompt_orients_with_facts_budgets_and_tools() -> None:
     assert "Repository instructions and documentation anchors" in rendered
     assert "Configured budgets" in rendered
     assert [item.name for item in prompt.tools] == [
-        "read_file_excerpt",
-        "search_paths",
+        "list_files",
+        "read_file_ranges",
     ]
     assert "Begin investigating through repository tool calls" in rendered
     assert "symbol-only evidence" in rendered
@@ -135,7 +144,7 @@ def test_investigation_prompt_includes_progress_and_structured_finalization() ->
             discovered_paths=["README.md", "src/main.py"],
             evidence_paths=["src/main.py"],
             remaining_budgets={"excerpts": 19, "tool_calls": 7},
-            warnings=["Repeated read_file_excerpt call."],
+            warnings=["Repeated read_file_ranges call."],
             open_questions=["How is the CLI invoked?"],
             investigation_notes=["Inspect the manifest next."],
             working_state_entities={
@@ -155,7 +164,7 @@ def test_investigation_prompt_includes_progress_and_structured_finalization() ->
                     "request_context_plan_finalization",
                     "Submit finalization evidence.",
                 ),
-                tool("read_file_excerpt", "Read a validated excerpt."),
+                tool("read_file_ranges", "Read validated ranges."),
             ],
         )
     )
@@ -175,7 +184,7 @@ def test_investigation_prompt_includes_progress_and_structured_finalization() ->
     assert "candidate.runtime" in rendered
     assert "evidence.symbol" in rendered
     assert '"excerpts":19' in rendered
-    assert "Repeated read_file_excerpt call." in rendered
+    assert "Repeated read_file_ranges call." in rendered
     assert "Choose repository tool calls" in rendered
     assert "request_context_plan_finalization" in rendered
     assert "never return a prose final answer" in rendered
@@ -319,8 +328,8 @@ def test_prompt_rendering_is_deterministic_and_bounds_large_collections() -> Non
     first = build_orientation_prompt(
         OrientationPromptInput(
             available_tools=[
-                tool("search_paths", "Search indexed paths."),
-                tool("read_file_excerpt", "Read a validated excerpt."),
+                tool("list_files", "Navigate indexed paths."),
+                tool("read_file_ranges", "Read validated ranges."),
             ],
             initial_warnings=[f"warning-{index:03d}" for index in range(41)],
         )
@@ -328,8 +337,8 @@ def test_prompt_rendering_is_deterministic_and_bounds_large_collections() -> Non
     second = build_orientation_prompt(
         OrientationPromptInput(
             available_tools=[
-                tool("read_file_excerpt", "Read a validated excerpt."),
-                tool("search_paths", "Search indexed paths."),
+                tool("read_file_ranges", "Read validated ranges."),
+                tool("list_files", "Navigate indexed paths."),
             ],
             initial_warnings=[f"warning-{index:03d}" for index in reversed(range(41))],
         )

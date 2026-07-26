@@ -69,8 +69,8 @@ def test_openai_client_runs_the_same_builder_through_repair_and_accounting(
         [
             function_call_response(
                 "read",
-                "read_file_excerpt",
-                '{"path":"src/app.py","end_line":2}',
+                "read_file_ranges",
+                ('{"path":"src/app.py","ranges":[{"line_start":1,"line_end":2}]}'),
             ),
             function_call_response(
                 "finalize",
@@ -145,8 +145,8 @@ def test_openai_timeout_fails_the_generic_run_and_preserves_the_plan(
         [
             function_call_response(
                 "read",
-                "read_file_excerpt",
-                '{"path":"src/app.py","end_line":2}',
+                "read_file_ranges",
+                ('{"path":"src/app.py","ranges":[{"line_start":1,"line_end":2}]}'),
             ),
             function_call_response(
                 "finalize",

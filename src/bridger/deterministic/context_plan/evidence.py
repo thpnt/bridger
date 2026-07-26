@@ -239,20 +239,26 @@ class EvidenceExtractor:
                 for item in self._items(output)
             ]
         if result.tool_name in _SYMBOL_TOOLS:
-            return [
-                self._record(
-                    EvidenceKind.SYMBOL_METADATA,
-                    path=self._string(item.get("path")),
-                    line_ranges=self._line_ranges(
-                        item.get("line_start"), item.get("line_end")
-                    ),
-                    symbol_id=self._string(item.get("symbol_id")),
-                    payload=item,
-                    content=self._string(item.get("signature_preview")),
-                    level=InspectionLevel.SYMBOL_ONLY,
+            records: list[dict[str, object]] = []
+            for item in self._items(output):
+                declaration_range = self._mapping(item.get("declaration_range"))
+                records.append(
+                    self._record(
+                        EvidenceKind.SYMBOL_METADATA,
+                        path=self._string(item.get("path")),
+                        line_ranges=self._line_ranges(
+                            declaration_range.get("start_line"),
+                            declaration_range.get("end_line"),
+                        ),
+                        symbol_id=self._string(item.get("id"))
+                        or self._string(item.get("symbol_id")),
+                        payload=item,
+                        content=self._string(item.get("signature"))
+                        or self._string(item.get("signature_preview")),
+                        level=InspectionLevel.SYMBOL_ONLY,
+                    )
                 )
-                for item in self._items(output)
-            ]
+            return records
         if result.tool_name == "get_symbol":
             item = self._mapping(output.get("symbol"))
             return [

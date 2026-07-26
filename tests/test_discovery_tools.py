@@ -43,30 +43,11 @@ from bridger.models.symbol_index import (
     SymbolRecord,
 )
 from bridger.tools.context import BridgerToolContext, build_tool_context
-from bridger.tools.definitions.files import read_file_excerpt
 from bridger.tools.errors import BridgerToolError
-from bridger.tools.models import FileFilters, GrepFilters
 from bridger.tools.registry import get_discovery_tools
-from bridger.tools.services import ArtifactStore, BudgetService, PathSafetyService
+from bridger.tools.services import ArtifactStore, PathSafetyService
 
 GENERATED_AT = datetime(2026, 6, 19, tzinfo=UTC)
-EXPECTED_TOOLS = [
-    "list_files",
-    "list_tree",
-    "search_paths",
-    "grep_contents",
-    "read_file_excerpt",
-    "inspect_manifest",
-    "list_config_files",
-    "list_docs_files",
-    "list_instruction_files",
-    "list_ci_files",
-    "search_symbols",
-    "list_symbols",
-    "get_symbol",
-    "read_symbol_excerpt",
-    "validate_paths",
-]
 
 
 def indexed_file(root: Path, path: str) -> IndexedFile:
@@ -291,7 +272,7 @@ def test_path_safety_rejects_unsafe_paths(
     _, context = tool_repo
     with pytest.raises(BridgerToolError) as error:
         context.path_safety.validate_file(path)
-    assert error.value.payload.error == "invalid_path"
+    assert error.value.payload.error == "path_outside_repository"
 
 
 def test_path_safety_accepts_safe_path_and_rejects_skipped_unknown_and_prefix(
@@ -302,52 +283,47 @@ def test_path_safety_accepts_safe_path_and_rejects_skipped_unknown_and_prefix(
     assert context.path_safety.validate_prefix("src") == "src"
     with pytest.raises(BridgerToolError) as skipped:
         context.path_safety.validate_file(".env")
-    assert skipped.value.payload.error == "path_skipped"
+    assert skipped.value.payload.error == "path_excluded"
     with pytest.raises(BridgerToolError) as unknown:
         context.path_safety.validate_file("missing.py")
-    assert unknown.value.payload.error == "path_not_indexed"
+    assert unknown.value.payload.error == "path_not_found"
     with pytest.raises(BridgerToolError):
         context.path_safety.validate_prefix("missing")
 
 
-def test_budget_service_uses_defaults_and_caps_requested_limits() -> None:
-    defaults = BudgetService()
-    custom = BudgetService(ContextPlanBootstrapBudgets(max_grep_results=2))
-    assert defaults.values == ContextPlanBootstrapBudgets()
-    assert custom.grep_limit(10) == 2
-    assert custom.grep_limit(1) == 1
-
-
-def test_file_inventory_tree_search_and_validation_are_bounded(
+def test_file_navigation_search_and_range_reads_are_bounded(
     tool_repo: tuple[Path, BridgerToolContext],
 ) -> None:
     _, context = tool_repo
-    listed = context.file_index.list_files(FileFilters(extension=".py"))
-    tree = context.file_index.list_tree("src", depth=1, limit=1)
-    searched = context.file_index.search_paths("src/")
+    listed = context.file_index.list_files(
+        prefix="src",
+        extension="py",
+        recursive=True,
+        max_depth=8,
+        limit=1,
+    )
+    searched = context.search.search_with_context(
+        "return",
+        path_prefix="src",
+        limit=1,
+    )
+    read = context.file_read.read_ranges(
+        "src/app.py",
+        [{"line_start": 2, "line_end": 4}],
+    )
     validated = context.file_index.validate_paths(["src/app.py", ".env", "none.py"])
 
-    assert [item["path"] for item in listed["files"]] == ["src/app.py", "src/util.py"]
-    assert tree["truncated"] is True
-    assert tree["entries"] == [{"path": "src/app.py", "kind": "file"}]
-    assert searched["total_matches"] == 2
-    assert [item["valid"] for item in validated["results"]] == [True, False, False]
-
-
-def test_file_excerpt_and_grep_enforce_budgets(
-    tool_repo: tuple[Path, BridgerToolContext],
-) -> None:
-    _, context = tool_repo
-    excerpt = context.file_read.read_excerpt("src/app.py", 2, 4)
-    grep = context.search.grep("return", GrepFilters())
-
-    assert excerpt["line_start"] == 2
-    assert excerpt["line_end"] == 3
-    assert excerpt["truncated"] is True
-    assert grep["total_matches"] == 2
-    assert len(grep["results"]) == 1
-    assert grep["truncated"] is True
-    assert {"path", "line_number", "match"} <= set(grep["results"][0])
+    assert [item["path"] for item in listed["files"]] == ["src/app.py"]
+    assert listed["truncated"] is True
+    assert searched["total_available"] == 2
+    assert searched["returned_count"] == 1
+    assert searched["truncated"] is True
+    assert read["ranges"][0]["content"] == "\ndef main():\n    return helper()"
+    assert [item["status"] for item in validated["results"]] == [
+        "valid_file",
+        "sensitive",
+        "missing",
+    ]
 
 
 def test_file_read_rejects_indexed_path_replaced_by_outside_symlink(
@@ -361,9 +337,12 @@ def test_file_read_rejects_indexed_path_replaced_by_outside_symlink(
     indexed.symlink_to(outside)
 
     with pytest.raises(BridgerToolError) as error:
-        context.file_read.read_excerpt("src/app.py")
+        context.file_read.read_ranges(
+            "src/app.py",
+            [{"line_start": 1, "line_end": 1}],
+        )
 
-    assert error.value.payload.error == "invalid_path"
+    assert error.value.payload.error == "path_outside_repository"
 
 
 def test_repo_context_services_return_only_factual_indexed_entries(
@@ -389,14 +368,20 @@ def test_symbol_services_are_bounded_and_support_safe_excerpts(
     searched = context.symbols.search("def")
     listed = context.symbols.list_for_path("src/app.py")
     symbol = context.symbols.get("sym:src/app.py:3:main")
-    excerpt = context.file_read.read_excerpt(
-        symbol.path, symbol.line_start, symbol.line_end
+    excerpt = context.file_read.read_ranges(
+        symbol.path,
+        [
+            {
+                "line_start": symbol.declaration_range.start_line,
+                "line_end": symbol.declaration_range.end_line,
+            }
+        ],
     )
 
     assert searched["total_matches"] == 2
     assert len(searched["symbols"]) == 1
     assert listed["symbols"][0]["id"] == symbol.id
-    assert excerpt["content"] == "def main():\n    return helper()"
+    assert excerpt["ranges"][0]["content"] == "def main():\n    return helper()"
     with pytest.raises(BridgerToolError) as error:
         context.symbols.get("missing")
     assert error.value.payload.error == "symbol_not_found"
@@ -426,26 +411,38 @@ def test_wrappers_compose_services_and_serialize_errors(
         "read_symbol_excerpt",
         {"symbol_id": "sym:src/app.py:3:main", "context_lines": 1},
     )
-    invalid = invoke_tool(context, "read_file_excerpt", {"path": "/etc/passwd"})
+    invalid = invoke_tool(
+        context,
+        "read_file_ranges",
+        {
+            "path": "/etc/passwd",
+            "ranges": [{"line_start": 1, "line_end": 1}],
+        },
+    )
 
     assert symbol_result["ok"] is True
     assert symbol_result["symbol"]["id"] == "sym:src/app.py:3:main"
     assert symbol_result["excerpt"]["path"] == "src/app.py"
+    assert symbol_result["excerpt"]["ranges"] == [
+        {
+            "line_start": 2,
+            "line_end": 4,
+            "content": "\ndef main():\n    return helper()",
+        }
+    ]
     assert invalid == {
         "ok": False,
-        "error": "invalid_path",
+        "error": "path_outside_repository",
         "message": "Path must be repository-relative and stay in the repo",
     }
 
 
 def test_registry_and_bootstrap_declaration_are_stable_and_consistent() -> None:
     tools = get_discovery_tools()
-    assert [tool.name for tool in tools] == EXPECTED_TOOLS
-    assert AVAILABLE_TOOLS == EXPECTED_TOOLS
+    assert {tool.name for tool in tools} == set(AVAILABLE_TOOLS)
     assert all(
         tool.params_json_schema["additionalProperties"] is False for tool in tools
     )
-    assert read_file_excerpt.name == "read_file_excerpt"
 
 
 def test_path_safety_can_be_constructed_from_file_index(

@@ -42,7 +42,7 @@ def make_request(
 ) -> ToolCallRequest:
     return ToolCallRequest(
         call_id=call_id,
-        name="read_file_excerpt",
+        name="read_file_ranges",
         arguments=arguments or {"path": "src/main.py", "line_start": 1},
     )
 
@@ -56,7 +56,7 @@ def make_result(
 ) -> ToolExecutionResult:
     return ToolExecutionResult(
         call_id="call-1",
-        tool_name="read_file_excerpt",
+        tool_name="read_file_ranges",
         status=status,
         output=output,
         estimated_cost=ToolBudgetCost(file_reads=1, excerpts=1),
@@ -92,7 +92,9 @@ def test_coverage_tracker_is_idempotent_and_distinguishes_evidence() -> None:
             ContextPlanInspectedSymbol(identifier="main", path="src/main.py")
         ],
         searches_performed=[
-            ContextPlanSearchRecord(tool="grep_contents", query="main", result_count=2)
+            ContextPlanSearchRecord(
+                tool="search_with_context", query="main", result_count=2
+            )
         ],
     )
 
