@@ -2,9 +2,11 @@ from datetime import UTC, datetime
 
 from bridger.deterministic.context_plan.discovery_tools import FileExcerptOutput
 from bridger.deterministic.context_plan.prompts import (
+    ContextPlanRepairPromptInput,
     FinalSynthesisPromptInput,
     InvestigationPromptInput,
     OrientationPromptInput,
+    build_context_plan_repair_prompt,
     build_final_synthesis_prompt,
     build_investigation_prompt,
     build_orientation_prompt,
@@ -16,6 +18,7 @@ from bridger.models.context_plan import (
     ContextPlanInspectedExcerpt,
     ContextPlanInspectedSymbol,
     ContextPlanRunInspection,
+    ContextPlanValidationIssue,
     ToolBudgetCost,
     ToolExecutionResult,
     ToolExecutionStatus,
@@ -106,13 +109,17 @@ def test_orientation_prompt_orients_with_facts_budgets_and_tools() -> None:
     )
     rendered = text(prompt)
 
-    assert "neutral catalog of\nreusable packages" in rendered
+    assert "neutral catalog of reusable packages" in rendered
+    assert "Repository discovery and inventory health" in rendered
+    assert "Manifest and repository-context facts" in rendered
+    assert "Repository instructions and documentation anchors" in rendered
     assert "Configured budgets" in rendered
     assert [item.name for item in prompt.tools] == [
         "read_file_excerpt",
         "search_paths",
     ]
-    assert "responding with repository tool calls" in rendered
+    assert "Begin investigating through repository tool calls" in rendered
+    assert "symbol-only evidence" in rendered
     assert "canonical memory files" in rendered
     assert "target_memory_kind" not in rendered
     assert "memory_targets" not in rendered
@@ -131,6 +138,18 @@ def test_investigation_prompt_includes_progress_and_structured_finalization() ->
             warnings=["Repeated read_file_excerpt call."],
             open_questions=["How is the CLI invoked?"],
             investigation_notes=["Inspect the manifest next."],
+            working_state_entities={
+                "recent_evidence": [
+                    {
+                        "evidence_id": "evidence.symbol",
+                        "inspection_level": "symbol_only",
+                    }
+                ],
+                "findings": [{"finding_id": "finding.entrypoint"}],
+                "relationships": [{"relationship_id": "relationship.constructs"}],
+                "open_questions": [{"question_id": "question.cli"}],
+                "package_candidates": [{"candidate_id": "candidate.runtime"}],
+            },
             available_tools=[
                 tool(
                     "request_context_plan_finalization",
@@ -143,13 +162,24 @@ def test_investigation_prompt_includes_progress_and_structured_finalization() ->
     rendered = text(prompt)
 
     assert "def main(): pass" in rendered
-    assert "Inspection progress" in rendered
+    assert "Semantic coverage summary" in rendered
+    assert "Major workflow stage coverage" in rendered
+    assert "Central files and inspection depth" in rendered
+    assert "Symbol-only and partially inspected central evidence" in rendered
+    assert "Evidence ledger summary" in rendered
+    assert "Established findings" in rendered
+    assert "Package candidates and evidence strength" in rendered
+    assert "finding.entrypoint" in rendered
+    assert "relationship.constructs" in rendered
+    assert "question.cli" in rendered
+    assert "candidate.runtime" in rendered
+    assert "evidence.symbol" in rendered
     assert '"excerpts":19' in rendered
     assert "Repeated read_file_excerpt call." in rendered
-    assert "additional repository tool" in rendered
+    assert "Choose repository tool calls" in rendered
     assert "request_context_plan_finalization" in rendered
     assert "never return a prose final answer" in rendered
-    assert "completion requirement" in rendered
+    assert "A high-priority question blocks finalization" in rendered
     assert "target_memory_kind" not in rendered
     assert prompt.output_type is None
 
@@ -188,14 +218,101 @@ def test_final_synthesis_prompt_is_tool_free_and_uses_context_plan_schema() -> N
     assert prompt.output_type is ContextPlan
     assert "ContextPlan output schema" in rendered
     assert '"schema_version"' in rendered
-    assert "No repository or control tools are available" in rendered
-    assert "Never invent repository\npaths" in rendered
+    assert "No repository, state-management, or control tools" in rendered
+    assert "Never invent\nrepository paths" in rendered
     assert "canonical memory files" in rendered
     assert "Do not add memory_targets or target_memory_kind" in rendered
-    assert "neutral, reusable packages" in rendered
+    assert "neutral reusable packages" in rendered
+    assert "Semantic coverage summary" in rendered
+    assert "Principal workflow stage coverage" in rendered
+    assert "Evidence-selection and omission report" in rendered
+    assert "Do not recover missing evidence from conversation memory" in rendered
     assert "Only the entrypoint was inspected." in rendered
     assert "Runtime arguments are unknown." in rendered
     assert "request_context_plan_finalization" not in rendered
+
+
+def test_investigation_prompt_structures_finalization_rejection_feedback() -> None:
+    rejection = ToolExecutionResult(
+        call_id="finalize",
+        tool_name="request_context_plan_finalization",
+        status=ToolExecutionStatus.COMPLETED,
+        output={
+            "decision": {
+                "accepted": False,
+                "code": "uninspected_evidence_path",
+                "issues": [
+                    {
+                        "code": "uninspected_evidence_path",
+                        "location": ["key_evidence_paths", 0],
+                        "message": "evidence path was not substantively inspected",
+                        "context": {"path": "src/main.py"},
+                    }
+                ],
+            }
+        },
+        estimated_cost=ToolBudgetCost(),
+        actual_cost=ToolBudgetCost(),
+    )
+
+    prompt = build_investigation_prompt(
+        InvestigationPromptInput(
+            latest_tool_results=[rejection],
+            inspection=inspection(),
+            open_questions=["How is the CLI invoked?"],
+        )
+    )
+    rendered = text(prompt)
+
+    assert "Finalization was rejected" in rendered
+    assert "Structured finalization rejection feedback" in rendered
+    assert '"rejected_coverage_areas"' in rendered
+    assert '"weak_evidence_reasons"' in rendered
+    assert '"blocking_open_questions":["How is the CLI invoked?"]' in rendered
+    assert "Update durable state before requesting finalization again" in rendered
+
+
+def test_repair_prompt_preserves_the_synthesis_evidence_boundary() -> None:
+    synthesis_input = FinalSynthesisPromptInput(
+        validated_evidence_paths=["src/main.py"],
+        inspected_excerpts=[
+            FileExcerptOutput(
+                source_artifact="file-index.json",
+                path="src/main.py",
+                line_start=1,
+                line_end=2,
+                content="def main(): pass",
+                truncated=False,
+            )
+        ],
+    )
+    prompt = build_context_plan_repair_prompt(
+        ContextPlanRepairPromptInput(
+            invalid_output={"artifact": "context-plan"},
+            validation_issues=[
+                ContextPlanValidationIssue(
+                    code="schema_validation_error",
+                    location=["summary"],
+                    message="Field required",
+                    context={},
+                )
+            ],
+            synthesis_evidence=synthesis_input,
+        )
+    )
+    rendered = text(prompt)
+
+    assert prompt.tools == ()
+    assert prompt.output_type is ContextPlan
+    assert "Correct only the reported structural or validation defects" in rendered
+    assert "Do not use the repair pass to compensate for missing investigation" in (
+        rendered
+    )
+    assert "Invalid ContextPlan candidate" in rendered
+    assert "Exact ContextPlan validation issues" in rendered
+    assert "def main(): pass" in rendered
+    assert "ContextPlan output schema" in rendered
+    assert "Return only the corrected structured ContextPlan" in rendered
 
 
 def test_prompt_rendering_is_deterministic_and_bounds_large_collections() -> None:
