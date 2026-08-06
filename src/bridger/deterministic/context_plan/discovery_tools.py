@@ -109,9 +109,14 @@ class SearchContextInput(Input):
     cursor: str | None = None
 
 
+class LineRangeInput(Input):
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+
+
 class FileRangesInput(Input):
     path: RepositoryPath
-    ranges: list[dict[str, int]] = Field(min_length=1, max_length=10)
+    ranges: list[LineRangeInput] = Field(min_length=1, max_length=10)
 
 
 class AroundInput(Input):
@@ -607,7 +612,9 @@ class DiscoveryToolExecutor:
 
     def _ranges(self, value: BaseModel) -> Handled:
         data = cast(FileRangesInput, value)
-        output = self.context.file_read.read_ranges(data.path, data.ranges)
+        output = self.context.file_read.read_ranges(
+            data.path, [item.model_dump() for item in data.ranges]
+        )
         ranges = [
             (int(item["line_start"]), int(item["line_end"]))
             for item in cast(list[dict[str, object]], output["ranges"])

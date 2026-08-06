@@ -552,12 +552,23 @@ def test_openai_adapter_maps_errors_and_retries_without_real_sleep() -> None:
         run_generate(context_client, request_with_tools())
 
     invalid_request_client = OpenAILLMClient(
-        openai_client=FakeOpenAI([_bad_request("invalid_request_error")]),
+        openai_client=FakeOpenAI(
+            [
+                _bad_request(
+                    "invalid_function_parameters",
+                    "Invalid schema for function 'inspect_repo_discovery'.",
+                )
+            ]
+        ),
         profile=profile(),
     )
     with pytest.raises(LLMProviderError) as invalid_request_error:
         run_generate(invalid_request_client, request_with_tools())
     assert invalid_request_error.value.retryable is False
+    assert str(invalid_request_error.value) == (
+        "OpenAI request failed with code invalid_function_parameters: "
+        "Invalid schema for function 'inspect_repo_discovery'."
+    )
 
 
 def test_openai_retry_exhaustion_returns_final_normalized_error() -> None:
@@ -648,11 +659,11 @@ def _rate_limit(code: str = "rate_limit_exceeded") -> openai.RateLimitError:
     )
 
 
-def _bad_request(code: str) -> openai.BadRequestError:
+def _bad_request(code: str, message: str = "bad request") -> openai.BadRequestError:
     return openai.BadRequestError(
-        "bad request",
+        message,
         response=_http_response(400),
-        body={"error": {"code": code}},
+        body={"code": code, "message": message},
     )
 
 

@@ -189,7 +189,14 @@ def test_init_verbose_shows_context_plan_operational_details(
         (LLMConfigurationError("profile is invalid"), 2, "profile is invalid"),
         (LLMAuthenticationError("authentication failed"), 4, "authentication failed"),
         (LLMTimeoutError("request timed out"), 4, "request timed out"),
-        (LLMProviderError("provider failed"), 4, "provider failed"),
+        (
+            LLMProviderError(
+                "OpenAI request failed with code invalid_function_parameters: "
+                "Invalid schema for function 'inspect_repo_discovery'."
+            ),
+            4,
+            "inspect_repo_discovery",
+        ),
     ],
 )
 def test_init_maps_llm_failures(
