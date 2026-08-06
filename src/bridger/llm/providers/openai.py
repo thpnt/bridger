@@ -344,7 +344,8 @@ class OpenAILLMClient:
     def _map_openai_error(self, error: Exception, request: LLMRequest) -> LLMError:
         status_code = getattr(error, "status_code", None)
         code = _extract_error_code(error)
-        message = _safe_provider_message(status_code, code)
+        detail = _extract_error_message(error)
+        message = _safe_provider_message(status_code, code, detail)
 
         if isinstance(
             error, (openai.AuthenticationError, openai.PermissionDeniedError)
@@ -577,6 +578,19 @@ def _extract_error_code(error: Exception) -> str | None:
     return None
 
 
+def _extract_error_message(error: Exception) -> str | None:
+    body = getattr(error, "body", None)
+    if not isinstance(body, dict):
+        return None
+    nested = body.get("error")
+    source = nested if isinstance(nested, dict) else body
+    message = source.get("message")
+    if not isinstance(message, str):
+        return None
+    normalized = " ".join(message.split())
+    return normalized[:1_000] or None
+
+
 def _extract_retry_after(error: Exception) -> float | None:
     response = getattr(error, "response", None)
     headers = getattr(response, "headers", None)
@@ -591,9 +605,17 @@ def _extract_retry_after(error: Exception) -> float | None:
         return None
 
 
-def _safe_provider_message(status_code: int | None, code: str | None) -> str:
+def _safe_provider_message(
+    status_code: int | None,
+    code: str | None,
+    detail: str | None,
+) -> str:
     if code:
-        return f"OpenAI request failed with code {code}"
-    if status_code is not None:
-        return f"OpenAI request failed with HTTP status {status_code}"
-    return "OpenAI request failed"
+        message = f"OpenAI request failed with code {code}"
+    elif status_code is not None:
+        message = f"OpenAI request failed with HTTP status {status_code}"
+    else:
+        message = "OpenAI request failed"
+    if detail is not None:
+        return f"{message}: {detail}"
+    return message
