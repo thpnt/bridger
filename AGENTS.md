@@ -40,130 +40,20 @@ The test: Every changed line should trace directly to the user's request.
 
 ## 4. Goal-Driven Execution
 
-**Define success criteria. Loop until verified.**
+Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
 
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
+Choose the simplest implementation that fully meets the current requirements. Avoid speculative abstractions, configuration, and indirection.
 
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
+Grow the system in layers. Start from the smallest version that works end to end, and add each new capability on top of a product that already works. Never trade a working product for unfinished complexity.
 
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+Keep components modular and concerns clearly separated.
 
----
+Prefer established, well-maintained libraries when they reduce overall complexity or improve reliability. Do not reimplement common functionality without a clear reason.
 
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+Lean on the dependencies already in the project before writing your own implementation or adding packages. Do not assume a library lacks a capability without checking its documentation and types.
 
-# TypeScript / Frontend rules
+Make architectural decisions for the long term. Do not accept a stopgap that only works for now and is meant to be replaced later.
 
-Stack:
-
-- TypeScript
-- npm
-- shadcn/ui
-- Tailwind CSS
-
-### General frontend style
-
-- Use functional components.
-- Prefer simple, explicit, readable code.
-- Avoid complex syntax.
-- Avoid arrow functions when a named function is clearer.
-- Keep UI logic and business logic separated.
-- Organize frontend code by feature folders.
-
-### Typing
-
-- Strong typing is required.
-- Prefer `interface` over `type` unless there is a clear reason not to.
-- Avoid `any` unless absolutely necessary.
-- Make props, return values, and shared contracts explicit.
-
-### Components and UI
-
-- Prefer existing shadcn/ui components first.
-- When creating new components, prefer composing from existing components instead of inventing completely new patterns.
-- Keep components focused and readable.
-- Split growing features into smaller components or files rather than building oversized component files.
-
-### Naming and structure
-
-- Use PascalCase for TypeScript files and components.
-- Use feature-based folder organization.
-- Keep related UI, logic, and local helpers near the feature that owns them.
-
----
-
-## Dependencies
-
-- Prefer existing libraries already used in the project.
-- Do not add new dependencies unless they are clearly required.
-- Do not add overlapping libraries that solve the same problem.
-- When a new dependency is necessary, keep usage narrow and justified.
-
----
-
-## Safety boundaries
-
-Never change the following unless explicitly requested by the user:
-
-- environment files
-- secrets
-- deployment configuration
-- CI/CD configuration
-- Docker configuration
-- infrastructure configuration
-- database migrations
-- lockfiles
-- unrelated project configuration
-
-If a task appears to require one of these, only touch the minimum necessary surface area and keep the change explicit.
-
----
-
-## Preferred decision-making defaults
-
-When multiple valid options exist, prefer this order:
-
-1. existing project pattern
-2. simplest explicit implementation
-3. strongly typed solution
-4. smallest safe change
-
-Avoid:
-
-- premature abstractions
-- framework-heavy patterns without need
-- giant files
-- hidden magic
-- overly generic base classes
-- centralizing unrelated responsibilities
-
----
-
-## Summary for agents
-
-When editing this repository:
-
-- be explicit
-- keep code short
-- keep code readable
-- keep code typed
-- keep code local to the business domain
-- prefer Pydantic on backend
-- prefer interfaces on frontend
-- avoid `any`
-- avoid unnecessary abstractions
-- avoid unrelated refactors
-- do not rename files
-- validate changed areas before finishing
-- Minimal desing local override. USe the global CSS and shadcn config as much as possible.
 
 
 @/Users/theopinto--dalle/.codex/RTK.md
