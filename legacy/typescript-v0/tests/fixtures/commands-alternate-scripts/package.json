@@ -1,8 +1,0 @@
-{
-  "scripts": {
-    "start": "next start",
-    "check-types": "tsc --noEmit",
-    "test:unit": "vitest run",
-    "prettier": "prettier --check ."
-  }
-}
