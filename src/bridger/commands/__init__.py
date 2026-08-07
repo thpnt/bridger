@@ -1,1 +1,0 @@
-"""Bridger command implementations."""
