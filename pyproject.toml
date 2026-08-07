@@ -5,6 +5,7 @@ description = "Repository intelligence and knowledge system for AI coding agents
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "black>=26.5.1",
     "openai>=2.43.0",
     "orjson>=3.10",
     "pydantic>=2.10",

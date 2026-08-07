@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "designing-ui-for-cli": {
+      "source": "Jamie-BitFlight/claude_skills",
+      "sourceType": "github",
+      "skillPath": "plugins/python-engineering/skills/designing-ui-for-cli/SKILL.md",
+      "computedHash": "850c9bfb2cdb83282f024c2c5a87b9ae70d2935dd73d59997f6da7525d858429"
+    },
+    "python-code-style": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/python-development/skills/python-code-style/SKILL.md",
+      "computedHash": "35ed0c437f33462187b0a89da8e5bfe9ac259dbc8731257c5445f1a5e1229acf"
+    },
+    "python-packaging": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/python-development/skills/python-packaging/SKILL.md",
+      "computedHash": "f909306678a23ce30ce7f792e86fb721a6d339d7a01ace7acd3b122781f55a31"
+    },
+    "python-project-structure": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/python-development/skills/python-project-structure/SKILL.md",
+      "computedHash": "2f4f560964af8ecad4d54666c044baa54671d0abd1136c848b539befe24db170"
+    },
+    "python-type-safety": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/python-development/skills/python-type-safety/SKILL.md",
+      "computedHash": "16314aa8a4a465773be809c517f62f8ef704f5ab1bb237e8c9b8a759689fcb21"
+    },
+    "python3-cli": {
+      "source": "Jamie-BitFlight/claude_skills",
+      "sourceType": "github",
+      "skillPath": "plugins/python-engineering/skills/python3-cli/SKILL.md",
+      "computedHash": "3693c31521e153353cf2428d4151ecea1b912a33753f4fd8bd787e88fce0e4be"
+    }
+  }
+}
