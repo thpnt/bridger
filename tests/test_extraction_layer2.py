@@ -229,6 +229,119 @@ def test_go_dedicated_extractor_emits_types_fields_and_methods(
     assert report.failed_files == []
 
 
+def test_graph_enum_members_are_present_in_symbol_index(tmp_path: Path) -> None:
+    repository = _initialize_repository(tmp_path)
+    (repository / "Status.java").write_text(
+        "public enum Status {\n    READY,\n    DONE;\n}\n",
+        encoding="utf-8",
+    )
+    _commit(repository)
+    context, file_index = prepare_repository(repository)
+
+    symbol_index, report, graphify_result = extract_repository_facts(
+        context,
+        file_index,
+        cache_root=tmp_path / "cache",
+        parallel=False,
+    )
+
+    symbols = {symbol.qualified_name: symbol for symbol in symbol_index.symbols}
+    assert symbols["Status"].kind == "enum"
+    assert symbols["Status.READY"].kind == "enum_member"
+    assert symbols["Status.DONE"].kind == "enum_member"
+    assert symbols["Status.READY"].parent_symbol_id == symbols["Status"].symbol_id
+    assert [
+        edge["relation"]
+        for edge in graphify_result["edges"]
+        if edge["relation"] == "case_of"
+    ] == ["case_of", "case_of"]
+    assert report.failed_files == []
+
+
+def test_exported_graph_variables_are_present_in_symbol_index(tmp_path: Path) -> None:
+    repository = _initialize_repository(tmp_path)
+    (repository / "settings.ts").write_text(
+        "export const settings = { retries: 3 };\n",
+        encoding="utf-8",
+    )
+    _commit(repository)
+    context, file_index = prepare_repository(repository)
+
+    symbol_index, report, _ = extract_repository_facts(
+        context,
+        file_index,
+        cache_root=tmp_path / "cache",
+        parallel=False,
+    )
+
+    symbols = {symbol.qualified_name: symbol for symbol in symbol_index.symbols}
+    assert symbols["settings"].kind == "variable"
+    assert report.failed_files == []
+
+
+def test_ruby_factory_class_matches_graph_symbol(tmp_path: Path) -> None:
+    repository = _initialize_repository(tmp_path)
+    (repository / "invoice.rb").write_text(
+        "module Billing\n"
+        "  Invoice = Struct.new(:total) do\n"
+        "    def payable?\n"
+        "      total > 0\n"
+        "    end\n"
+        "  end\n"
+        "end\n",
+        encoding="utf-8",
+    )
+    _commit(repository)
+    context, file_index = prepare_repository(repository)
+
+    symbol_index, report, graphify_result = extract_repository_facts(
+        context,
+        file_index,
+        cache_root=tmp_path / "cache",
+        parallel=False,
+    )
+
+    symbols = {symbol.qualified_name: symbol for symbol in symbol_index.symbols}
+    assert symbols["Billing.Invoice"].kind == "class"
+    assert symbols["Billing.Invoice.payable?"].kind == "method"
+    assert (
+        symbols["Billing.Invoice.payable?"].parent_symbol_id
+        == symbols["Billing.Invoice"].symbol_id
+    )
+    assert "Billing::Invoice" in {node["label"] for node in graphify_result["nodes"]}
+    assert report.failed_files == []
+
+
+def test_sql_tables_and_views_match_graph_symbols(tmp_path: Path) -> None:
+    pytest.importorskip("tree_sitter_sql")
+    repository = _initialize_repository(tmp_path)
+    (repository / "schema.sql").write_text(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);\n"
+        "CREATE VIEW active_users AS SELECT id FROM users;\n"
+        "CREATE PROCEDURE refresh_users() SELECT id FROM users;\n",
+        encoding="utf-8",
+    )
+    _commit(repository)
+    context, file_index = prepare_repository(repository)
+
+    symbol_index, report, graphify_result = extract_repository_facts(
+        context,
+        file_index,
+        cache_root=tmp_path / "cache",
+        parallel=False,
+    )
+
+    symbols = {symbol.qualified_name: symbol for symbol in symbol_index.symbols}
+    assert symbols["users"].kind == "table"
+    assert symbols["active_users"].kind == "view"
+    assert symbols["refresh_users"].kind == "procedure"
+    assert symbols["refresh_users"].start_line == 3
+    assert symbols["refresh_users"].end_line == 3
+    graph_labels = {node["label"] for node in graphify_result["nodes"]}
+    assert {"users", "active_users", "refresh_users()"} <= graph_labels
+    assert report.failed_files == []
+
+
 def test_graphify_failure_is_reported_instead_of_omitted(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()

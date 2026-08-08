@@ -5,7 +5,7 @@ import re
 
 from pathlib import Path
 from graphify.extractors.base import _file_stem, _make_id
-from graphify.extractors.symbols import make_symbol
+from graphify.extractors.symbols import make_symbol, make_symbol_from_offsets
 
 
 def _norm_ident(name: str) -> str:
@@ -57,11 +57,35 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
                            "source_file": str_path, "source_location": None}]
     edges: list[dict] = []
     symbols: list[dict] = []
+    emitted_symbol_keys: set[tuple[str, str, int]] = set()
     seen_ids: set[str] = {file_nid}
     table_nids: dict[str, str] = {}  # name → nid for reference resolution
 
     def _read(n) -> str:
         return source[n.start_byte:n.end_byte].decode("utf-8", errors="replace")
+
+    def _append_symbol(symbol: dict) -> None:
+        key = (
+            str(symbol["kind"]),
+            _norm_ident(str(symbol["qualified_name"] or symbol["name"])),
+            int(symbol["start_line"]),
+        )
+        if key not in emitted_symbol_keys:
+            emitted_symbol_keys.add(key)
+            symbols.append(symbol)
+
+    def _emit_ast_symbol(node, name: str, kind: str) -> None:
+        _append_symbol(
+            make_symbol(
+                node,
+                source,
+                path,
+                name=name,
+                kind=kind,
+                qualified_name=name,
+                language="sql",
+            )
+        )
 
     def _obj_name(n) -> str | None:
         for c in n.children:
@@ -116,6 +140,7 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
                 nid = _make_id(stem, name)
                 _add_node(nid, name, line)
                 table_nids[_norm_ident(name)] = nid
+                _emit_ast_symbol(node, name, "table")
                 # Foreign key REFERENCES
                 for col in node.children:
                     if col.type == "column_definitions":
@@ -171,6 +196,7 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
                 nid = _make_id(stem, name)
                 _add_node(nid, name, line)
                 table_nids[_norm_ident(name)] = nid
+                _emit_ast_symbol(node, name, "view")
                 # FROM/JOIN table references inside view body
                 _walk_from_refs(node, nid, line)
 
@@ -179,10 +205,7 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
             if name:
                 nid = _make_id(stem, name)
                 _add_node(nid, f"{name}()", line)
-                symbols.append(make_symbol(
-                    node, source, path, name=name, kind="function",
-                    qualified_name=name, language="sql",
-                ))
+                _emit_ast_symbol(node, name, "function")
                 _walk_from_refs(node, nid, line)
 
         elif t == "create_procedure":
@@ -190,10 +213,7 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
             if name:
                 nid = _make_id(stem, name)
                 _add_node(nid, f"{name}()", line)
-                symbols.append(make_symbol(
-                    node, source, path, name=name, kind="function",
-                    qualified_name=name, language="sql",
-                ))
+                _emit_ast_symbol(node, name, "procedure")
                 _walk_from_refs(node, nid, line)
 
         elif t == "alter_table":
@@ -240,6 +260,7 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
             if trig_name:
                 trig_nid = _make_id(stem, trig_name)
                 _add_node(trig_nid, trig_name, line)
+                _emit_ast_symbol(node, trig_name, "trigger")
                 if tbl_name:
                     tbl_nid = table_nids.get(_norm_ident(tbl_name)) or _ref_stub(tbl_name)
                     _add_edge(trig_nid, tbl_nid, "triggers", line)
@@ -284,11 +305,15 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
                 obj_nid = _make_id(stem, obj_name)
                 label = obj_name if obj_type == "TRIGGER" else f"{obj_name}()"
                 _add_node(obj_nid, label, line)
-                if obj_type != "TRIGGER":
-                    symbols.append(make_symbol(
-                        node, source, path, name=obj_name, kind="function",
-                        qualified_name=obj_name, language="sql",
-                    ))
+                _emit_ast_symbol(
+                    node,
+                    obj_name,
+                    {
+                        "FUNCTION": "function",
+                        "PROCEDURE": "procedure",
+                        "TRIGGER": "trigger",
+                    }[obj_type],
+                )
                 if obj_type == "TRIGGER":
                     fm = re.search(r"\bFOR\s+([\w$]+)", text, re.IGNORECASE)
                     if fm:
@@ -405,14 +430,39 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
     # observed drop shape leaves an ERROR node in the tree, so has_error loses
     # nothing while protecting clean corpora (#2180 follow-up).
     if root.has_error:
-        for m in re.finditer(
-            r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+"
+        routine_matches = list(re.finditer(
+            r"CREATE\s+(?:OR\s+REPLACE\s+)?(FUNCTION|PROCEDURE)\s+"
             r"(?:IF\s+NOT\s+EXISTS\s+)?"
             r"((?:\"[^\"\n]+\"|[\w$]+)(?:\s*\.\s*(?:\"[^\"\n]+\"|[\w$]+))*)",
             src_text, re.IGNORECASE,
-        ):
-            fn_name = m.group(1)
+        ))
+        for m in routine_matches:
+            routine_kind = m.group(1).lower()
+            fn_name = m.group(2)
             fn_line = src_text[: m.start()].count("\n") + 1
             _add_node(_make_id(stem, fn_name), f"{fn_name}()", fn_line)
+            next_statement = re.search(
+                r"(?:^|\n)\s*(?:CREATE|SET\s+TERM|ALTER)\s",
+                src_text[m.end():],
+                re.IGNORECASE,
+            )
+            declaration_end = (
+                m.end() + next_statement.start()
+                if next_statement is not None
+                else len(src_text)
+            )
+            _append_symbol(
+                make_symbol_from_offsets(
+                    src_text,
+                    path,
+                    start_offset=m.start(),
+                    end_offset=declaration_end,
+                    name=fn_name,
+                    kind=routine_kind,
+                    qualified_name=fn_name,
+                    language="sql",
+                    signature_end_offset=m.end(),
+                )
+            )
 
     return {"nodes": nodes, "edges": edges, "symbols": symbols}

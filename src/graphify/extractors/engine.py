@@ -1948,6 +1948,12 @@ def _js_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: str,
                             const_nid = _make_id(stem, const_name)
                             add_node_fn(const_nid, const_name, line)
                             add_edge_fn(file_nid, const_nid, "contains", line)
+                            if emit_symbol_fn is not None:
+                                emit_symbol_fn(
+                                    child,
+                                    name=const_name,
+                                    kind="variable",
+                                )
                             const_found = True
         if arrow_found:
             return True
@@ -2059,7 +2065,8 @@ def _csharp_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: 
 def _swift_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: str,
                       nodes: list, edges: list, seen_ids: set, function_bodies: list,
                       parent_class_nid: str | None, add_node_fn, add_edge_fn,
-                      ensure_named_node_fn) -> bool:
+                      ensure_named_node_fn, emit_symbol_fn=None,
+                      qualified_names_by_node_id: dict | None = None) -> bool:
     """Handle enum_entry for Swift. Returns True if handled."""
     if node.type == "enum_entry" and parent_class_nid:
         line = node.start_point[0] + 1
@@ -2069,6 +2076,15 @@ def _swift_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: s
                 case_nid = _make_id(parent_class_nid, case_name)
                 add_node_fn(case_nid, case_name, line)
                 add_edge_fn(parent_class_nid, case_nid, "case_of", line)
+                if emit_symbol_fn is not None:
+                    qualified_name = emit_symbol_fn(
+                        node,
+                        name=case_name,
+                        kind="enum_member",
+                        parent_node_id=parent_class_nid,
+                    )
+                    if qualified_names_by_node_id is not None:
+                        qualified_names_by_node_id[case_nid] = qualified_name
         # Associated-value types nest as `enum_type_parameters -> user_type ->
         # type_identifier` (a sibling of the case-name simple_identifier). The
         # case-name loop above never descends into them, so `case started(Session)`
@@ -2095,7 +2111,8 @@ def _swift_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: s
 def _java_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: str,
                      nodes: list, edges: list, seen_ids: set, function_bodies: list,
                      parent_class_nid: str | None, add_node_fn, add_edge_fn,
-                     walk_fn) -> bool:
+                     walk_fn, emit_symbol_fn=None,
+                     qualified_names_by_node_id: dict | None = None) -> bool:
     """Handle enum_constant for Java. Returns True if handled."""
     if node.type == "enum_constant" and parent_class_nid:
         name_node = node.child_by_field_name("name")
@@ -2106,6 +2123,15 @@ def _java_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: st
         const_nid = _make_id(parent_class_nid, const_name)
         add_node_fn(const_nid, const_name, line)
         add_edge_fn(parent_class_nid, const_nid, "case_of", line)
+        if emit_symbol_fn is not None:
+            qualified_name = emit_symbol_fn(
+                node,
+                name=const_name,
+                kind="enum_member",
+                parent_node_id=parent_class_nid,
+            )
+            if qualified_names_by_node_id is not None:
+                qualified_names_by_node_id[const_nid] = qualified_name
         # Anonymous-body constants (`MONDAY { void greet(){} }`): descend so the
         # body's methods aren't dropped; const_nid attaches them to the constant.
         for child in node.children:
@@ -2119,7 +2145,8 @@ def _java_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: st
 def _kotlin_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: str,
                        nodes: list, edges: list, seen_ids: set, function_bodies: list,
                        parent_class_nid: str | None, add_node_fn, add_edge_fn,
-                       walk_fn) -> bool:
+                       walk_fn, emit_symbol_fn=None,
+                       qualified_names_by_node_id: dict | None = None) -> bool:
     """Handle enum_entry for Kotlin. Returns True if handled (#1700 Kotlin half)."""
     if node.type == "enum_entry" and parent_class_nid:
         name_node = None
@@ -2134,6 +2161,15 @@ def _kotlin_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: 
         const_nid = _make_id(parent_class_nid, const_name)
         add_node_fn(const_nid, const_name, line)
         add_edge_fn(parent_class_nid, const_nid, "case_of", line)
+        if emit_symbol_fn is not None:
+            qualified_name = emit_symbol_fn(
+                node,
+                name=const_name,
+                kind="enum_member",
+                parent_node_id=parent_class_nid,
+            )
+            if qualified_names_by_node_id is not None:
+                qualified_names_by_node_id[const_nid] = qualified_name
         for child in node.children:
             if child.type == "class_body":
                 for member in child.children:
@@ -2242,7 +2278,8 @@ def _ruby_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: st
                      nodes: list, edges: list, seen_ids: set, function_bodies: list,
                      parent_class_nid: str | None, add_node, add_edge, walk,
                      callable_def_nids: set, callable_class_nids: set,
-                     ruby_namespace: list) -> bool:
+                     ruby_namespace: list, emit_symbol_fn=None,
+                     qualified_names_by_node_id: dict | None = None) -> bool:
     """Ruby: a constant assignment whose RHS is ``Struct.new(...)``,
     ``Class.new(Super)`` or ``Data.define(...)`` defines a class named after the
     constant (#1640). Synthesize the class node, attach block-defined methods via
@@ -2262,13 +2299,13 @@ def _ruby_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: st
     if (_read_text(recv, source), _read_text(meth, source)) not in _RUBY_CLASS_FACTORIES:
         return False
 
-    const_name = _read_text(left, source)
-    if not const_name:
+    local_const_name = _read_text(left, source)
+    if not local_const_name:
         return False
     # Qualify the factory-defined const against the enclosing scope, mirroring
     # the generic class branch (#2302): `module Billing; Invoice = Struct.new`
     # labels `Billing::Invoice`.
-    const_segments = const_name.split("::")
+    const_segments = local_const_name.split("::")
     const_name = "::".join(ruby_namespace + const_segments)
     line = node.start_point[0] + 1
     class_nid = _make_id(stem, const_name)
@@ -2277,6 +2314,17 @@ def _ruby_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: st
     callable_class_nids.add(class_nid)  # ...but only via its constructor (#2137)
     # Mirror the generic class branch: containment always hangs off the file node.
     add_edge(file_nid, class_nid, "contains", line)
+    block = next((c for c in right.children if c.type in ("do_block", "block")), None)
+    if emit_symbol_fn is not None:
+        qualified_name = emit_symbol_fn(
+            node,
+            name=const_segments[-1],
+            kind="class",
+            parent_node_id=parent_class_nid,
+            body_node=block,
+        )
+        if qualified_names_by_node_id is not None:
+            qualified_names_by_node_id[class_nid] = qualified_name
 
     # `Class.new(Super)` — the first positional constant argument is the superclass.
     if _read_text(recv, source) == "Class":
@@ -2310,7 +2358,6 @@ def _ruby_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: st
     # descend into it so the method handler sees parent_class_nid — otherwise the
     # default recurse resets the parent to None and the method hangs off the file
     # with a dot-less label.
-    block = next((c for c in right.children if c.type in ("do_block", "block")), None)
     if block is not None:
         body = next((c for c in block.children if c.type == "body_statement"), block)
         ruby_namespace.extend(const_segments)
@@ -4131,19 +4178,22 @@ def _extract_generic(
             if _swift_extra_walk(node, source, file_nid, stem, str_path,
                                   nodes, edges, seen_ids, function_bodies,
                                   parent_class_nid, add_node, add_edge,
-                                  ensure_named_node):
+                                  ensure_named_node, append_symbol,
+                                  qualified_names_by_node_id):
                 return
 
         if config.ts_module == "tree_sitter_java":
             if _java_extra_walk(node, source, file_nid, stem, str_path,
                                 nodes, edges, seen_ids, function_bodies,
-                                parent_class_nid, add_node, add_edge, walk):
+                                parent_class_nid, add_node, add_edge, walk,
+                                append_symbol, qualified_names_by_node_id):
                 return
 
         if config.ts_module == "tree_sitter_kotlin":
             if _kotlin_extra_walk(node, source, file_nid, stem, str_path,
                                   nodes, edges, seen_ids, function_bodies,
-                                  parent_class_nid, add_node, add_edge, walk):
+                                  parent_class_nid, add_node, add_edge, walk,
+                                  append_symbol, qualified_names_by_node_id):
                 return
 
         if config.ts_module == "tree_sitter_ruby":
@@ -4151,7 +4201,8 @@ def _extract_generic(
                                 nodes, edges, seen_ids, function_bodies,
                                 parent_class_nid, add_node, add_edge, walk,
                                 callable_def_nids, callable_class_nids,
-                                ruby_namespace):
+                                ruby_namespace, append_symbol,
+                                qualified_names_by_node_id):
                 return
 
         # Python's `@property` / `@staticmethod` / `@classmethod` wrap the

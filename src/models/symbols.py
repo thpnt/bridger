@@ -18,6 +18,12 @@ SymbolKind = Literal[
     "type",
     "module",
     "namespace",
+    "table",
+    "view",
+    "procedure",
+    "trigger",
+    "enum_member",
+    "variable",
 ]
 
 
