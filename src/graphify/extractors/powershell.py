@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 from graphify.extractors.base import _file_stem, _make_id, _read_text
+from graphify.extractors.symbols import make_symbol
 
 
 def extract_powershell(path: Path) -> dict:
@@ -29,8 +30,10 @@ def extract_powershell(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     function_bodies: list[tuple[str, Any]] = []
+    qualified_names_by_node_id: dict[str, str] = {}
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -119,6 +122,19 @@ def extract_powershell(path: Path) -> dict:
                 add_node(func_nid, f"{func_name}()", line)
                 add_edge(file_nid, func_nid, "contains", line)
                 body = _find_script_block_body(node)
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=func_name,
+                        kind="function",
+                        qualified_name=func_name,
+                        language="powershell",
+                        body_node=body,
+                    )
+                )
+                qualified_names_by_node_id[func_nid] = func_name
                 if body:
                     function_bodies.append((func_nid, body))
                     # Also walk the body during the main pass so that
@@ -135,6 +151,23 @@ def extract_powershell(path: Path) -> dict:
                 class_nid = _make_id(stem, class_name)
                 add_node(class_nid, class_name, line)
                 add_edge(file_nid, class_nid, "contains", line)
+                class_body = next(
+                    (child for child in node.children if child.type == "class_body"),
+                    None,
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=class_name,
+                        kind="class",
+                        qualified_name=class_name,
+                        language="powershell",
+                        body_node=class_body,
+                    )
+                )
+                qualified_names_by_node_id[class_nid] = class_name
                 # Base type(s) after ':'. PowerShell has no syntactic base vs
                 # interface split, so (matching the C# convention) treat the
                 # first base as the superclass (inherits) and the rest as
@@ -156,6 +189,29 @@ def extract_powershell(path: Path) -> dict:
             return
 
         if t == "class_property_definition" and parent_class_nid:
+            property_name_node = next(
+                (
+                    child
+                    for child in node.children
+                    if child.type in ("variable", "variable_name")
+                ),
+                None,
+            )
+            parent_name = qualified_names_by_node_id.get(parent_class_nid)
+            if property_name_node is not None and parent_name:
+                property_name = _read_text(property_name_node, source).lstrip("$")
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=property_name,
+                        kind="property",
+                        qualified_name=f"{parent_name}.{property_name}",
+                        parent_qualified_name=parent_name,
+                        language="powershell",
+                    )
+                )
             type_literal = next((c for c in node.children if c.type == "type_literal"), None)
             type_name = _ps_type_name(type_literal)
             if type_name:
@@ -206,6 +262,24 @@ def extract_powershell(path: Path) -> dict:
                             add_edge(method_nid, target_nid, "references",
                                      p_line, context="parameter_type")
                 body = _find_script_block_body(node)
+                parent_name = qualified_names_by_node_id.get(parent_class_nid or "")
+                qualified_name = (
+                    f"{parent_name}.{method_name}" if parent_name else method_name
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=method_name,
+                        kind="method" if parent_name else "function",
+                        qualified_name=qualified_name,
+                        parent_qualified_name=parent_name,
+                        language="powershell",
+                        body_node=body,
+                    )
+                )
+                qualified_names_by_node_id[method_nid] = qualified_name
                 if body:
                     function_bodies.append((method_nid, body))
             return
@@ -318,7 +392,12 @@ def extract_powershell(path: Path) -> dict:
 
     clean_edges = [e for e in edges if e["source"] in seen_ids and
                    (e["target"] in seen_ids or e["relation"] in ("imports_from", "imports"))]
-    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
+    return {
+        "nodes": nodes,
+        "edges": clean_edges,
+        "symbols": symbols,
+        "raw_calls": raw_calls,
+    }
 
 _PSD1_IMPORT_KEYS = frozenset({"RootModule", "NestedModules", "RequiredModules"})
 

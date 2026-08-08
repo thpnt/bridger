@@ -23,12 +23,21 @@ def extract_dart(path: Path) -> dict:
         r"|/\*[\s\S]*?\*/"
         r"|//[^\n]*"
     )
-    def _comment_replace(match: re.Match) -> str:
+    cleaned_parts: list[str] = []
+    clean_to_source_offset: list[int] = []
+    source_offset = 0
+    for match in comment_string_pattern.finditer(src):
+        cleaned_parts.append(src[source_offset:match.start()])
+        clean_to_source_offset.extend(range(source_offset, match.start()))
         token = match.group(0)
-        if token.startswith("/"):
-            return ""
-        return token
-    src_clean = comment_string_pattern.sub(_comment_replace, src)
+        if not token.startswith("/"):
+            cleaned_parts.append(token)
+            clean_to_source_offset.extend(range(match.start(), match.end()))
+        source_offset = match.end()
+    cleaned_parts.append(src[source_offset:])
+    clean_to_source_offset.extend(range(source_offset, len(src)))
+    clean_to_source_offset.append(len(src))
+    src_clean = "".join(cleaned_parts)
 
     stem = _file_stem(path)
     file_nid = _make_id(str(path))
@@ -53,7 +62,39 @@ def extract_dart(path: Path) -> dict:
         nodes.append({"id": file_nid, "label": path.name, "file_type": "code",
                       "source_file": str(path), "source_location": None})
     edges = []
+    symbols: list[dict] = []
+    class_ranges: list[tuple[int, int, str]] = []
     defined: set[str] = set()
+
+    def emit_symbol(
+        start: int,
+        end: int,
+        name: str,
+        kind: str,
+        *,
+        parent_name: str | None = None,
+        signature_end: int | None = None,
+    ) -> None:
+        source_start = clean_to_source_offset[start]
+        source_end = clean_to_source_offset[end]
+        clean_signature_end = (
+            signature_end
+            if signature_end is not None and signature_end >= start
+            else end
+        )
+        source_signature_end = clean_to_source_offset[clean_signature_end]
+        signature = " ".join(src[source_start:source_signature_end].split())[:500]
+        symbols.append({
+            "name": name,
+            "qualified_name": f"{parent_name}.{name}" if parent_name else name,
+            "kind": kind,
+            "source_file": str(path),
+            "start_line": src.count("\n", 0, source_start) + 1,
+            "end_line": src.count("\n", 0, max(source_start, source_end - 1)) + 1,
+            "parent_qualified_name": parent_name,
+            "signature": signature or None,
+            "language": "dart",
+        })
 
     def add_node(nid: str, label: str, ftype: str = "code", source_file: str | None = str(path)) -> None:
         if nid not in defined:
@@ -313,6 +354,24 @@ def extract_dart(path: Path) -> dict:
                     bloc_nid = _make_id(bloc_name)
                     add_node(bloc_nid, bloc_name, source_file=None)
                     add_edge(class_nid, bloc_nid, "references", context="bloc_lookup")
+        else:
+            end_pos = semi_pos + 1 if semi_pos != -1 else m.end()
+
+        declaration_text = m.group(0)
+        if re.search(r"\benum\b", declaration_text):
+            symbol_kind = "enum"
+        elif re.search(r"\b(?:mixin|extension\s+type)\b", declaration_text):
+            symbol_kind = "type"
+        else:
+            symbol_kind = "class"
+        emit_symbol(
+            m.start(),
+            end_pos,
+            class_name,
+            symbol_kind,
+            signature_end=(brace_pos if has_body else end_pos),
+        )
+        class_ranges.append((m.start(), end_pos, class_name))
 
     # 2. Annotations mapping (class, mixin, enum, or function level annotations)
     # Support: @riverpod, @Riverpod(...), @injectable, @singleton, @RoutePage(), @HiveType(typeId: 0), @RestApi()
@@ -372,6 +431,7 @@ def extract_dart(path: Path) -> dict:
     for m in re.finditer(typedef_pattern, src_clean, re.MULTILINE):
         typedef_name = m.group(1)
         target_type = m.group(2).split("<")[0].split(".")[-1].strip()
+        emit_symbol(m.start(), m.end(), typedef_name, "type")
         if target_type not in {"String", "int", "double", "bool", "num", "dynamic", "Object", "List", "Map", "Set", "void", "Function"}:
             typedef_nid = _make_id(stem, typedef_name)
             add_node(typedef_nid, typedef_name)
@@ -390,6 +450,14 @@ def extract_dart(path: Path) -> dict:
         label = m.group(1) or f"Extension on {target_class}"
         add_node(ext_nid, label)
         add_edge(file_nid, ext_nid, "defines")
+        ext_end = _find_matching_brace(src_clean, m.start())
+        emit_symbol(
+            m.start(),
+            ext_end,
+            ext_name,
+            "type",
+            signature_end=src_clean.find("{", m.start()),
+        )
 
         target_nid = _make_id(target_class)
         add_node(target_nid, target_class, source_file=None)
@@ -435,12 +503,6 @@ def extract_dart(path: Path) -> dict:
         name = raw_name.split(".")[-1]
         if name in {"if", "for", "while", "switch", "catch", "return", "void", "dynamic", "final", "const", "get", "set"}:
             continue
-        if re.match(r"^[A-Z]", name):
-            continue
-        nid = _make_id(stem, name)
-        add_node(nid, name)
-        add_edge(file_nid, nid, "defines")
-
         # Get function body using matching brace to extract Riverpod reference patterns
         start_idx = m.start()
         brace_pos = src_clean.find("{", start_idx)
@@ -452,6 +514,45 @@ def extract_dart(path: Path) -> dict:
             has_body = False
         if has_body and arrow_pos != -1 and arrow_pos < brace_pos:
             has_body = False
+
+        parent_name = next(
+            (
+                class_name
+                for class_start, class_end, class_name in class_ranges
+                if class_start < start_idx < class_end
+            ),
+            None,
+        )
+        if has_body:
+            declaration_end = _find_matching_brace(src_clean, start_idx)
+            signature_end = brace_pos
+        else:
+            terminator = src_clean.find(";", start_idx)
+            declaration_end = terminator + 1 if terminator != -1 else m.end()
+            signature_end = arrow_pos if arrow_pos != -1 else declaration_end
+
+        if re.match(r"^[A-Z]", name):
+            if parent_name == name:
+                emit_symbol(
+                    start_idx,
+                    declaration_end,
+                    name,
+                    "constructor",
+                    parent_name=parent_name,
+                    signature_end=signature_end,
+                )
+            continue
+        nid = _make_id(stem, name)
+        add_node(nid, name)
+        add_edge(file_nid, nid, "defines")
+        emit_symbol(
+            start_idx,
+            declaration_end,
+            name,
+            "method" if parent_name else "function",
+            parent_name=parent_name,
+            signature_end=signature_end,
+        )
 
         if has_body:
             end_pos = _find_matching_brace(src_clean, start_idx)
@@ -525,4 +626,4 @@ def extract_dart(path: Path) -> dict:
             add_node(target_nid, clean_name, source_file=None)
             add_edge(file_nid, target_nid, "references", context="type_lookup")
 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "symbols": symbols}

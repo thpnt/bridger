@@ -473,7 +473,7 @@ def _relativize_source_files_in(payload: dict, root: Path) -> None:
     # source_file the same way nodes/edges/hyperedges do, so it needs the same
     # portable-path treatment for cache entries to round-trip correctly across
     # machines/checkout directories.
-    for bucket in ("nodes", "edges", "hyperedges", "raw_calls"):
+    for bucket in ("nodes", "edges", "hyperedges", "raw_calls", "symbols"):
         for item in payload.get(bucket, []):
             if not isinstance(item, dict):
                 continue
@@ -723,7 +723,7 @@ def _absolutize_source_files_in(payload: dict, root: Path) -> None:
         root_resolved = Path(root).resolve()
     except OSError:
         return
-    for bucket in ("nodes", "edges", "hyperedges", "raw_calls"):
+    for bucket in ("nodes", "edges", "hyperedges", "raw_calls", "symbols"):
         for item in payload.get(bucket, []):
             if not isinstance(item, dict):
                 continue
@@ -833,6 +833,11 @@ def load_cached(path: Path, root: Path = Path("."), kind: str = "ast",
         # checkpoint peeks at a partial prev so it can accumulate a file's slices
         # across chunks without losing the truncated one (it stays partial).
         if not allow_partial and isinstance(result, dict) and result.get("partial"):
+            return None
+        # Bridger's symbol index is produced from this per-file AST result. An
+        # older cache entry without the bucket cannot be replayed safely because
+        # it would turn a warm extraction into a silently empty SymbolIndex.
+        if kind == "ast" and isinstance(result, dict) and "symbols" not in result:
             return None
         if legacy_hit:
             _legacy_semantic_hits += 1

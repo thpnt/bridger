@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from graphify.extractors.base import _LANGUAGE_BUILTIN_GLOBALS, _file_stem, _make_id, _read_text
+from graphify.extractors.symbols import make_symbol
 
 
 def _rust_collect_type_refs(node, source: bytes, generic: bool, out: list[tuple[str, str]]) -> None:
@@ -79,8 +80,10 @@ def extract_rust(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     function_bodies: list[tuple[str, object]] = []
+    qualified_names_by_node_id: dict[str, str] = {}
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -176,8 +179,26 @@ def extract_rust(path: Path) -> dict:
                     func_nid = _make_id(stem, func_name)
                     add_node(func_nid, f"{func_name}()", line)
                     add_edge(file_nid, func_nid, "contains", line)
-                emit_param_return_refs(node, func_nid, line)
                 body = node.child_by_field_name("body")
+                parent_name = qualified_names_by_node_id.get(parent_impl_nid or "")
+                qualified_name = (
+                    f"{parent_name}.{func_name}" if parent_name else func_name
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=func_name,
+                        kind="method" if parent_name else "function",
+                        qualified_name=qualified_name,
+                        parent_qualified_name=parent_name,
+                        language="rust",
+                        body_node=body,
+                    )
+                )
+                qualified_names_by_node_id[func_nid] = qualified_name
+                emit_param_return_refs(node, func_nid, line)
                 if body:
                     function_bodies.append((func_nid, body))
             return
@@ -190,6 +211,38 @@ def extract_rust(path: Path) -> dict:
                 item_nid = _make_id(stem, item_name)
                 add_node(item_nid, item_name, line)
                 add_edge(file_nid, item_nid, "contains", line)
+                item_kind = {
+                    "struct_item": "struct",
+                    "enum_item": "enum",
+                    "trait_item": "interface",
+                }[t]
+                item_body = next(
+                    (
+                        child
+                        for child in node.children
+                        if child.type
+                        in (
+                            "field_declaration_list",
+                            "ordered_field_declaration_list",
+                            "enum_variant_list",
+                            "declaration_list",
+                        )
+                    ),
+                    None,
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=item_name,
+                        kind=item_kind,
+                        qualified_name=item_name,
+                        language="rust",
+                        body_node=item_body,
+                    )
+                )
+                qualified_names_by_node_id[item_nid] = item_name
                 if t == "trait_item":
                     for c in node.children:
                         if c.type != "trait_bounds":
@@ -216,6 +269,21 @@ def extract_rust(path: Path) -> dict:
                         for field in c.children:
                             if field.type != "field_declaration":
                                 continue
+                            field_name_node = field.child_by_field_name("name")
+                            if field_name_node is not None:
+                                field_name = _read_text(field_name_node, source)
+                                symbols.append(
+                                    make_symbol(
+                                        field,
+                                        source,
+                                        path,
+                                        name=field_name,
+                                        kind="field",
+                                        qualified_name=f"{item_name}.{field_name}",
+                                        parent_qualified_name=item_name,
+                                        language="rust",
+                                    )
+                                )
                             type_node = field.child_by_field_name("type")
                             if type_node is None:
                                 for fc in field.children:
@@ -302,6 +370,7 @@ def extract_rust(path: Path) -> dict:
                 type_name = _read_text(type_node, source).strip()
                 impl_nid = _make_id(stem, type_name)
                 add_node(impl_nid, type_name, node.start_point[0] + 1)
+                qualified_names_by_node_id[impl_nid] = type_name
             if trait_node is not None and impl_nid is not None:
                 refs: list[tuple[str, str]] = []
                 _rust_collect_type_refs(trait_node, source, False, refs)
@@ -407,4 +476,9 @@ def extract_rust(path: Path) -> dict:
         if src in valid_ids and (tgt in valid_ids or edge["relation"] in ("imports", "imports_from")):
             clean_edges.append(edge)
 
-    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
+    return {
+        "nodes": nodes,
+        "edges": clean_edges,
+        "symbols": symbols,
+        "raw_calls": raw_calls,
+    }

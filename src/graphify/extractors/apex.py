@@ -21,7 +21,41 @@ def extract_apex(path: Path) -> dict:
 
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
+
+    line_offsets: list[int] = []
+    offset = 0
+    for source_line in source.splitlines(keepends=True):
+        line_offsets.append(offset)
+        offset += len(source_line)
+
+    def emit_symbol(
+        lineno: int,
+        line_text: str,
+        name: str,
+        kind: str,
+        parent_name: str | None = None,
+    ) -> None:
+        start = line_offsets[lineno - 1]
+        brace = source.find("{", start)
+        end = brace + 1 if brace != -1 else start + len(line_text)
+        if brace != -1:
+            depth = 1
+            while end < len(source) and depth:
+                depth += (source[end] == "{") - (source[end] == "}")
+                end += 1
+        symbols.append({
+            "name": name,
+            "qualified_name": f"{parent_name}.{name}" if parent_name else name,
+            "kind": kind,
+            "source_file": str_path,
+            "start_line": lineno,
+            "end_line": source.count("\n", 0, max(start, end - 1)) + 1,
+            "parent_qualified_name": parent_name,
+            "signature": " ".join(line_text.strip().rstrip("{").split())[:500],
+            "language": "apex",
+        })
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -89,6 +123,7 @@ def extract_apex(path: Path) -> dict:
     })
 
     current_class_nid: str | None = None
+    qualified_names_by_node_id: dict[str, str] = {}
     pending_annotations: list[str] = []
 
     for lineno, line_text in enumerate(lines, start=1):
@@ -110,6 +145,8 @@ def extract_apex(path: Path) -> dict:
                 add_node(sob_nid, sobject, lineno)
             add_edge(trig_nid, sob_nid, "uses", lineno, confidence="INFERRED")
             current_class_nid = trig_nid
+            emit_symbol(lineno, line_text, trig_name, "class")
+            qualified_names_by_node_id[trig_nid] = trig_name
             pending_annotations = []
             continue
 
@@ -141,6 +178,8 @@ def extract_apex(path: Path) -> dict:
                             add_node(iface_nid, iface, lineno)
                         add_edge(class_nid, iface_nid, "implements", lineno, confidence="INFERRED")
             current_class_nid = class_nid
+            emit_symbol(lineno, line_text, class_name, "class")
+            qualified_names_by_node_id[class_nid] = class_name
             pending_annotations = []
             continue
 
@@ -154,6 +193,11 @@ def extract_apex(path: Path) -> dict:
             add_node(iface_nid, iface_name, lineno)
             add_edge(file_nid if current_class_nid is None else current_class_nid,
                      iface_nid, "contains", lineno)
+            parent_name = qualified_names_by_node_id.get(current_class_nid or "")
+            emit_symbol(lineno, line_text, iface_name, "interface", parent_name)
+            qualified_names_by_node_id[iface_nid] = (
+                f"{parent_name}.{iface_name}" if parent_name else iface_name
+            )
             if im.group(2):
                 for parent in im.group(2).split(","):
                     parent = parent.strip()
@@ -177,6 +221,11 @@ def extract_apex(path: Path) -> dict:
             add_node(enum_nid, enum_name, lineno)
             add_edge(file_nid if current_class_nid is None else current_class_nid,
                      enum_nid, "contains", lineno)
+            parent_name = qualified_names_by_node_id.get(current_class_nid or "")
+            emit_symbol(lineno, line_text, enum_name, "enum", parent_name)
+            qualified_names_by_node_id[enum_nid] = (
+                f"{parent_name}.{enum_name}" if parent_name else enum_name
+            )
             pending_annotations = []
             continue
 
@@ -189,6 +238,14 @@ def extract_apex(path: Path) -> dict:
                     method_label = f".{method_name}()"
                     add_node(method_nid, method_label, lineno)
                     add_edge(current_class_nid, method_nid, "method", lineno)
+                    parent_name = qualified_names_by_node_id.get(current_class_nid)
+                    emit_symbol(
+                        lineno,
+                        line_text,
+                        method_name,
+                        "method",
+                        parent_name,
+                    )
                     if "auraenabled" in pending_annotations or "invocablemethod" in pending_annotations:
                         add_edge(file_nid, method_nid, "contains", lineno, confidence="INFERRED")
                     pending_annotations = []
@@ -212,4 +269,4 @@ def extract_apex(path: Path) -> dict:
             src = current_class_nid or file_nid
             add_edge(src, dml_nid, "uses", lineno, confidence="INFERRED")
 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "symbols": symbols}

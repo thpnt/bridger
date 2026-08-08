@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 from graphify.extractors.base import _file_stem, _make_id, _read_text
+from graphify.extractors.symbols import make_symbol
 
 
 def extract_dm(path: Path) -> dict:
@@ -28,6 +29,7 @@ def extract_dm(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     function_bodies: list[tuple[str, Any, "str | None"]] = []
 
@@ -110,6 +112,17 @@ def extract_dm(path: Path) -> dict:
             type_path_str = _type_path_text(tp_node)
             type_nid = _ensure_type(type_path_str, line)
             add_edge(file_nid, type_nid, "contains", line)
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=type_path_str.rstrip("/").rsplit("/", 1)[-1],
+                    kind="type",
+                    qualified_name=type_path_str,
+                    language="dm",
+                )
+            )
             body = _find_child(node, "type_body")
             if body is not None:
                 for c in body.children:
@@ -132,6 +145,19 @@ def extract_dm(path: Path) -> dict:
             add_node(proc_nid, f"{parent_type_path}/{proc_name}()", line)
             add_edge(parent_type_nid, proc_nid, "method", line)
             block = _find_child(node, "block")
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=proc_name,
+                    kind="method",
+                    qualified_name=f"{parent_type_path}/{proc_name}",
+                    parent_qualified_name=parent_type_path,
+                    language="dm",
+                    body_node=block,
+                )
+            )
             if block is not None:
                 function_bodies.append((proc_nid, block, parent_type_path))
             return
@@ -152,11 +178,28 @@ def extract_dm(path: Path) -> dict:
                 proc_nid = _make_id(stem, owner_path, proc_name)
                 add_node(proc_nid, f"{owner_path}/{proc_name}()", line)
                 add_edge(owner_nid, proc_nid, "method", line)
+                kind = "method"
+                qualified_name = f"{owner_path}/{proc_name}"
             else:
                 proc_nid = _make_id(stem, proc_name)
                 add_node(proc_nid, f"{proc_name}()", line)
                 add_edge(file_nid, proc_nid, "contains", line)
+                kind = "function"
+                qualified_name = proc_name
             block = _find_child(node, "block")
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=proc_name,
+                    kind=kind,
+                    qualified_name=qualified_name,
+                    parent_qualified_name=owner_path,
+                    language="dm",
+                    body_node=block,
+                )
+            )
             if block is not None:
                 function_bodies.append((proc_nid, block, owner_path))
             return
@@ -246,7 +289,12 @@ def extract_dm(path: Path) -> dict:
     for proc_nid, block, _owner_path in function_bodies:
         walk_calls(block, proc_nid)
 
-    return {"nodes": nodes, "edges": edges, "raw_calls": raw_calls}
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "symbols": symbols,
+        "raw_calls": raw_calls,
+    }
 
 def _read_dmi_description(data: bytes) -> str:
     """Pull the BYOND metadata text out of a .dmi PNG, or empty string on failure."""

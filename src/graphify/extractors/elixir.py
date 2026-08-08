@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from graphify.extractors.base import _LANGUAGE_BUILTIN_GLOBALS, _file_stem, _make_id
+from graphify.extractors.symbols import make_symbol
 
 
 def extract_elixir(path: Path) -> dict:
@@ -28,8 +29,10 @@ def extract_elixir(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     function_bodies: list[tuple[str, Any]] = []
+    qualified_names_by_node_id: dict[str, str] = {}
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -119,6 +122,19 @@ def extract_elixir(path: Path) -> dict:
             module_nid = _make_id(stem, module_name)
             add_node(module_nid, module_name, line)
             add_edge(file_nid, module_nid, "contains", line)
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=module_name.rsplit(".", 1)[-1],
+                    kind="module",
+                    qualified_name=module_name,
+                    language="elixir",
+                    body_node=do_block_node,
+                )
+            )
+            qualified_names_by_node_id[module_nid] = module_name
             if do_block_node:
                 for child in do_block_node.children:
                     walk(child, parent_module_nid=module_nid)
@@ -145,6 +161,23 @@ def extract_elixir(path: Path) -> dict:
                 add_edge(parent_module_nid, func_nid, "method", line)
             else:
                 add_edge(file_nid, func_nid, "contains", line)
+            parent_name = qualified_names_by_node_id.get(parent_module_nid or "")
+            qualified_name = (
+                f"{parent_name}.{func_name}" if parent_name else func_name
+            )
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=func_name,
+                    kind="method" if parent_name else "function",
+                    qualified_name=qualified_name,
+                    parent_qualified_name=parent_name,
+                    language="elixir",
+                    body_node=do_block_node,
+                )
+            )
             if do_block_node:
                 function_bodies.append((func_nid, do_block_node))
             return
@@ -225,4 +258,5 @@ def extract_elixir(path: Path) -> dict:
 
     clean_edges = [e for e in edges if e["source"] in seen_ids and
                    (e["target"] in seen_ids or e["relation"] == "imports")]
-    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls, "input_tokens": 0, "output_tokens": 0}
+    return {"nodes": nodes, "edges": clean_edges, "symbols": symbols,
+            "raw_calls": raw_calls, "input_tokens": 0, "output_tokens": 0}

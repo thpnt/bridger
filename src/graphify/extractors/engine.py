@@ -7,6 +7,7 @@ from graphify.extractors.base import _LANGUAGE_BUILTIN_GLOBALS, _file_stem, _mak
 from graphify.ids import normalize_id
 from graphify.extractors.models import LanguageConfig
 from graphify.extractors.resolution import _resolve_js_import_target
+from graphify.extractors.symbols import make_symbol
 from graphify.security import sanitize_metadata
 from pathlib import Path
 
@@ -1772,7 +1773,9 @@ def _js_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: str,
                    nodes: list, edges: list, seen_ids: set, function_bodies: list,
                    parent_class_nid: str | None, add_node_fn, add_edge_fn,
                    callable_def_nids: set | None = None,
-                   local_bound_names: dict | None = None) -> bool:
+                   local_bound_names: dict | None = None,
+                   emit_symbol_fn=None,
+                   qualified_names_by_node_id: dict | None = None) -> bool:
     """Handle lexical_declaration (arrow functions, CJS requires, module-level const literals) for JS/TS. Returns True if handled."""
     # CommonJS / prototype member assignments whose value is a function:
     #   exports.X = () => {}     → file-contained function  X()
@@ -1804,11 +1807,21 @@ def _js_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: str,
                         add_edge_fn(owner_nid, nid, "method", line)
                         handled = True
                     if handled:
+                        body = value.child_by_field_name("body")
+                        if emit_symbol_fn is not None:
+                            qualified_name = emit_symbol_fn(
+                                node,
+                                name=member_name,
+                                kind="method" if kind == "prototype" else "function",
+                                parent_node_id=(owner_nid if kind == "prototype" else None),
+                                body_node=body,
+                            )
+                            if qualified_names_by_node_id is not None:
+                                qualified_names_by_node_id[nid] = qualified_name
                         if callable_def_nids is not None:
                             callable_def_nids.add(nid)  # CJS/prototype fn is callable
                         if local_bound_names is not None:
                             local_bound_names[nid] = _js_local_bound_names(value, source)
-                        body = value.child_by_field_name("body")
                         if body:
                             function_bodies.append((nid, body))
                         return True
@@ -1833,8 +1846,28 @@ def _js_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: str,
                 if local_bound_names is not None:
                     local_bound_names[nid] = _js_local_bound_names(value, source)
                 body = value.child_by_field_name("body")
+                if emit_symbol_fn is not None:
+                    qualified_name = emit_symbol_fn(
+                        node,
+                        name=field_name,
+                        kind="method",
+                        parent_node_id=parent_class_nid,
+                        body_node=body,
+                    )
+                    if qualified_names_by_node_id is not None:
+                        qualified_names_by_node_id[nid] = qualified_name
                 if body:
                     function_bodies.append((nid, body))
+                return True
+        if prop is not None and emit_symbol_fn is not None:
+            field_name = _read_text(prop, source)
+            if field_name:
+                emit_symbol_fn(
+                    node,
+                    name=field_name,
+                    kind="property",
+                    parent_node_id=parent_class_nid,
+                )
                 return True
 
     if node.type in ("lexical_declaration", "variable_declaration"):
@@ -1888,6 +1921,15 @@ def _js_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: str,
                             if local_bound_names is not None:
                                 local_bound_names[func_nid] = _js_local_bound_names(value, source)
                             body = value.child_by_field_name("body")
+                            if emit_symbol_fn is not None:
+                                qualified_name = emit_symbol_fn(
+                                    child,
+                                    name=func_name,
+                                    kind="function",
+                                    body_node=body,
+                                )
+                                if qualified_names_by_node_id is not None:
+                                    qualified_names_by_node_id[func_nid] = qualified_name
                             if body:
                                 function_bodies.append((func_nid, body))
                             arrow_found = True
@@ -2324,7 +2366,9 @@ def _extract_generic(
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
+    qualified_names_by_node_id: dict[str, str] = {}
     namespace_stack: list[str] = []
     # Ruby only: enclosing module/class segments, so `module Foo::Bar` (compact)
     # and `module Foo; module Bar` (nested) label the same node `Foo::Bar` and
@@ -2455,8 +2499,89 @@ def _extract_generic(
     file_nid = _make_id(str(path))
     add_node(file_nid, path.name, 1)
 
+    language = config.ts_module.removeprefix("tree_sitter_").replace("_", "-")
+
+    def declaration_name(
+        name: str,
+        parent_node_id: str | None,
+    ) -> tuple[str, str | None]:
+        parent_name = (
+            qualified_names_by_node_id.get(parent_node_id) if parent_node_id else None
+        )
+        if parent_name:
+            return f"{parent_name}.{name}", parent_name
+        namespace = ".".join(namespace_stack)
+        return (f"{namespace}.{name}" if namespace else name), None
+
+    def class_symbol_kind(node_type: str) -> str:
+        if "interface" in node_type or "protocol" in node_type or "trait" in node_type:
+            return "interface"
+        if "struct" in node_type or "record" in node_type:
+            return "struct"
+        if "enum" in node_type:
+            return "enum"
+        if "module" in node_type:
+            return "module"
+        if "namespace" in node_type:
+            return "namespace"
+        if "type_alias" in node_type or "type_definition" in node_type:
+            return "type"
+        return "class"
+
+    def append_symbol(
+        declaration_node,
+        *,
+        name: str,
+        kind: str,
+        parent_node_id: str | None = None,
+        body_node=None,
+    ) -> str:
+        qualified_name, parent_name = declaration_name(name, parent_node_id)
+        symbols.append(
+            make_symbol(
+                declaration_node,
+                source,
+                path,
+                name=name,
+                kind=kind,
+                qualified_name=qualified_name,
+                parent_qualified_name=parent_name,
+                language=language,
+                body_node=body_node,
+            )
+        )
+        return qualified_name
+
     def walk(node, parent_class_nid: str | None = None) -> None:
         t = node.type
+
+        if config.ts_module == "tree_sitter_c_sharp" and t in (
+            "namespace_declaration",
+            "file_scoped_namespace_declaration",
+        ):
+            namespace_name = _csharp_namespace_name(node, source)
+            if namespace_name:
+                append_symbol(node, name=namespace_name, kind="namespace")
+
+        if config.ts_module == "tree_sitter_typescript" and node.is_named and t in (
+            "internal_module",
+            "module",
+        ):
+            namespace_name_node = node.child_by_field_name("name")
+            if namespace_name_node is None:
+                namespace_name_node = next(
+                    (
+                        child
+                        for child in node.children
+                        if child.is_named
+                        and child.type in ("identifier", "nested_identifier", "string")
+                    ),
+                    None,
+                )
+            if namespace_name_node is not None:
+                namespace_name = _read_text(namespace_name_node, source).strip("'\"`")
+                if namespace_name:
+                    append_symbol(node, name=namespace_name, kind="namespace")
 
         # Import types
         if t in config.import_types:
@@ -2505,6 +2630,7 @@ def _extract_generic(
             if not name_node:
                 return
             class_name = _read_text(name_node, source)
+            local_class_name = class_name
             # Ruby: fully qualify the module/class label with its enclosing
             # scope, splitting compact `Foo::Bar` names into segments so both
             # declaration styles converge on one `Foo::Bar` label (#2302).
@@ -2535,6 +2661,14 @@ def _extract_generic(
                     metadata = dict(metadata or {})
                     metadata["is_partial"] = True
             add_node(class_nid, class_name, line, metadata=metadata)
+            class_qualified_name = append_symbol(
+                node,
+                name=local_class_name,
+                kind=class_symbol_kind(t),
+                parent_node_id=parent_class_nid,
+                body_node=_find_body(node, config),
+            )
+            qualified_names_by_node_id[class_nid] = class_qualified_name
             callable_def_nids.add(class_nid)  # a class is callable (constructor)
             callable_class_nids.add(class_nid)  # ...but only via its constructor (#2137)
             # A nested class/object/trait is contained by its ENCLOSING type, not
@@ -3099,6 +3233,24 @@ def _extract_generic(
         if (config.ts_module == "tree_sitter_c_sharp"
                 and t == "field_declaration"
                 and parent_class_nid):
+            for child in node.children:
+                if child.type != "variable_declaration":
+                    continue
+                for declarator in child.children:
+                    if declarator.type != "variable_declarator":
+                        continue
+                    name_node = declarator.child_by_field_name("name") or next(
+                        (grandchild for grandchild in declarator.children
+                         if grandchild.type == "identifier"),
+                        None,
+                    )
+                    if name_node is not None:
+                        append_symbol(
+                            node,
+                            name=_read_text(name_node, source),
+                            kind="field",
+                            parent_node_id=parent_class_nid,
+                        )
             type_node = node.child_by_field_name("type")
             if type_node is None:
                 for child in node.children:
@@ -3131,7 +3283,8 @@ def _extract_generic(
                                 None,
                             )
                             if name_node is not None:
-                                fields[_read_text(name_node, source)] = type_name
+                                field_name = _read_text(name_node, source)
+                                fields[field_name] = type_name
                 line = node.start_point[0] + 1
                 metadata = {"ref_token": type_name}
                 if qualified:
@@ -3154,15 +3307,23 @@ def _extract_generic(
             # siblings) so `List<Widget>` yields both the List field ref and the
             # Widget generic_arg ref.
             type_node = node.child_by_field_name("type")
+            prop_name_node = node.child_by_field_name("name")
+            if prop_name_node is not None:
+                append_symbol(
+                    node,
+                    name=_read_text(prop_name_node, source),
+                    kind="property",
+                    parent_node_id=parent_class_nid,
+                )
             if type_node is not None:
                 # Record the property's declared type for the method-scoped
                 # receiver tables (#2299), like a field: `Main.Render()` on a
                 # `public Widget Main { get; set; }` types Main as Widget.
-                prop_name_node = node.child_by_field_name("name")
                 prop_type = _csharp_receiver_type_name(type_node, source)
                 if prop_name_node is not None and prop_type:
+                    prop_name = _read_text(prop_name_node, source)
                     csharp_field_types.setdefault(parent_class_nid, {})[
-                        _read_text(prop_name_node, source)
+                        prop_name
                     ] = prop_type
                 line = node.start_point[0] + 1
                 refs: list[tuple[str, str, bool, str]] = []
@@ -3183,6 +3344,13 @@ def _extract_generic(
         if (config.ts_module == "tree_sitter_java"
                 and t == "field_declaration"
                 and parent_class_nid):
+            for field_name in _java_declarator_names(node, source):
+                append_symbol(
+                    node,
+                    name=field_name,
+                    kind="field",
+                    parent_node_id=parent_class_nid,
+                )
             type_node = node.child_by_field_name("type")
             if type_node is not None:
                 receiver_type = _java_receiver_type_name(type_node, source)
@@ -3204,6 +3372,20 @@ def _extract_generic(
         if (config.ts_module == "tree_sitter_php"
                 and t == "property_declaration"
                 and parent_class_nid):
+            for element in node.children:
+                if element.type != "property_element":
+                    continue
+                variable = next(
+                    (child for child in element.children if child.type == "variable_name"),
+                    None,
+                )
+                if variable is not None:
+                    append_symbol(
+                        node,
+                        name=_read_text(variable, source).lstrip("$"),
+                        kind="property",
+                        parent_node_id=parent_class_nid,
+                    )
             for c in node.children:
                 if c.type not in ("named_type", "primitive_type", "nullable_type",
                                    "union_type", "intersection_type", "optional_type"):
@@ -3222,6 +3404,22 @@ def _extract_generic(
         if (config.ts_module == "tree_sitter_kotlin"
                 and t == "property_declaration"
                 and parent_class_nid):
+            property_name_node = node.child_by_field_name("name") or next(
+                (
+                    child
+                    for child in node.children
+                    if child.type in ("variable_declaration", "simple_identifier")
+                ),
+                None,
+            )
+            if property_name_node is not None:
+                property_name = _read_text(property_name_node, source).split(":", 1)[0]
+                append_symbol(
+                    node,
+                    name=property_name.strip(),
+                    kind="property",
+                    parent_node_id=parent_class_nid,
+                )
             type_node = _kotlin_property_type_node(node)
             if type_node is not None:
                 line = node.start_point[0] + 1
@@ -3274,6 +3472,13 @@ def _extract_generic(
                         if htext and htext[:1].isupper():
                             prop_type = htext
             prop_name = _swift_property_name(node, source)
+            if prop_name:
+                append_symbol(
+                    node,
+                    name=prop_name,
+                    kind="property",
+                    parent_node_id=parent_class_nid,
+                )
             if prop_name and prop_type:
                 type_table[prop_name] = prop_type
             # #2181: a computed property (`var body: some View { … }`) or an
@@ -3297,6 +3502,17 @@ def _extract_generic(
         if (config.ts_module == "tree_sitter_scala"
                 and t in ("val_definition", "var_definition")
                 and parent_class_nid):
+            property_name_node = node.child_by_field_name("name") or next(
+                (child for child in node.children if child.type == "identifier"),
+                None,
+            )
+            if property_name_node is not None:
+                append_symbol(
+                    node,
+                    name=_read_text(property_name_node, source),
+                    kind="property",
+                    parent_node_id=parent_class_nid,
+                )
             type_node = node.child_by_field_name("type")
             if type_node is not None:
                 line = node.start_point[0] + 1
@@ -3371,6 +3587,12 @@ def _extract_generic(
                     field_nid = _make_id(parent_class_nid, name)
                     add_node(field_nid, name, line)
                     add_edge(parent_class_nid, field_nid, "defines", line, context="field")
+                    append_symbol(
+                        node,
+                        name=name,
+                        kind="field",
+                        parent_node_id=parent_class_nid,
+                    )
             return
 
         # Function types
@@ -3404,6 +3626,32 @@ def _extract_generic(
                 return
 
             line = node.start_point[0] + 1
+            if parent_class_nid and (
+                "constructor" in t
+                or func_name in {"constructor", "__construct", "__init__", "init"}
+            ):
+                symbol_kind = "constructor"
+            elif (
+                parent_class_nid
+                and config.ts_module == "tree_sitter_python"
+                and node.parent is not None
+                and node.parent.type == "decorated_definition"
+                and any(
+                    child.type == "decorator"
+                    and _read_text(child, source).strip().endswith("property")
+                    for child in node.parent.children
+                )
+            ):
+                symbol_kind = "property"
+            else:
+                symbol_kind = "method" if parent_class_nid else "function"
+            func_qualified_name = append_symbol(
+                node,
+                name=func_name,
+                kind=symbol_kind,
+                parent_node_id=parent_class_nid,
+                body_node=_find_body(node, config),
+            )
             if parent_class_nid:
                 func_nid = _make_id(parent_class_nid, func_name)
                 add_node(func_nid, f".{func_name}()", line)
@@ -3413,6 +3661,7 @@ def _extract_generic(
                 add_node(func_nid, f"{func_name}()", line)
                 add_edge(file_nid, func_nid, "contains", line)
             callable_def_nids.add(func_nid)  # function / method def is callable
+            qualified_names_by_node_id[func_nid] = func_qualified_name
             if config.ts_module == "tree_sitter_python":
                 local_bound_names[func_nid] = _python_local_bound_names(node, source)
             elif config.ts_module in ("tree_sitter_javascript", "tree_sitter_typescript"):
@@ -3752,6 +4001,14 @@ def _extract_generic(
                     m_nid = _make_id(this_owner_nid, m_name)
                     add_node(m_nid, f".{m_name}()", m_line)
                     add_edge(this_owner_nid, m_nid, "method", m_line)
+                    method_qualified_name = append_symbol(
+                        stmt,
+                        name=m_name,
+                        kind="method",
+                        parent_node_id=this_owner_nid,
+                        body_node=val.child_by_field_name("body"),
+                    )
+                    qualified_names_by_node_id[m_nid] = method_qualified_name
                     m_body = val.child_by_field_name("body")
                     if m_body:
                         function_bodies.append((m_nid, m_body))
@@ -3852,7 +4109,8 @@ def _extract_generic(
             if _js_extra_walk(node, source, file_nid, stem, str_path,
                               nodes, edges, seen_ids, function_bodies,
                               parent_class_nid, add_node, add_edge,
-                              callable_def_nids, local_bound_names):
+                              callable_def_nids, local_bound_names,
+                              append_symbol, qualified_names_by_node_id):
                 return
 
         # TS namespace / module containers (internal_module, module)
@@ -4847,7 +5105,12 @@ def _extract_generic(
     # fold them in so the cross-file resolver sees them (#1668).
     if _ruby_mixin_calls:
         raw_calls.extend(_ruby_mixin_calls)
-    result = {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
+    result = {
+        "nodes": nodes,
+        "edges": clean_edges,
+        "symbols": symbols,
+        "raw_calls": raw_calls,
+    }
     if callable_def_nids:
         # Mark function / method / class defs with a `_callable` attribute so the
         # cross-file indirect_call pass can resolve a by-name callback only to a real

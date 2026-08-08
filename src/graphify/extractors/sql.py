@@ -5,6 +5,7 @@ import re
 
 from pathlib import Path
 from graphify.extractors.base import _file_stem, _make_id
+from graphify.extractors.symbols import make_symbol
 
 
 def _norm_ident(name: str) -> str:
@@ -55,6 +56,7 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
     nodes: list[dict] = [{"id": file_nid, "label": path.name, "file_type": "code",
                            "source_file": str_path, "source_location": None}]
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = {file_nid}
     table_nids: dict[str, str] = {}  # name → nid for reference resolution
 
@@ -177,6 +179,10 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
             if name:
                 nid = _make_id(stem, name)
                 _add_node(nid, f"{name}()", line)
+                symbols.append(make_symbol(
+                    node, source, path, name=name, kind="function",
+                    qualified_name=name, language="sql",
+                ))
                 _walk_from_refs(node, nid, line)
 
         elif t == "create_procedure":
@@ -184,6 +190,10 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
             if name:
                 nid = _make_id(stem, name)
                 _add_node(nid, f"{name}()", line)
+                symbols.append(make_symbol(
+                    node, source, path, name=name, kind="function",
+                    qualified_name=name, language="sql",
+                ))
                 _walk_from_refs(node, nid, line)
 
         elif t == "alter_table":
@@ -274,6 +284,11 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
                 obj_nid = _make_id(stem, obj_name)
                 label = obj_name if obj_type == "TRIGGER" else f"{obj_name}()"
                 _add_node(obj_nid, label, line)
+                if obj_type != "TRIGGER":
+                    symbols.append(make_symbol(
+                        node, source, path, name=obj_name, kind="function",
+                        qualified_name=obj_name, language="sql",
+                    ))
                 if obj_type == "TRIGGER":
                     fm = re.search(r"\bFOR\s+([\w$]+)", text, re.IGNORECASE)
                     if fm:
@@ -400,4 +415,4 @@ def extract_sql(path: Path, content: str | bytes | None = None) -> dict:
             fn_line = src_text[: m.start()].count("\n") + 1
             _add_node(_make_id(stem, fn_name), f"{fn_name}()", fn_line)
 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "symbols": symbols}

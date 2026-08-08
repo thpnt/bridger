@@ -139,6 +139,7 @@ from graphify.extractors.resolution import (  # noqa: E402,F401
 from graphify.symbol_resolution import resolve_bash_source_edges  # noqa: E402
 
 from graphify.extractors.engine import REFERENCE_CONTEXTS, _CSHARP_TYPE_PARAMETER_SCOPE_DECLARATIONS, _C_PRIMITIVE_TYPE_NODES, _JAVA_BUILTIN_TYPES, _JAVA_TYPE_PARAMETER_SCOPE_DECLARATIONS, _JS_FUNCTION_VALUE_TYPES, _JS_SCOPE_BOUNDARY, _PYTHON_ANNOTATION_NOISE, _PYTHON_TYPE_CONTAINERS, _RUBY_CLASS_FACTORIES, _c_collect_type_refs, _cpp_collect_type_refs, _cpp_declarator_name, _cpp_local_var_types, _csharp_attribute_names, _csharp_classify_base, _csharp_collect_type_refs, _csharp_extra_walk, _csharp_namespace_id, _csharp_namespace_name, _csharp_pre_scan_interfaces, _csharp_type_parameters_in_scope, _dynamic_import_js, _extract_generic, _find_body, _find_require_call, _get_cpp_func_name, _java_annotation_names, _java_collect_type_refs, _java_extra_walk, _java_type_parameters_in_scope, _js_collect_pattern_idents, _js_dispatch_value_idents, _js_extra_walk, _js_local_bound_names, _js_member_assignment_target, _js_module_bound_names, _kotlin_collect_type_refs, _kotlin_function_return_type_node, _kotlin_property_type_node, _kotlin_user_type_name, _php_collect_type_refs, _php_method_return_type_node, _php_name_text, _python_collect_assignment_targets, _python_collect_param_refs, _python_collect_type_refs, _python_local_bound_names, _python_module_bound_names, _python_param_names, _read_csharp_type_name, _require_imports_js, _ruby_const_last_name, _ruby_extra_walk, _ruby_local_class_bindings, _ruby_new_class_name, _scala_collect_type_refs, _semantic_reference_edge, _source_location, _swift_classify_base, _swift_collect_type_refs, _swift_constructor_type, _swift_declaration_keyword, _swift_extra_walk, _swift_local_var_types, _swift_pre_scan, _swift_property_name, _swift_property_type_node, _swift_receiver_name, _swift_user_type_name, _ts_decorator_name, _ts_descendant_decorators, _ts_emit_decorator_edges, _ts_extra_walk, _ts_method_name, _ts_receiver_type_table  # noqa: E402,F401
+from graphify.extractors.symbols import make_symbol_from_offsets
 
 from graphify.extractors.pascal import _PAS_BEGIN_END_TOKEN_RE, _PAS_CALL_RE, _PAS_END_SEMI_RE, _PAS_IMPL_HEADER_RE, _PAS_KEYWORDS, _PAS_METHOD_DECL_RE, _PAS_MODULE_RE, _PAS_TOKEN_RE, _PAS_TYPE_HEADER_RE, _PAS_USES_RE, _extract_pascal_regex, _pascal_find_body, _pascal_split_bases, _pascal_split_sections, _pascal_split_uses, _pascal_strip_comments, extract_pascal  # noqa: E402,F401
 
@@ -1597,6 +1598,7 @@ def _extract_spock_fallback(path: Path, ts_result: dict) -> dict:
     file_node = next((n for n in ts_result.get("nodes", []) if n.get("label") == path.name), None)
     nodes: list[dict] = [file_node] if file_node else []
     edges: list[dict] = [e for e in ts_result.get("edges", []) if e.get("context") == "import"]
+    symbols: list[dict] = []
     seen_ids: set[str] = {n["id"] for n in nodes}
 
     def _add_node(nid: str, label: str, line: int) -> None:
@@ -1622,8 +1624,6 @@ def _extract_spock_fallback(path: Path, ts_result: dict) -> dict:
             "weight": 1.0,
         })
 
-    lines_text = source.splitlines()
-
     # Extract class declarations
     class_re = _re.compile(r"^\s*(?:[\w@]+\s+)*class\s+(\w+)")
     # Extract Spock feature methods: def "..." () or def '...' ()
@@ -1634,13 +1634,28 @@ def _extract_spock_fallback(path: Path, ts_result: dict) -> dict:
     plain_method_re = _re.compile(r"""^\s*def\s+(\w+)\s*\(""")
 
     current_class_nid: str | None = None
+    current_class_name: str | None = None
     file_nid = _make_id(str_path)
+
+    def _declaration_bounds(start: int, fallback_end: int) -> tuple[int, int | None]:
+        brace = source.find("{", start)
+        if brace < 0:
+            return fallback_end, None
+        end = brace + 1
+        depth = 1
+        while end < len(source) and depth:
+            depth += (source[end] == "{") - (source[end] == "}")
+            end += 1
+        return end, brace
 
     # Ensure the file node exists (tree-sitter pass may have emitted it)
     if file_nid not in seen_ids:
         _add_node(file_nid, path.name, 1)
 
-    for lineno, line_text in enumerate(lines_text, start=1):
+    offset = 0
+    for lineno, line_text in enumerate(source.splitlines(keepends=True), start=1):
+        line_start = offset
+        offset += len(line_text)
         cm = class_re.match(line_text)
         if cm:
             class_name = cm.group(1)
@@ -1648,6 +1663,23 @@ def _extract_spock_fallback(path: Path, ts_result: dict) -> dict:
             _add_node(class_nid, class_name, lineno)
             _add_edge(file_nid, class_nid, "contains", lineno)
             current_class_nid = class_nid
+            current_class_name = class_name
+            declaration_end, signature_end = _declaration_bounds(
+                line_start + cm.start(), line_start + len(line_text.rstrip("\r\n"))
+            )
+            symbols.append(
+                make_symbol_from_offsets(
+                    source,
+                    path,
+                    start_offset=line_start + cm.start(),
+                    end_offset=declaration_end,
+                    name=class_name,
+                    kind="class",
+                    qualified_name=class_name,
+                    language="groovy",
+                    signature_end_offset=signature_end,
+                )
+            )
             continue
 
         if current_class_nid is None:
@@ -1660,6 +1692,23 @@ def _extract_spock_fallback(path: Path, ts_result: dict) -> dict:
             method_nid = _make_id(current_class_nid, method_name)
             _add_node(method_nid, method_label, lineno)
             _add_edge(current_class_nid, method_nid, "method", lineno)
+            declaration_end, signature_end = _declaration_bounds(
+                line_start + fm.start(), line_start + len(line_text.rstrip("\r\n"))
+            )
+            symbols.append(
+                make_symbol_from_offsets(
+                    source,
+                    path,
+                    start_offset=line_start + fm.start(),
+                    end_offset=declaration_end,
+                    name=method_name,
+                    kind="method",
+                    qualified_name=f"{current_class_name}.{method_name}",
+                    parent_qualified_name=current_class_name,
+                    language="groovy",
+                    signature_end_offset=signature_end,
+                )
+            )
             continue
 
         pm = plain_method_re.match(line_text)
@@ -1670,8 +1719,26 @@ def _extract_spock_fallback(path: Path, ts_result: dict) -> dict:
                 method_nid = _make_id(current_class_nid, method_name)
                 _add_node(method_nid, method_label, lineno)
                 _add_edge(current_class_nid, method_nid, "method", lineno)
+                declaration_end, signature_end = _declaration_bounds(
+                    line_start + pm.start(),
+                    line_start + len(line_text.rstrip("\r\n")),
+                )
+                symbols.append(
+                    make_symbol_from_offsets(
+                        source,
+                        path,
+                        start_offset=line_start + pm.start(),
+                        end_offset=declaration_end,
+                        name=method_name,
+                        kind="method",
+                        qualified_name=f"{current_class_name}.{method_name}",
+                        parent_qualified_name=current_class_name,
+                        language="groovy",
+                        signature_end_offset=signature_end,
+                    )
+                )
 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "symbols": symbols}
 
 
 def extract_groovy(path: Path) -> dict:
@@ -4419,9 +4486,15 @@ def _extract_single_file(args: tuple) -> tuple[int, dict]:
 
     extractor = _get_extractor(path)
     if extractor is None:
-        return idx, {"nodes": [], "edges": []}
+        return idx, {
+            "nodes": [],
+            "edges": [],
+            "symbols": [],
+            "error": "no AST extractor available",
+        }
 
     result = _safe_extract_with_xaml_root(extractor, path, root)
+    result.setdefault("symbols", [])
     # Never cache a zero-node result for an extractable file. Every supported
     # source produces at least a file node, so an empty node list is anomalous
     # (e.g. a transient batch/parallel hiccup). Caching it makes the empty
@@ -4504,6 +4577,13 @@ def _extract_parallel(
                     per_file[idx] = result
                 except Exception as exc:
                     pos = futures[future]
+                    idx = work_items[pos][0]
+                    per_file[idx] = {
+                        "nodes": [],
+                        "edges": [],
+                        "symbols": [],
+                        "error": f"worker failed: {type(exc).__name__}: {exc}",
+                    }
                     print(
                         f"  warning: worker failed for {work_items[pos][1]}: {exc}",
                         file=sys.stderr, flush=True,
@@ -4566,11 +4646,17 @@ def _extract_sequential(
             )
         extractor = _get_extractor(path)
         if extractor is None:
-            per_file[idx] = {"nodes": [], "edges": []}
+            per_file[idx] = {
+                "nodes": [],
+                "edges": [],
+                "symbols": [],
+                "error": "no AST extractor available",
+            }
             continue
         bypass_cache = path.suffix in _JS_CACHE_BYPASS_SUFFIXES
         # XAML boundary anchors on `root` (the corpus), not the cache location.
         result = _safe_extract_with_xaml_root(extractor, path, root)
+        result.setdefault("symbols", [])
         # See _extract_single_file: don't cache an anomalous zero-node result (#1666).
         if not bypass_cache and "error" not in result and result.get("nodes"):
             save_cached(path, result, root, cache_root=cache_location)
@@ -4664,7 +4750,12 @@ def extract(
 
     for i, path in enumerate(paths):
         if _get_extractor(path) is None:
-            per_file[i] = {"nodes": [], "edges": []}
+            per_file[i] = {
+                "nodes": [],
+                "edges": [],
+                "symbols": [],
+                "error": "no AST extractor available",
+            }
             continue
         bypass_cache = path.suffix in _JS_CACHE_BYPASS_SUFFIXES
         if not bypass_cache:
@@ -4687,7 +4778,12 @@ def extract(
     # Fill any remaining None slots (shouldn't happen, but defensive)
     for i in range(total):
         if per_file[i] is None:
-            per_file[i] = {"nodes": [], "edges": []}
+            per_file[i] = {
+                "nodes": [],
+                "edges": [],
+                "symbols": [],
+                "error": "extraction produced no result",
+            }
 
     # #1666: surface any source file an extractor accepted but that produced zero
     # nodes (not even a file node). Such a file is silently absent from the graph,
@@ -4764,11 +4860,20 @@ def extract(
 
     all_nodes: list[dict] = []
     all_edges: list[dict] = []
+    all_symbols: list[dict] = []
     all_raw_calls: list[dict] = []
     for result in per_file:
         all_nodes.extend(result.get("nodes", []))
         all_edges.extend(result.get("edges", []))
+        all_symbols.extend(result.get("symbols", []))
         all_raw_calls.extend(result.get("raw_calls", []))
+    file_errors: list[dict[str, str]] = []
+    for path, result in zip(paths, per_file):
+        error = result.get("error")
+        if not error and _get_extractor(path) is not None and not result.get("nodes"):
+            error = "extractor produced zero nodes"
+        if error:
+            file_errors.append({"path": str(path), "error": str(error)})
     # Function / method / class def ids for the cross-file indirect_call callable
     # guard. Built from the `_callable` node marker AFTER the id-remap / disambiguation
     # passes below (which rewrite node ids), so it can never go stale — see the
@@ -5725,6 +5830,18 @@ def extract(
     return {
         "nodes": all_nodes,
         "edges": all_edges,
+        "symbols": sorted(
+            all_symbols,
+            key=lambda symbol: (
+                str(symbol.get("source_file", "")),
+                int(symbol.get("start_line", 0)),
+                int(symbol.get("end_line", 0)),
+                str(symbol.get("kind", "")),
+                str(symbol.get("qualified_name", "")),
+                str(symbol.get("name", "")),
+            ),
+        ),
+        "file_errors": file_errors,
         "input_tokens": 0,
         "output_tokens": 0,
     }

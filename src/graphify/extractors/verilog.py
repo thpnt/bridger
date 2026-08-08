@@ -5,6 +5,7 @@ import re
 
 from pathlib import Path
 from graphify.extractors.base import _file_stem, _make_id, _read_text
+from graphify.extractors.symbols import make_symbol
 
 
 def _sv_first_identifier(node, source: bytes) -> str | None:
@@ -108,6 +109,7 @@ def _augment_systemverilog_semantics(
     nodes: list[dict],
     edges: list[dict],
     seen_ids: set[str],
+    symbols: list[dict],
 ) -> None:
     label_to_nid = {node["label"]: node["id"] for node in nodes}
 
@@ -158,6 +160,19 @@ def _augment_systemverilog_semantics(
         edges.append({"source": file_nid, "target": class_nid, "relation": "defines",
                       "confidence": "EXTRACTED", "confidence_score": 1.0,
                       "source_file": str_path, "source_location": f"L{line}", "weight": 1.0})
+        symbols.append({
+            "name": class_name,
+            "qualified_name": class_name,
+            "kind": "interface" if match.group(1) else "class",
+            "source_file": str_path,
+            "start_line": line,
+            "end_line": line + match.group(0).count("\n"),
+            "parent_qualified_name": None,
+            "signature": " ".join(
+                f"{'interface ' if match.group(1) else ''}class {class_name}{header}".split()
+            ),
+            "language": "systemverilog",
+        })
 
         ext = re.search(r"\bextends\s+(\w+)", header)
         if ext:
@@ -193,6 +208,19 @@ def _augment_systemverilog_semantics(
             edges.append({"source": class_nid, "target": func_nid, "relation": "method",
                           "confidence": "EXTRACTED", "confidence_score": 1.0,
                           "source_file": str_path, "source_location": f"L{func_line}", "weight": 1.0})
+            symbols.append({
+                "name": func_name,
+                "qualified_name": f"{class_name}.{func_name}",
+                "kind": "method",
+                "source_file": str_path,
+                "start_line": func_line,
+                "end_line": func_line + fm.group(0).count("\n"),
+                "parent_qualified_name": class_name,
+                "signature": " ".join(
+                    f"function {return_type} {func_name}({params})".split()
+                )[:500],
+                "language": "systemverilog",
+            })
             for ref_name, role in _sv_collect_type_refs(return_type, skip=type_params):
                 add_edge(func_nid, ref_name, "references", func_line, "generic_arg" if role == "generic_arg" else "return_type")
             for param in _sv_split_type_list(params):
@@ -225,7 +253,9 @@ def extract_verilog(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
+    qualified_names_by_node_id: dict[str, str] = {}
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -259,6 +289,27 @@ def extract_verilog(path: Path) -> dict:
                 nid = _make_id(stem, mod_name)
                 add_node(nid, mod_name, line)
                 add_edge(file_nid, nid, "defines", line)
+                module_body = next(
+                    (
+                        child
+                        for child in node.children
+                        if child.type == "module_item"
+                    ),
+                    None,
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=mod_name,
+                        kind="module",
+                        qualified_name=mod_name,
+                        language="verilog",
+                        body_node=module_body,
+                    )
+                )
+                qualified_names_by_node_id[nid] = mod_name
                 for child in node.children:
                     walk(child, nid)
                 return
@@ -275,6 +326,23 @@ def extract_verilog(path: Path) -> dict:
                 nid = _make_id(parent, func_name)
                 add_node(nid, f"{func_name}()", line)
                 add_edge(parent, nid, "contains", line)
+                parent_name = qualified_names_by_node_id.get(parent)
+                qualified_name = (
+                    f"{parent_name}.{func_name}" if parent_name else func_name
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=func_name,
+                        kind="method" if parent_name else "function",
+                        qualified_name=qualified_name,
+                        parent_qualified_name=parent_name,
+                        language="verilog",
+                        body_node=fn_body,
+                    )
+                )
 
         elif t == "task_declaration":
             tk_body = _sv_child(node, "task_body_declaration")
@@ -285,6 +353,23 @@ def extract_verilog(path: Path) -> dict:
                 nid = _make_id(parent, task_name)
                 add_node(nid, task_name, line)
                 add_edge(parent, nid, "contains", line)
+                parent_name = qualified_names_by_node_id.get(parent)
+                qualified_name = (
+                    f"{parent_name}.{task_name}" if parent_name else task_name
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=task_name,
+                        kind="method" if parent_name else "function",
+                        qualified_name=qualified_name,
+                        parent_qualified_name=parent_name,
+                        language="verilog",
+                        body_node=tk_body,
+                    )
+                )
 
         elif t == "package_import_declaration":
             for child in node.children:
@@ -325,5 +410,6 @@ def extract_verilog(path: Path) -> dict:
         nodes,
         edges,
         seen_ids,
+        symbols,
     )
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "symbols": symbols}

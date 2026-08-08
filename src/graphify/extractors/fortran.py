@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from graphify.extractors.base import _file_stem, _make_id, _read_text
+from graphify.extractors.symbols import make_symbol
 
 
 _FORTRAN_CPP_EXTS = {".F", ".F90", ".F95", ".F03", ".F08"}
@@ -56,7 +57,12 @@ def extract_fortran(path: Path) -> dict:
     try:
         language = Language(tsfortran.language())
         parser = Parser(language)
-        source = _cpp_preprocess(path) if path.suffix in _FORTRAN_CPP_EXTS else path.read_bytes()
+        original_source = path.read_bytes()
+        source = (
+            _cpp_preprocess(path)
+            if path.suffix in _FORTRAN_CPP_EXTS
+            else original_source
+        )
         tree = parser.parse(source)
         root = tree.root_node
     except Exception as e:
@@ -66,8 +72,39 @@ def extract_fortran(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     scope_bodies: list[tuple[str, object]] = []
+    qualified_names_by_node_id: dict[str, str] = {}
+    source_positions_match = source == original_source
+
+    def emit_symbol(node, stmt, name: str, kind: str, scope_nid: str) -> None:
+        if not source_positions_match:
+            return
+        parent_name = qualified_names_by_node_id.get(scope_nid)
+        qualified_name = f"{parent_name}.{name}" if parent_name else name
+        body_start = next(
+            (
+                child
+                for child in node.children
+                if child.is_named and child.start_byte > stmt.end_byte
+            ),
+            None,
+        )
+        symbols.append(
+            make_symbol(
+                node,
+                source,
+                path,
+                name=name,
+                kind=kind,
+                qualified_name=qualified_name,
+                parent_qualified_name=parent_name,
+                language="fortran",
+                body_node=body_start,
+            )
+        )
+        qualified_names_by_node_id[_make_id(stem, name)] = qualified_name
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -218,6 +255,7 @@ def extract_fortran(path: Path) -> dict:
                 line = node.start_point[0] + 1
                 add_node(nid, name, line)
                 add_edge(file_nid, nid, "defines", line)
+                emit_symbol(node, stmt, name, "module", file_nid)
                 scope_bodies.append((nid, node))
                 for child in node.children:
                     walk(child, nid)
@@ -231,6 +269,7 @@ def extract_fortran(path: Path) -> dict:
                 line = node.start_point[0] + 1
                 add_node(nid, name, line)
                 add_edge(file_nid, nid, "defines", line)
+                emit_symbol(node, stmt, name, "module", file_nid)
                 for child in node.children:
                     walk(child, nid)
             return
@@ -251,6 +290,7 @@ def extract_fortran(path: Path) -> dict:
                     line = node.start_point[0] + 1
                     add_node(type_nid, type_name, line)
                     add_edge(scope_nid, type_nid, "defines", line)
+                    emit_symbol(node, stmt, type_name, "type", scope_nid)
             return
 
         if t == "subroutine":
@@ -261,6 +301,7 @@ def extract_fortran(path: Path) -> dict:
                 line = node.start_point[0] + 1
                 add_node(nid, f"{name}()", line)
                 add_edge(scope_nid, nid, "defines", line)
+                emit_symbol(node, stmt, name, "function", scope_nid)
                 scope_bodies.append((nid, node))
                 emit_signature_refs(node, nid, is_function=False)
                 for child in node.children:
@@ -275,6 +316,7 @@ def extract_fortran(path: Path) -> dict:
                 line = node.start_point[0] + 1
                 add_node(nid, f"{name}()", line)
                 add_edge(scope_nid, nid, "defines", line)
+                emit_symbol(node, stmt, name, "function", scope_nid)
                 scope_bodies.append((nid, node))
                 emit_signature_refs(node, nid, is_function=True)
                 for child in node.children:
@@ -306,4 +348,9 @@ def extract_fortran(path: Path) -> dict:
             if child.type not in _stmt_headers:
                 walk_calls(child, scope_nid)
 
-    return {"nodes": nodes, "edges": edges}
+    result = {"nodes": nodes, "edges": edges, "symbols": symbols}
+    if not source_positions_match:
+        result["error"] = (
+            "cannot map preprocessed Fortran declarations to exact source ranges"
+        )
+    return result
