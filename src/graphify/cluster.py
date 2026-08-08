@@ -1,4 +1,4 @@
-"""Community detection on NetworkX graphs. Uses Leiden (graspologic) if available, falls back to Louvain (networkx). Splits oversized communities. Returns cohesion scores."""
+"""Community detection with required deterministic Leiden clustering."""
 from __future__ import annotations
 import contextlib
 import inspect
@@ -22,8 +22,8 @@ def _suppress_output():
 def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
     """Run community detection. Returns {node_id: community_id}.
 
-    Tries Leiden (graspologic) first — best quality.
-    Falls back to Louvain (built into networkx) if graspologic is not installed.
+    Leiden is required by Bridger. Missing graspologic raises explicitly rather
+    than silently changing the community algorithm.
 
     resolution > 1.0 → more, smaller communities.
     resolution < 1.0 → fewer, larger communities.
@@ -46,6 +46,11 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
 
     try:
         from graspologic.partition import leiden
+    except ImportError as error:
+        raise RuntimeError(
+            "Leiden clustering requires the graspologic runtime dependency"
+        ) from error
+    try:
         lsig = inspect.signature(leiden).parameters
         kwargs: dict = {}
         if "random_seed" in lsig:
@@ -64,17 +69,8 @@ def _partition(G: nx.Graph, resolution: float = 1.0) -> dict[str, int]:
         finally:
             sys.stderr = old_stderr
         return result
-    except ImportError:
-        pass
-
-    # Fallback: networkx louvain (available since networkx 2.7).
-    # Inspect kwargs to stay compatible across NetworkX versions — max_level
-    # was added in a later release and prevents hangs on large sparse graphs.
-    kwargs: dict = {"seed": 42, "threshold": 1e-4, "resolution": resolution}
-    if "max_level" in inspect.signature(nx.community.louvain_communities).parameters:
-        kwargs["max_level"] = 10
-    communities = nx.community.louvain_communities(stable, **kwargs)
-    return {node: cid for cid, nodes in enumerate(communities) for node in nodes}
+    except Exception as error:
+        raise RuntimeError("Leiden clustering failed") from error
 
 
 _MAX_COMMUNITY_FRACTION = 0.25   # communities larger than 25% of graph get split
@@ -143,9 +139,9 @@ def cluster(
     a second Leiden pass on the subgraph.
 
     Accepts directed or undirected graphs. DiGraphs are converted to undirected
-    internally since Louvain/Leiden require undirected input.
+    internally because Leiden requires an undirected projection.
 
-    resolution: passed to Leiden/Louvain. >1.0 = more smaller communities,
+    resolution: passed to Leiden. >1.0 = more smaller communities,
         <1.0 = fewer larger communities. Default 1.0.
     exclude_hubs_percentile: if set (0-100), nodes whose degree exceeds this
         percentile are excluded from partitioning and reattached to their
@@ -242,16 +238,13 @@ def _split_community(G: nx.Graph, nodes: list[str]) -> list[list[str]]:
     if subgraph.number_of_edges() == 0:
         # No edges - split into individual nodes
         return [[n] for n in sorted(nodes)]
-    try:
-        sub_partition = _partition(subgraph)
-        sub_communities: dict[int, list[str]] = {}
-        for node, cid in sub_partition.items():
-            sub_communities.setdefault(cid, []).append(node)
-        if len(sub_communities) <= 1:
-            return [sorted(nodes)]
-        return [sorted(v) for v in sub_communities.values()]
-    except Exception:
+    sub_partition = _partition(subgraph)
+    sub_communities: dict[int, list[str]] = {}
+    for node, cid in sub_partition.items():
+        sub_communities.setdefault(cid, []).append(node)
+    if len(sub_communities) <= 1:
         return [sorted(nodes)]
+    return [sorted(v) for v in sub_communities.values()]
 
 
 def cohesion_score(G: nx.Graph, community_nodes: list[str]) -> float:

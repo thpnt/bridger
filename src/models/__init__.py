@@ -12,6 +12,14 @@ from models.files import (
     SourceReadRequest,
     SourceReadResult,
 )
+from models.graph import (
+    ArtifactReference,
+    GraphBuildResult,
+    GraphConstructionConfig,
+    GraphDiagnostics,
+    GraphSnapshotManifest,
+    RepositoryGraph,
+)
 from models.repository import RepositoryContext
 from models.symbols import (
     SymbolIndex,
@@ -22,15 +30,21 @@ from models.symbols import (
 
 __all__ = [
     "BOUNDED_READ_MAX_BYTES",
+    "ArtifactReference",
     "FileChangeSet",
     "FileDisposition",
     "FileIndex",
     "FileIndexSummary",
     "FileRecord",
+    "GraphConstructionConfig",
+    "GraphBuildResult",
+    "GraphDiagnostics",
+    "GraphSnapshotManifest",
     "IntakeConfiguration",
     "ExtractionFailure",
     "ExtractionReport",
     "RepositoryContext",
+    "RepositoryGraph",
     "SourceReadRequest",
     "SourceReadResult",
     "SymbolIndex",
