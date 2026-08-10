@@ -10,6 +10,7 @@ from graph.intelligence import (
 from graph.lifecycle import (
     create_graph_snapshot,
     load_graph_snapshot,
+    load_graph_snapshot_structural_state,
     update_graph_snapshot,
     validate_graph_snapshot,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "FullRebuildRequired",
     "InvalidGraphSnapshot",
     "load_graph_snapshot",
+    "load_graph_snapshot_structural_state",
     "update_graph_snapshot",
     "validate_graph_intelligence",
     "validate_graph_snapshot",

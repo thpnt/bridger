@@ -13,6 +13,7 @@ from graph.intelligence import build_graph_intelligence
 from graph.lifecycle import (
     create_graph_snapshot,
     load_graph_snapshot,
+    load_graph_snapshot_structural_state,
     update_graph_snapshot,
     validate_graph_snapshot,
 )
@@ -34,32 +35,86 @@ def test_full_snapshot_round_trip_preserves_direction_and_hyperedges(
         GraphConstructionConfig(),
     )
 
-    result = create_graph_snapshot(
+    output_root = tmp_path / "graph"
+    create_graph_snapshot(
         context,
         file_index,
         graph,
         diagnostics,
         derived_state,
         GraphConstructionConfig(),
-        tmp_path / "graph",
+        output_root,
     )
-    loaded = load_graph_snapshot(tmp_path / "graph")
+    del context, file_index, graph, diagnostics, derived_state
+    loaded = load_graph_snapshot(output_root)
+    structural = load_graph_snapshot_structural_state(loaded)
 
-    assert result.snapshot_root == loaded.snapshot_root
     assert type(loaded.graph) is nx.DiGraph
     assert list(loaded.graph.edges) == [("a", "b"), ("b", "c")]
+    assert list(loaded.graph.successors("a")) == ["b"]
+    assert list(loaded.graph.predecessors("b")) == ["a"]
+    assert loaded.graph["a"]["b"]["relation"] == "calls"
+    assert loaded.graph["a"]["b"]["confidence"] == "EXTRACTED"
+    assert loaded.graph["a"]["b"]["weight"] == 1.0
+    assert loaded.graph.nodes["a"]["source_file"] == "a.py"
+    assert loaded.graph.nodes["a"]["source_location"] == "L1"
+    assert nx.shortest_path(loaded.graph, "a", "c") == ["a", "b", "c"]
+    assert set(loaded.graph.subgraph(["a", "b"]).nodes) == {"a", "b"}
     assert loaded.graph.graph["hyperedges"] == [
         {"id": "group", "label": "group", "nodes": ["a", "b"]}
     ]
-    assert set(result.manifest.artifacts) == {
+    assert [
+        hyperedge["id"]
+        for hyperedge in loaded.graph.graph["hyperedges"]
+        if "a" in hyperedge["nodes"]
+    ] == ["group"]
+    assert set(loaded.manifest.artifacts) == {
         "graph.json",
         "structural.json",
         "diagnostics.json",
         "graphify-manifest.json",
         "GRAPH_REPORT.md",
     }
-    assert (result.snapshot_root / "snapshot-manifest.json").is_file()
-    validate_graph_snapshot(result.snapshot_root)
+    assert (loaded.snapshot_root / "snapshot-manifest.json").is_file()
+    validate_graph_snapshot(loaded.snapshot_root)
+
+    node_communities = {
+        node_id: community_id
+        for community_id, members in structural["communities"].items()
+        for node_id in members
+    }
+    assert set(node_communities) == set(loaded.graph.nodes)
+    for community_id, members in structural["communities"].items():
+        assert isinstance(community_id, int)
+        assert members
+        assert structural["cohesion"][community_id] >= 0
+        assert structural["community_member_signatures"][community_id]
+        assert structural["community_labels"][community_id]
+    assert isinstance(structural["god_nodes"], list)
+    assert isinstance(structural["surprising_connections"], list)
+    assert isinstance(structural["suggested_questions"], list)
+
+    representative_nodes = sorted(
+        loaded.graph.nodes,
+        key=lambda node_id: (-loaded.graph.degree(node_id), node_id),
+    )
+    source_file_distribution = {
+        attributes["source_file"] for _, attributes in loaded.graph.nodes(data=True)
+    }
+    internal_relations = [
+        attributes["relation"]
+        for source, target, attributes in loaded.graph.edges(data=True)
+        if node_communities[source] == node_communities[target]
+    ]
+    cross_community_relations = [
+        attributes["relation"]
+        for source, target, attributes in loaded.graph.edges(data=True)
+        if node_communities[source] != node_communities[target]
+    ]
+    assert representative_nodes[0] in {"a", "b"}
+    assert source_file_distribution == {"a.py", "b.py", "c.py"}
+    assert internal_relations
+    assert isinstance(cross_community_relations, list)
 
 
 def test_corrupt_artifact_is_rejected_and_failed_build_keeps_current(
@@ -318,6 +373,7 @@ def _edge(source: str, target: str, relation: str) -> dict[str, str]:
         "target": target,
         "relation": relation,
         "confidence": "EXTRACTED",
+        "weight": 1.0,
         "source_file": "a.py",
         "_origin": "ast",
     }

@@ -11,6 +11,7 @@ import tempfile
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -150,6 +151,23 @@ def load_graph_snapshot(
         diagnostics=diagnostics,
         snapshot_root=snapshot_root,
     )
+
+
+def load_graph_snapshot_structural_state(
+    graph_build: GraphBuildResult,
+) -> dict[str, Any]:
+    """Load validated, runtime-normalized structural state for a graph snapshot.
+
+    This is the Layer 4 boundary for Graphify-native communities and structural
+    analysis. It intentionally returns no new Bridger domain model: the locked
+    structural payload remains a private deterministic implementation detail.
+    """
+    _graph, manifest, _diagnostics, structural = _read_validated_snapshot(
+        graph_build.snapshot_root
+    )
+    if manifest != graph_build.manifest:
+        raise InvalidGraphSnapshot("GraphBuildResult does not match its snapshot")
+    return _normalize_structural_state(structural)
 
 
 def validate_graph_snapshot(
@@ -491,6 +509,21 @@ def _validate_structural_state(
     for node in structural["god_nodes"]:
         if not isinstance(node, dict) or node.get("id") not in graph:
             raise InvalidGraphSnapshot("god node references an unknown graph node")
+
+
+def _normalize_structural_state(structural: dict[str, Any]) -> dict[str, Any]:
+    """Restore integer community keys lost by JSON object serialization."""
+    normalized = deepcopy(structural)
+    for key in (
+        "communities",
+        "cohesion",
+        "community_member_signatures",
+        "community_labels",
+    ):
+        normalized[key] = {
+            int(community_id): value for community_id, value in normalized[key].items()
+        }
+    return normalized
 
 
 def _validate_diagnostics(
