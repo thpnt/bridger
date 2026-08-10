@@ -799,6 +799,12 @@ Representative selection follows these rules:
 
 The initial profile should remain close to Graphify's inexpensive strategy, using approximately **12 total representatives per community**, unless evaluation justifies another limit.
 
+The initial Bridger implementation uses 12 total representatives, bounds labels,
+node types, and source paths to 160, 64, and 512 characters respectively, and
+applies an initial two-per-source/owner/family diversity cap before a deterministic
+fill pass. These values are naming-profile policy: changing them requires a new
+`profile_version`.
+
 Conceptually:
 
 ```text
@@ -1375,6 +1381,8 @@ Batch size should remain large enough to minimize model calls while respecting p
 
 Graphify's approximately 100-community batching strategy is the initial reference point, but the exact value is profile-owned and may be adjusted through evaluation.
 
+The initial Bridger V0 naming profile uses 100 communities per batch.
+
 Independent batches execute concurrently through Bridger's asynchronous `LLMClient`.
 
 Concurrency is bounded by:
@@ -1422,6 +1430,11 @@ Only the failed batch is retried.
 Successful batches are never repeated because another batch failed.
 
 There is no additional hidden Layer 5 retry loop.
+
+The V0 implementation constructs its `LLMClient` with one internal attempt for
+community naming. Each of the three Layer 5 batch attempts therefore maps to one
+client/provider turn; the client retry policy does not multiply the Layer 5
+budget.
 
 If `LLMClient` itself performs lower-level transport retries, the effective call semantics must remain explicit so Layer 5's cost ceiling is not accidentally multiplied.
 

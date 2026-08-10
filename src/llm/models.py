@@ -7,17 +7,21 @@ from pydantic import (
     Field,
     JsonValue,
     StringConstraints,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
+from pydantic_core import to_jsonable_python
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 
 ToolName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
+_JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
 class LLMOperation(StrEnum):
     REPO_DISCOVERY = "repo_discovery"
+    COMMUNITY_NAMING = "community_naming"
     CONTEXT_PLAN_GENERATION = "context_plan_generation"
     CONTEXT_PLAN_REVIEW = "context_plan_review"
     MEMORY_AGENT_EVIDENCE = "memory_agent_evidence"
@@ -36,6 +40,45 @@ class LLMToolCall(BaseModel):
     name: ToolName
     arguments: dict[str, JsonValue]
     raw_arguments: str | None = None
+
+
+class LLMToolError(BaseModel):
+    """Ordinary tool failure that a caller may return to a future model turn."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: Literal["unknown_tool", "invalid_arguments", "tool_execution_error"]
+    message: str = Field(min_length=1)
+
+
+class LLMToolResult(BaseModel):
+    """Provider-neutral result correlated with one requested tool call."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    call_id: str = Field(min_length=1)
+    name: ToolName
+    output: JsonValue = None
+    error: LLMToolError | None = None
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> "LLMToolResult":
+        """Prevent a failed result from also carrying a successful output."""
+        if self.error is not None and self.output is not None:
+            raise ValueError("tool result cannot contain both output and error")
+        return self
+
+    def as_message(self) -> "LLMMessage":
+        """Convert this result to the existing provider-neutral tool message."""
+        result: JsonValue = self.output
+        if self.error is not None:
+            result = {"error": self.error.model_dump(mode="json")}
+        return LLMMessage.tool_result_message(
+            tool_call_id=self.call_id,
+            tool_name=self.name,
+            result=result,
+            failed=self.error is not None,
+        )
 
 
 class LLMMessage(BaseModel):
@@ -73,13 +116,9 @@ class LLMMessage(BaseModel):
         *,
         tool_call_id: str,
         tool_name: str,
-        result: dict[str, JsonValue]
-        | list[JsonValue]
-        | str
-        | int
-        | float
-        | bool
-        | None,
+        result: (
+            dict[str, JsonValue] | list[JsonValue] | str | int | float | bool | None
+        ),
         failed: bool = False,
     ) -> "LLMMessage":
         return cls(
@@ -211,4 +250,5 @@ class LLMResponse(BaseModel, Generic[StructuredOutputT]):
 
 
 def dump_json_value(value: Any) -> JsonValue:
-    return value
+    """Normalize supported runtime values to validated JSON-compatible data."""
+    return _JSON_VALUE_ADAPTER.validate_python(to_jsonable_python(value))

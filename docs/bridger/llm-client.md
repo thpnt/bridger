@@ -105,6 +105,27 @@ LLMMessage.tool_result_message(
 )
 ```
 
+Layer 6 binds its explicit navigation surface to an already constructed
+`RepositoryNavigator`:
+
+```python
+from bridger.navigation import build_navigation_tools
+
+tool_executor = build_navigation_tools(navigator)
+request = LLMRequest(
+    operation=LLMOperation.REPO_DISCOVERY,
+    messages=[LLMMessage.user("Locate the repository entrypoints.")],
+    tools=tool_executor.definitions,
+)
+
+response = await llm_client.generate(request)
+results = [await tool_executor.execute(call) for call in response.tool_calls]
+```
+
+Each result preserves the provider call ID, tool name, structured JSON output,
+or an ordinary tool error. The executor validates Pydantic arguments before it
+invokes the bound navigator. It does not call the model or continue a task loop.
+
 ## Structured Output Example
 
 ```python

@@ -233,7 +233,7 @@ class OpenAILLMClient:
                 operation=request.operation,
             )
         structured_output: StructuredOutputT | None = None
-        if output_type is not None:
+        if output_type is not None and not tool_calls:
             if not text:
                 raise LLMStructuredOutputError(
                     "Structured-output request returned empty output",

@@ -1,5 +1,17 @@
 """Typed contracts owned by Bridger."""
 
+from models.enrichment import (
+    CommunityEvidence,
+    CommunityName,
+    CommunityNameBatch,
+    CommunityRepresentative,
+    EnrichmentGenerationSummary,
+    EnrichmentRecord,
+    FailedEnrichmentBatch,
+    FeatureGenerationSummary,
+    GraphEnrichmentConfig,
+    GraphEnrichmentOverlay,
+)
 from models.extraction import ExtractionFailure, ExtractionReport
 from models.files import (
     BOUNDED_READ_MAX_BYTES,
@@ -20,6 +32,16 @@ from models.graph import (
     GraphSnapshotManifest,
     RepositoryGraph,
 )
+from models.navigation import (
+    CompositeEntityView,
+    FileOverview,
+    GraphCommunityView,
+    GraphDirection,
+    GraphTraversalView,
+    RepositorySearchHit,
+    RepositorySearchKind,
+    SourceContentMatch,
+)
 from models.repository import RepositoryContext
 from models.symbols import (
     SymbolIndex,
@@ -31,22 +53,40 @@ from models.symbols import (
 __all__ = [
     "BOUNDED_READ_MAX_BYTES",
     "ArtifactReference",
+    "CommunityEvidence",
+    "CommunityName",
+    "CommunityNameBatch",
+    "CommunityRepresentative",
+    "CompositeEntityView",
+    "EnrichmentGenerationSummary",
+    "EnrichmentRecord",
     "FileChangeSet",
     "FileDisposition",
     "FileIndex",
     "FileIndexSummary",
     "FileRecord",
+    "FileOverview",
     "GraphConstructionConfig",
+    "GraphEnrichmentConfig",
+    "GraphEnrichmentOverlay",
     "GraphBuildResult",
     "GraphDiagnostics",
+    "GraphCommunityView",
+    "GraphDirection",
     "GraphSnapshotManifest",
+    "GraphTraversalView",
     "IntakeConfiguration",
+    "FailedEnrichmentBatch",
+    "FeatureGenerationSummary",
     "ExtractionFailure",
     "ExtractionReport",
     "RepositoryContext",
     "RepositoryGraph",
+    "RepositorySearchHit",
+    "RepositorySearchKind",
     "SourceReadRequest",
     "SourceReadResult",
+    "SourceContentMatch",
     "SymbolIndex",
     "SymbolIndexSummary",
     "SymbolKind",
