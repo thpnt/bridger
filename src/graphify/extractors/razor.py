@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from graphify.extractors.base import _file_stem, _make_id
+from graphify.extractors.symbols import make_symbol_from_offsets
 
 
 def extract_razor(path: Path) -> dict:
@@ -19,6 +20,7 @@ def extract_razor(path: Path) -> dict:
     nodes: list[dict] = [{"id": file_nid, "label": path.name, "file_type": "code",
                           "source_file": str_path, "source_location": None}]
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     seen_ids.add(file_nid)
 
@@ -115,5 +117,29 @@ def extract_razor(path: Path) -> dict:
                 edges.append({"source": file_nid, "target": method_nid,
                               "relation": "contains", "confidence": "EXTRACTED",
                               "source_file": str_path, "weight": 1.0})
+                signature_end = src.find("{", abs_pos)
+                declaration_end = signature_end + 1 if signature_end >= 0 else mm.end()
+                if signature_end >= 0:
+                    depth = 1
+                    while declaration_end < len(src) and depth:
+                        depth += (src[declaration_end] == "{") - (
+                            src[declaration_end] == "}"
+                        )
+                        declaration_end += 1
+                symbols.append(
+                    make_symbol_from_offsets(
+                        src,
+                        path,
+                        start_offset=abs_pos,
+                        end_offset=declaration_end,
+                        name=method_name,
+                        kind="method",
+                        qualified_name=method_name,
+                        language="razor",
+                        signature_end_offset=signature_end
+                        if signature_end >= 0
+                        else None,
+                    )
+                )
 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "symbols": symbols}

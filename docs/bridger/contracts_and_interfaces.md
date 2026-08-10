@@ -230,7 +230,7 @@ Rename detection is not required in V0; a rename may appear as one deletion and 
 11. The exact Git commit SHA, rather than the branch name, identifies the analyzed source state.  
 12. Publishable snapshots must be based on a commit-pinned source state. Dirty tracked content is outside V0.  
 The repository and exact revision remain the ultimate authority for all downstream deterministic and AI-derived artifacts.  
-   
+  
 # Layer 2 — Deterministic Extraction and Indexing  
 **Status: Locked for V0**  
 ## Responsibility  
@@ -658,124 +658,306 @@ Checks include:
 * Retention limits, remote storage, migration adapters and historical graph-diff APIs are deferred.  
 * The graph current pointer identifies the default deterministic graph snapshot, not the final Repository Brain artifact.  
   
-##   
-## 5 — AI enrichment overlay  
-## Responsibility  
-Layer 5 is entirely **Bridger-owned**.  
-It consumes a published deterministic graph snapshot from Layer 4 and produces a separate immutable AI enrichment overlay.  
-Graphify is not involved in Layer 5 execution.  
-Layer 5 may add semantic interpretation such as:  
-* community naming;  
-* high-centrality / god-node labeling;  
-* semantic categories;  
-* importance explanations;  
-* anomaly annotations;  
-* entity, edge, or community scores once their metrics are formally defined.  
-It must never mutate deterministic graph topology, structural confidence, or canonical graph facts.  
-  
-## Contracts  
-```
-GraphEnrichmentConfig
 
-```
-Configuration for one enrichment pass.  
-```
+Below is the complete replacement for **Section 5 — AI enrichment overlay**, incorporating the existing contract plus the locked community-naming design and `CommunityEvidence`. It preserves the generic overlay contract for future evolution while making clear that **community naming is the only activated V0 enrichment capability**. 
 
-provider
-model
-profile_version
-enabled_features
-max_concurrency
+# 5 — AI enrichment overlay
 
+**Status: Locked for V0**
 
-```
-## Notes  
-* profile_version versions the complete Bridger-owned enrichment prompt/policy bundle.  
-* Model execution goes through Bridger's model runtime, not Graphify's provider configuration.  
-* enabled_features allows enrichment capabilities to be activated independently.  
-Initial feature set:  
-```
+## Responsibility
 
+Layer 5 is entirely **Bridger-owned**.
+
+It consumes a published deterministic graph snapshot from Layer 4 and produces a separate immutable AI enrichment overlay.
+
+Graphify is not involved in Layer 5 execution.
+
+For V0, Layer 5 implements one AI enrichment capability:
+
+```text
 community_names
+```
+
+Its sole responsibility is to assign useful semantic names to deterministic communities produced by Layer 3 and persisted by Layer 4.
+
+The purpose of this enrichment is to make otherwise anonymous structural communities easier for downstream agents and models to identify and navigate.
+
+Layer 5 does not attempt to summarize repository behavior or reproduce information already available from the deterministic graph.
+
+The following possible enrichment capabilities are deferred and require separate design decisions before activation:
+
+```text
 high_centrality_labels
-
-
-```
-Future features can include:  
-```
-
+semantic_categories
+importance_explanations
+anomaly_annotations
 entity_scores
 edge_scores
 community_scores
-importance_explanations
-anomaly_annotations
-semantic_categories
-
-
-```
-The exact score semantics remain deferred until their metrics are formally designed.  
-  
-```
-EnrichmentRecord
-
-```
-Represents **one AI-generated annotation over one deterministic graph target**.  
 ```
 
+Layer 5 must never mutate deterministic graph topology, community membership, deterministic labels, structural confidence, or canonical graph facts.
+
+---
+
+## Contracts
+
+### `GraphEnrichmentConfig`
+
+Configuration for one enrichment pass.
+
+```text
+GraphEnrichmentConfig
+├── provider
+├── model
+├── profile_version
+├── enabled_features
+└── max_concurrency
+```
+
+### Notes
+
+* `profile_version` versions the complete Bridger-owned community-naming inference policy, not only the prompt text.
+* It covers at least:
+
+  * prompt;
+  * `CommunityEvidence` schema;
+  * representative-selection algorithm;
+  * importance-ranking policy;
+  * diversity policy;
+  * representative limit;
+  * node-type and source-path inclusion policy;
+  * sanitization and truncation rules;
+  * batching policy;
+  * structured-output schema;
+  * relevant inference configuration.
+* Model execution goes through Bridger's `LLMClient`, not Graphify's provider configuration.
+* `enabled_features` remains extensible, but the only active V0 feature is:
+
+```text
+community_names
+```
+
+A material change to the naming policy requires a new `profile_version`.
+
+---
+
+### `CommunityRepresentative`
+
+Represents one deterministic graph node selected as evidence for community naming.
+
+```text
+CommunityRepresentative
+├── label
+├── node_type?
+└── source_path?
+```
+
+Fields:
+
+* `label` is required and provides the primary semantic signal supplied to the model.
+* `node_type` is included when available and helps distinguish files, classes, functions, methods, or other graph entities.
+* `source_path` is included when available and must be a normalized repository-relative path.
+
+No source contents or source excerpts are included.
+
+---
+
+### `CommunityEvidence`
+
+Canonical bounded deterministic evidence supplied to the model for one community.
+
+```text
+CommunityEvidence
+├── community_id
+├── important_representatives: list[CommunityRepresentative]
+└── other_representatives: list[CommunityRepresentative]
+```
+
+`community_id` identifies the community inside the inference batch so the model can associate its generated name with the correct input.
+
+It is not sufficient as persisted target identity. `member_signature` remains harness-owned and is attached later when Bridger constructs the corresponding `EnrichmentRecord`.
+
+`important_representatives` contains selected god/high-centrality or otherwise structurally prominent members of the community.
+
+`other_representatives` contains additional members selected deterministically to provide diverse semantic coverage of the community.
+
+The distinction between the two lists is model-visible.
+
+Structurally important representatives must not be flattened into an undifferentiated representative list because their structural prominence is itself useful naming evidence.
+
+Representative selection follows these rules:
+
+1. God/high-centrality nodes belonging to the community receive priority.
+2. Remaining candidates are ranked by structural importance, with internal-community connectivity preferred for representing the community itself.
+3. Diversity constraints prevent one file, one owning entity, or one repetitive family of nodes from dominating the context.
+4. Duplicate or case-equivalent labels are removed.
+5. Labels and optional metadata are sanitized and length-bounded.
+6. The number of representatives is bounded by the naming profile.
+7. Selection is deterministic for the same graph and profile.
+
+The initial profile should remain close to Graphify's inexpensive strategy, using approximately **12 total representatives per community**, unless evaluation justifies another limit.
+
+Conceptually:
+
+```text
+CommunityEvidence
+├── community_id = 4
+│
+├── important_representatives
+│   ├── PaymentService
+│   └── OrderOrchestrator
+│
+└── other_representatives
+    ├── StripeClient
+    ├── InvoiceRepository
+    ├── create_payment
+    └── PaymentController
+```
+
+`CommunityEvidence` deliberately excludes:
+
+* complete community membership;
+* complete graph relationships or neighborhoods;
+* repository source contents;
+* semantic summaries;
+* semantic tags;
+* AI scores;
+* arbitrary repository context.
+
+The complete deterministic graph remains available to downstream Bridger layers.
+
+Layer 5 supplies only the minimum AI semantics required to make structural communities easier to navigate.
+
+---
+
+### Community naming structured output
+
+All community-naming model calls use provider-supported structured output through Bridger's `LLMClient`.
+
+The model-facing output contracts are Bridger-owned Pydantic models:
+
+```text
+CommunityName
+├── community_id
+└── name
+
+CommunityNameBatch
+└── communities: list[CommunityName]
+```
+
+The model consumes:
+
+```text
+list[CommunityEvidence]
+```
+
+and returns:
+
+```text
+CommunityNameBatch
+```
+
+The model generates only:
+
+```text
+community_id
+name
+```
+
+Bridger constructs all authoritative metadata itself:
+
+```text
 enrichment_id
 target_type
 target_ref
 annotation_type
-value
-confidence?
 deterministic_features
-
-target_type
-
-```
-Defines what deterministic graph entity the record annotates.  
-Supported V0 target types:  
+graph snapshot binding
+model/provider/profile provenance
 ```
 
+The LLM never generates deterministic target identity or provenance.
+
+Raw model text is never manually parsed.
+
+---
+
+### `EnrichmentRecord`
+
+Represents **one AI-generated annotation over one deterministic graph target**.
+
+```text
+EnrichmentRecord
+├── enrichment_id
+├── target_type
+├── target_ref
+├── annotation_type
+├── value
+├── confidence?
+└── deterministic_features
+```
+
+The contract remains generic so later enrichment capabilities can be added without introducing a new persisted annotation model.
+
+For V0, the only produced records are:
+
+```text
+target_type = community
+annotation_type = name
+```
+
+---
+
+### `target_type`
+
+Defines what deterministic graph entity an enrichment record annotates.
+
+The generic overlay contract supports:
+
+```text
 node
 edge
 hyperedge
 community
 graph
-
-
-```
-No separate NodeRef, EdgeRef, CommunityRef, etc. contracts are introduced.  
-  
-```
-target_ref
-
-```
-Its shape depends on target_type.  
-**Node**  
 ```
 
+Only `community` is actively enriched in V0.
+
+No separate `NodeRef`, `EdgeRef`, `CommunityRef`, etc. contracts are introduced.
+
+---
+
+### `target_ref`
+
+Its shape depends on `target_type`.
+
+#### Node
+
+```text
 target_type = node
 
 target_ref = node_id
-
-
-```
-The node ID must exist in the targeted RepositoryGraph.  
-Example:  
 ```
 
+The node ID must exist in the targeted `RepositoryGraph`.
+
+Example:
+
+```json
 {
   "target_type": "node",
   "target_ref": "src/payment/service.py::PaymentService"
 }
-
-
-```
-  
-**Edge**  
 ```
 
+Node enrichment is not active in V0.
+
+#### Edge
+
+```text
 target_type = edge
 
 target_ref = {
@@ -783,13 +965,13 @@ target_ref = {
     target_node_id,
     relation
 }
-
-
-```
-All three are required because Layer 3 uses nx.DiGraph and relation is part of the logical edge identity.  
-Example:  
 ```
 
+All three values are required because Layer 3 uses `nx.DiGraph` and relation is part of the logical edge identity.
+
+Example:
+
+```json
 {
   "target_type": "edge",
   "target_ref": {
@@ -798,50 +980,53 @@ Example:
     "relation": "calls"
   }
 }
-
-
-```
-The enclosing overlay already carries the graph snapshot identity, so snapshot_id is not duplicated inside the edge reference.  
-  
-**Hyperedge**  
 ```
 
+The enclosing overlay already carries graph snapshot identity, so `snapshot_id` is not duplicated inside the edge reference.
+
+Edge enrichment is not active in V0.
+
+#### Hyperedge
+
+```text
 target_type = hyperedge
 
 target_ref = hyperedge_id
-
-
-```
-The ID must resolve against the hyperedges stored in graph metadata.  
-Example:  
 ```
 
+The ID must resolve against the hyperedges stored in graph metadata.
+
+Example:
+
+```json
 {
   "target_type": "hyperedge",
   "target_ref": "payment_flow_12"
 }
-
-
-```
-  
-**Community**  
 ```
 
+Hyperedge enrichment is not active in V0.
+
+#### Community
+
+```text
 target_type = community
 
 target_ref = {
     community_id,
     member_signature
 }
-
-
-```
-Both values are required.  
-community_id alone is insufficient because community IDs are snapshot-relative and clustering may produce different memberships after graph changes.  
-member_signature therefore binds the enrichment to the exact deterministic member set.  
-Example:  
 ```
 
+Both values are required.
+
+`community_id` alone is insufficient because community IDs are snapshot-relative and clustering may produce different memberships after graph changes.
+
+`member_signature` therefore binds the enrichment to the exact deterministic member set.
+
+Example:
+
+```json
 {
   "target_type": "community",
   "target_ref": {
@@ -849,249 +1034,479 @@ Example:
     "member_signature": "a91b37e84cd88210"
   }
 }
-
-
-```
-This follows the community-signature mechanism already retained from Graphify.  
-  
-**Whole graph**  
 ```
 
+This follows the community-signature mechanism already retained from Graphify.
+
+Community is the only active V0 enrichment target.
+
+#### Whole graph
+
+```text
 target_type = graph
 
 target_ref = "graph"
-
-
-```
-The graph snapshot itself is identified by the enclosing GraphEnrichmentOverlay.graph_snapshot_id.  
-This avoids repeating repository ID, revision, scope, or snapshot identity inside the record.  
-  
-```
-annotation_type
-
-```
-Identifies the semantic meaning of the annotation.  
-Examples:  
 ```
 
+The graph snapshot itself is identified by the enclosing `GraphEnrichmentOverlay.graph_snapshot_id`.
+
+Whole-graph enrichment is not active in V0.
+
+---
+
+### `annotation_type`
+
+Identifies the semantic meaning of the annotation.
+
+The generic contract can support values such as:
+
+```text
 name
 semantic_label
 semantic_category
 importance_explanation
 anomaly
 score:<metric_id>
-
-
-```
-This remains intentionally generic.  
-Examples:  
 ```
 
+For V0, the only active annotation type is:
+
+```text
 name
-score:architectural_importance
-score:change_risk
-semantic_category
-
-
-```
-The goal is to avoid separate schemas for community names, node classifications, scores, explanations, etc.  
-  
-```
-value
-
-```
-Contains the actual AI-generated enrichment value.  
-Examples:  
 ```
 
+Future annotation types require separate design and evaluation before activation.
+
+---
+
+### `value`
+
+Contains the actual AI-generated enrichment value.
+
+For V0 community naming:
+
+```text
 "Payment Processing"
-
-
-"Core orchestration component"
-
-
-0.87
-
-
-{
-  "category": "persistence_boundary",
-  "explanation": "..."
-}
-
-
-```
-Its exact shape depends on annotation_type.  
-  
-```
-confidence
-
-```
-Optional AI confidence.  
-It is explicitly distinct from Graphify's deterministic edge confidence such as:  
 ```
 
+Its exact shape may depend on `annotation_type` for future enrichment capabilities.
+
+---
+
+### `confidence`
+
+Optional AI confidence.
+
+It is explicitly distinct from Graphify's deterministic edge confidence such as:
+
+```text
 EXTRACTED
 INFERRED
 AMBIGUOUS
-
-
-```
-AI confidence must never overwrite or reinterpret structural confidence.  
-  
-```
-deterministic_features
-
-```
-Records the deterministic graph evidence used by the model.  
-Example:  
 ```
 
+AI confidence must never overwrite or reinterpret structural confidence.
+
+---
+
+### `deterministic_features`
+
+Records the exact bounded deterministic evidence used by the model.
+
+For V0 community naming, `deterministic_features` is derived from the corresponding `CommunityEvidence`.
+
+Example:
+
+```json
 {
-  "degree": 47,
-  "community_size": 83,
-  "cohesion": 0.31,
-  "representative_nodes": [
-    "PaymentService",
-    "InvoiceRepository"
+  "important_representatives": [
+    {
+      "label": "PaymentService",
+      "node_type": "class",
+      "source_path": "src/payments/service.py"
+    }
   ],
-  "dominant_relations": [
-    "calls",
-    "imports"
+  "other_representatives": [
+    {
+      "label": "StripeClient",
+      "node_type": "class",
+      "source_path": "src/integrations/stripe.py"
+    },
+    {
+      "label": "create_payment",
+      "node_type": "function",
+      "source_path": "src/payments/service.py"
+    }
   ]
 }
-
-
-```
-Purpose:  
 ```
 
-deterministic graph facts
+`community_id` does not need to be duplicated inside `deterministic_features` because it is already represented by `target_ref`.
+
+Purpose:
+
+```text
+deterministic graph
         ↓
-AI interpretation
+representative selection
+        ↓
+CommunityEvidence
+        ↓
+AI naming
         ↓
 auditable EnrichmentRecord
-
-
 ```
-This field provides the explicit trace between deterministic structure and model interpretation.  
-It should contain bounded graph-derived features, not arbitrary repository source.  
-  
-```
+
+`deterministic_features` must faithfully represent the evidence actually supplied to the model.
+
+It must not contain additional graph facts, graph relationships, repository source, or other context that the model did not receive.
+
+---
+
+### `GraphEnrichmentOverlay`
+
+Represents one immutable enrichment pass over exactly one deterministic graph snapshot.
+
+```text
 GraphEnrichmentOverlay
-
-```
-Represents one immutable enrichment pass over exactly one deterministic graph snapshot.  
-```
-
-schema_version
-overlay_id
-
-graph_snapshot_id
-
-generator_version
-provider
-model
-profile_version
-enabled_features
-
-created_at
-
-records: list[EnrichmentRecord]
-
-
-```
-## Notes  
-* graph_snapshot_id is the authoritative binding to Layer 4.  
-* Repository ID, revision and scope are not duplicated because they are available through the corresponding GraphSnapshotManifest.  
-* Model/provider/profile metadata is overlay-level in V0 because one enrichment pass uses one configuration.  
-* AI provenance therefore does not need to be repeated in every EnrichmentRecord.  
-* A second enrichment pass over the same graph creates another immutable overlay_id.  
-  
-## Interfaces  
-```
-enrich_graph_snapshot
-
-```
-Primary Layer 4 → Layer 5 interface.  
+├── schema_version
+├── overlay_id
+├── graph_snapshot_id
+├── generator_version
+├── provider
+├── model
+├── profile_version
+├── enabled_features
+├── created_at
+├── generation_summary: EnrichmentGenerationSummary
+└── records: list[EnrichmentRecord]
 ```
 
+`EnrichmentGenerationSummary` records execution coverage and partial failures without introducing a separate run manifest.
+
+```text
+EnrichmentGenerationSummary
+└── features: dict[feature_id, FeatureGenerationSummary]
+
+FeatureGenerationSummary
+├── status: complete | partial
+├── target_count
+├── generated_count
+├── reused_count
+├── failed_target_count
+├── batch_count
+├── failed_batch_count
+└── failed_batches: list[FailedEnrichmentBatch]
+
+FailedEnrichmentBatch
+├── batch_id
+├── target_refs
+├── attempts
+└── error_category
+```
+
+Rules:
+
+* Generation summaries are execution metadata, not enrichment annotations.
+* A failed batch does not invalidate successful batches or prevent publication of an otherwise valid overlay.
+* Failed targets produce no AI `EnrichmentRecord`; downstream composition may use the deterministic community label already available from the structural layer.
+* `target_refs` identifies exactly which deterministic targets were not AI-enriched.
+* `attempts` records total model-call attempts for the batch.
+* `error_category` is a bounded diagnostic category; raw provider responses or exception payloads are not persisted.
+* Layer 5 owns retry behavior.
+* V0 permits at most **3 total model-call attempts per failed batch**.
+* Publication with failed targets is valid and is represented by `status = partial`.
+* `generated_count + reused_count + failed_target_count` must equal `target_count`.
+
+### Notes
+
+* `graph_snapshot_id` is the authoritative binding to Layer 4.
+* Repository ID, revision, and scope are not duplicated because they are available through the corresponding `GraphSnapshotManifest`.
+* Model/provider/profile metadata is overlay-level in V0 because one enrichment pass uses one configuration.
+* AI provenance therefore does not need to be repeated in every `EnrichmentRecord`.
+* A second enrichment pass over the same graph creates another immutable `overlay_id`.
+
+---
+
+## Interfaces
+
+### `enrich_graph_snapshot`
+
+Primary Layer 4 → Layer 5 interface.
+
+```text
 enrich_graph_snapshot(
     graph_build: GraphBuildResult,
     config: GraphEnrichmentConfig,
 )
     -> GraphEnrichmentOverlay
-
-
-```
-Conceptual flow:  
 ```
 
+Conceptual V0 flow:
+
+```text
 GraphBuildResult
         ↓
 load graph + structural state
         ↓
-select targets
+select community representatives
         ↓
-derive bounded deterministic features
+build deterministic CommunityEvidence
         ↓
-Bridger model inference
+compute naming-input fingerprint
         ↓
-parse EnrichmentRecord[]
+reuse compatible previous names where possible
         ↓
-validate targets and evidence
+stable batching of remaining CommunityEvidence
+        ↓
+async structured inference through LLMClient
+        ↓
+validate CommunityNameBatch
+        ↓
+retry failed batches only
+        ↓
+wait for all batches
+        ↓
+deterministic merge
+        ↓
+construct EnrichmentRecord[]
+        ↓
+build generation summary
+        ↓
+validate overlay
         ↓
 persist immutable overlay
-
-
-```
-## Important execution rule  
-The model receives bounded graph-derived context.  
-For example, community naming may use:  
 ```
 
+---
+
+## Community naming execution rule
+
+Community naming uses only bounded `CommunityEvidence`.
+
+The model receives:
+
+```text
 community_id
+important_representatives
+other_representatives
+```
+
+Each representative may contain:
+
+```text
+label
+node_type?
+source_path?
+```
+
+The model does not receive:
+
+* complete community membership;
+* complete graph relationships or neighborhoods;
+* community cohesion or other graph metrics;
+* repository source contents or excerpts;
+* unrestricted repository context.
+
+The naming prompt retains Graphify's simple objective:
+
+```text
+You are naming clusters in a software repository knowledge graph.
+
+Give each community a concise 2–5 word plain-language name.
+
+Examples:
+"Order Management"
+"Payment Flow"
+"Auth Middleware"
+```
+
+The prompt additionally explains that:
+
+* `important_representatives` are structurally prominent members and should receive greater weight as semantic signals;
+* `other_representatives` provide diverse additional coverage.
+
+No repository-wide reasoning, source inspection, behavioral summarization, or agentic graph navigation occurs during community naming.
+
+Layer 5 therefore performs bounded semantic labeling, not repository analysis.
+
+---
+
+## Structured-output validation
+
+Provider-supported structured output guarantees response shape but does not replace Bridger validation.
+
+For every returned `CommunityNameBatch`, Bridger validates:
+
+```text
+all requested community IDs are returned
+no community ID is returned twice
+no unknown community ID is returned
+every name is non-empty
+every name satisfies configured naming bounds
+```
+
+A structurally valid model response that violates the requested batch contract is considered a failed attempt.
+
+No regex recovery, JSON repair, partial-text salvage, or manual parsing is permitted.
+
+---
+
+## Batching and async execution
+
+Communities requiring generation are placed in deterministic stable order.
+
+Their `CommunityEvidence` objects are divided into bounded batches.
+
+Conceptually:
+
+```text
+CommunityEvidence objects requiring generation
+        ↓
+stable ordering
+        ↓
+batch 1
+batch 2
+...
+batch N
+```
+
+Batch size should remain large enough to minimize model calls while respecting provider input and output limits.
+
+Graphify's approximately 100-community batching strategy is the initial reference point, but the exact value is profile-owned and may be adjusted through evaluation.
+
+Independent batches execute concurrently through Bridger's asynchronous `LLMClient`.
+
+Concurrency is bounded by:
+
+```text
+GraphEnrichmentConfig.max_concurrency
+```
+
+A failure in one batch must never cancel successful or still-running sibling batches.
+
+Every batch reaches one final state:
+
+```text
+success
+failed
+```
+
+The system waits until all batches have reached a final state before merging results.
+
+---
+
+## Retry policy
+
+Retry ownership belongs entirely to Layer 5.
+
+A failed batch is retried independently.
+
+The maximum retry budget is:
+
+```text
+3 total model-call attempts per batch
+```
+
+Meaning:
+
+```text
+attempt 1
+attempt 2
+attempt 3
+→ failed
+```
+
+Only the failed batch is retried.
+
+Successful batches are never repeated because another batch failed.
+
+There is no additional hidden Layer 5 retry loop.
+
+If `LLMClient` itself performs lower-level transport retries, the effective call semantics must remain explicit so Layer 5's cost ceiling is not accidentally multiplied.
+
+After three failed attempts, the batch is marked failed and its targets produce no AI `EnrichmentRecord`.
+
+---
+
+## Label reuse
+
+Previously generated AI names may be reused when the exact effective naming input remains compatible.
+
+Reuse is not based on `community_id` alone.
+
+The canonical naming input is the deterministic `CommunityEvidence` constructed for that community.
+
+A naming-input fingerprint is derived from:
+
+```text
+annotation_type
++
 member_signature
-community size
-cohesion
-representative nodes
-high-degree nodes
-source-file distribution
-important internal relations
-cross-community relations
-
-
-```
-A high-centrality-node annotation may use:  
++
+canonical serialized CommunityEvidence
++
+profile_version
++
+provider
++
+model
 ```
 
-node attributes
-degree
-incoming/outgoing relations
-community
-neighbor summaries
-structural-analysis signals
+Conceptually:
 
-
-```
-Layer 5 is therefore graph interpretation, not repository-wide source analysis.  
-  
-```
-validate_graph_enrichment
-
-```
-Validates an overlay against its deterministic graph snapshot.  
+```text
+input_fingerprint =
+hash(
+    annotation_type
+    + member_signature
+    + canonical_community_evidence
+    + profile_version
+    + provider
+    + model
+)
 ```
 
+Using canonical serialized `CommunityEvidence` ensures that reuse is invalidated when the actual semantic evidence supplied to the model changes, including:
+
+* representative selection;
+* important-versus-other representative classification;
+* representative labels;
+* included node types;
+* included source paths.
+
+If the fingerprint matches a compatible previously generated name:
+
+```text
+reuse
+```
+
+Otherwise:
+
+```text
+regenerate
+```
+
+A reused label is materialized as a new `EnrichmentRecord` belonging to the new overlay and targeting the current graph snapshot.
+
+The new overlay never references a previous overlay record as its authoritative annotation.
+
+---
+
+### `validate_graph_enrichment`
+
+Validates an overlay against its deterministic graph snapshot.
+
+```text
 validate_graph_enrichment(
     overlay,
     graph_build
 ) -> None
-
-
-```
-Validation includes:  
 ```
 
+Generic target validation includes:
+
+```text
 node
 → node exists
 
@@ -1107,92 +1522,182 @@ community
 
 graph
 → graph_snapshot_id matches
-
-
-```
-It also validates:  
-* schema correctness;  
-* confidence bounds;  
-* supported annotation types;  
-* uniqueness of (target, annotation_type) where required;  
-* consistency of declared deterministic features;  
-* absence of unknown deterministic targets.  
-A failed validation means the overlay is not published.  
-  
-```
-load_graph_enrichment
-
-```
-Loads an existing enrichment overlay for downstream use.  
 ```
 
+For the active V0 community-naming feature, validation additionally checks:
+
+* schema correctness;
+* supported feature and annotation type;
+* community existence;
+* exact `member_signature`;
+* uniqueness of community-name records;
+* consistency between persisted `deterministic_features` and the canonical `CommunityEvidence` used for inference;
+* generation-summary consistency;
+* absence of unknown deterministic targets.
+
+A failed validation means the overlay is not published.
+
+---
+
+### `load_graph_enrichment`
+
+Loads an existing enrichment overlay for downstream use.
+
+```text
 load_graph_enrichment(
     artifact,
     expected_graph_snapshot_id
 ) -> GraphEnrichmentOverlay
-
-
-```
-The overlay must match the requested deterministic graph snapshot.  
-Layer 6 later performs read-time composition:  
 ```
 
+The overlay must match the requested deterministic graph snapshot.
+
+Layer 6 later performs read-time composition:
+
+```text
 RepositoryGraph
 +
 GraphEnrichmentOverlay
 =
 enriched navigation view
-
-
-```
-Layer 5 itself does not mutate or materialize a new canonical graph.  
-  
-## Persistence  
-One self-contained artifact per enrichment run:  
 ```
 
+Layer 5 itself does not mutate or materialize a new canonical graph.
+
+---
+
+## Deterministic fallback
+
+Layer 5 does not reproduce deterministic community naming.
+
+The deterministic community label already persisted in Layer 4's `structural.json` remains independently available.
+
+Therefore:
+
+```text
+AI naming succeeds
+→ AI EnrichmentRecord exists
+
+AI naming fails
+→ no AI naming record exists
+```
+
+Layer 6 later resolves presentation as:
+
+```text
+AI community name
+    if available
+
+otherwise
+
+deterministic community label
+```
+
+This preserves the deterministic/AI authority boundary.
+
+---
+
+## Merge semantics
+
+Model workers do not mutate the overlay while running.
+
+Each batch returns an isolated result.
+
+Only after all batches reach a final state does Layer 5 perform one deterministic merge:
+
+```text
+reused results
++
+successful generated results
++
+failed-target metadata
+        ↓
+final ordered enrichment records
++
+generation summary
+```
+
+Persisted ordering is therefore independent of asynchronous completion order.
+
+---
+
+## Persistence
+
+One self-contained artifact is produced per enrichment run:
+
+```text
 .bridger/
 └── enrichment/
     └── <graph-snapshot-id>/
         └── <overlay-id>/
             └── graph-enrichment.json
-
-
 ```
-No separate EnrichmentManifest is introduced.  
-GraphEnrichmentOverlay already contains the required identity and generation metadata.  
-The Repository Brain publication layer later decides which graph snapshot and which enrichment overlay belong together.  
+
+No separate `EnrichmentManifest` is introduced.
+
+`GraphEnrichmentOverlay` already contains the required identity, provenance, execution metadata, and records.
+
+A rerun always creates a new immutable `overlay_id`.
+
+The Repository Brain publication layer later decides which deterministic graph snapshot and which enrichment overlay belong together.
+
+---
+
+## Locked rules and notes
+
+1. Layer 5 is entirely Bridger-owned.
+2. Graphify stops at deterministic graph construction, structural analysis, and persistence.
+3. Community naming is the only activated AI enrichment capability in V0.
+4. Bridger reimplements AI community naming rather than executing Graphify's LLM labeling pipeline.
+5. Additional enrichment capabilities require separate design and evaluation before activation.
+6. AI enrichment is always physically separate from deterministic graph artifacts.
+7. Enrichment must never create, delete, or rewrite deterministic nodes, edges, hyperedges, communities, deterministic labels, or confidence values.
+8. `EnrichmentRecord` remains the single generic persisted annotation contract.
+9. `target_type` determines how `target_ref` is interpreted.
+10. `target_ref` never repeats `graph_snapshot_id`; the enclosing overlay already provides snapshot scope.
+11. Community targets require both `community_id` and `member_signature`.
+12. Community IDs alone are insufficient for enrichment identity or reuse.
+13. `CommunityEvidence` is the canonical typed deterministic input supplied to the LLM for one community.
+14. `CommunityEvidence` contains `community_id`, `important_representatives`, and `other_representatives`.
+15. Representative evidence contains a required label and optional node type and repository-relative source path when available.
+16. Representative selection prioritizes structural importance while enforcing diversity.
+17. God/high-centrality status is preserved explicitly through `important_representatives` rather than lost through label concatenation.
+18. Representative selection and `CommunityEvidence` construction are deterministic for the same graph and profile.
+19. The initial profile uses approximately 12 total representatives per community unless evaluation justifies another limit.
+20. Complete community membership, complete graph relationships, graph neighborhoods, and repository source are not supplied to the naming model.
+21. Layer 5 consumes bounded graph-derived evidence, not unrestricted repository contents.
+22. Community naming uses provider-supported structured output through Bridger's `LLMClient`.
+23. The model output contract is `CommunityNameBatch`; the model does not generate `EnrichmentRecord` objects.
+24. Raw LLM text parsing, JSON repair, regex salvage, or partial-text recovery is prohibited.
+25. The LLM generates only `community_id` and semantic `name`; Bridger owns target identity, provenance, evidence, and overlay metadata.
+26. `deterministic_features` faithfully records the bounded evidence actually supplied to the model.
+27. `deterministic_features` must not contain additional graph facts or repository evidence that the model did not receive.
+28. Communities are processed in stable bounded batches.
+29. Independent batches execute asynchronously under `max_concurrency`.
+30. Batch failures are isolated and never cancel sibling batches.
+31. Layer 5 owns retry behavior.
+32. A batch receives at most **3 total model-call attempts**.
+33. Only failed batches are retried.
+34. All batches reach a final state before deterministic merge.
+35. Successful results are not regenerated because another batch failed.
+36. Failed targets produce no AI naming record.
+37. Partial overlays are valid and publishable when all successful records and metadata validate.
+38. The deterministic Layer 3/4 community label is the fallback when no AI name exists.
+39. Label reuse requires compatibility of `member_signature`, canonical serialized `CommunityEvidence`, `profile_version`, provider, and model.
+40. A compatible reused name is materialized into the new immutable overlay.
+41. `profile_version` versions the complete naming policy, including evidence construction and representative selection.
+42. `generation_summary` records generated, reused, and failed coverage plus exhausted batches.
+43. One enrichment pass uses one model/provider/profile configuration in V0.
+44. Overlay lifecycle is immutable: rerunning enrichment creates a new `overlay_id`.
+45. No per-record active/stale/superseded/rejected lifecycle field is introduced in V0.
+46. Staleness is determined by graph-snapshot mismatch.
+47. Supersession is determined by whichever overlay a later Repository Brain snapshot selects.
+48. Rejected or invalid overlays are not published.
+49. Layer 6 owns composition of deterministic graph plus enrichment for navigation and querying.
+50. The community-naming implementation should keep batching, async execution, retries, validation, provenance, merge, and publication machinery separable from the naming-specific evidence and prompt logic so future Layer 5 capabilities can reuse the infrastructure without changing the locked V0 community-naming semantics.
+
   
-## Locked rules and notes  
-* Layer 5 is entirely Bridger-owned.  
-* Graphify stops at deterministic graph construction, structural analysis, and persistence.  
-* Bridger reimplements AI community naming rather than using Graphify's LLM label pipeline.  
-* The same Bridger enrichment machinery extends to god-node labels, semantic categories, explanations, anomalies, and future scores.  
-* AI enrichment is always physically separate from deterministic graph artifacts.  
-* Enrichment must never create, delete, or rewrite deterministic nodes, edges, hyperedges, communities, or confidence values.  
-* EnrichmentRecord is the single generic annotation contract for V0.  
-* target_type determines how target_ref is interpreted.  
-* target_ref never repeats graph_snapshot_id; the enclosing overlay already provides snapshot scope.  
-* Node targets use stable Graphify node IDs.  
-* Edge targets use (source_node_id, target_node_id, relation) within the targeted graph snapshot.  
-* Hyperedge targets use the deterministic hyperedge ID.  
-* Community targets require both community_id and member_signature.  
-* Whole-graph enrichment uses target_ref = "graph".  
-* Community IDs are not stable enough by themselves to support enrichment reuse.  
-* AI confidence is separate from deterministic structural confidence.  
-* deterministic_features records the bounded deterministic evidence used to generate each annotation.  
-* Layer 5 consumes graph-derived structural context, not unrestricted repository contents.  
-* The exact semantics of future scores remain deferred.  
-* One enrichment pass uses one model/provider/profile configuration in V0.  
-* Overlay lifecycle is immutable: rerunning enrichment creates a new overlay_id.  
-* No per-record active/stale/superseded/rejected lifecycle field is introduced in V0.  
-* Staleness is determined by graph-snapshot mismatch.  
-* Supersession is determined by whichever overlay a later Repository Brain snapshot selects.  
-* Rejected or invalid overlays are simply not published.  
-* Layer 6 owns composition of deterministic graph plus enrichment for navigation and querying.  
-  
-##   
-## 6 — Composite graph access and repository navigation  
+# 6 — Composite graph access and repository navigation  
 ## Responsibility  
 Layer 6 provides the **unified read surface used by agents** across:  
 ```
@@ -1803,6 +2308,8 @@ source search / bounded reads
 grounded evidence
 
 ```
+
+
   
   
 # TO BE DEFINED - SUGGESTIONS ONLY FOR NOW, NOT LOCKED VERSION  

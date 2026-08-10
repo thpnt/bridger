@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from graphify.extractors.base import _LANGUAGE_BUILTIN_GLOBALS, _file_stem, _make_id, _read_text
+from graphify.extractors.symbols import make_symbol
 
 
 _GO_PREDECLARED_TYPES = frozenset({
@@ -103,6 +104,7 @@ def extract_go(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     function_bodies: list[tuple[str, object]] = []
     go_imported_pkgs: set[str] = set()  # local names of imported packages
@@ -214,8 +216,20 @@ def extract_go(path: Path) -> dict:
                 func_nid = _make_id(stem, func_name)
                 add_node(func_nid, f"{func_name}()", line)
                 add_edge(file_nid, func_nid, "contains", line)
-                emit_go_method_refs(node, func_nid, line)
                 body = node.child_by_field_name("body")
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=func_name,
+                        kind="function",
+                        qualified_name=f"{pkg_scope}.{func_name}",
+                        language="go",
+                        body_node=body,
+                    )
+                )
+                emit_go_method_refs(node, func_nid, line)
                 if body:
                     function_bodies.append((func_nid, body))
             return
@@ -247,8 +261,27 @@ def extract_go(path: Path) -> dict:
                 add_node(method_nid, f"{method_name}()", line)
                 add_edge(file_nid, method_nid, "contains", line)
 
-            emit_go_method_refs(node, method_nid, line)
             body = node.child_by_field_name("body")
+            parent_name = f"{pkg_scope}.{receiver_type}" if receiver_type else None
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=method_name,
+                    kind="method" if receiver_type else "function",
+                    qualified_name=(
+                        f"{parent_name}.{method_name}"
+                        if parent_name
+                        else f"{pkg_scope}.{method_name}"
+                    ),
+                    parent_qualified_name=parent_name,
+                    language="go",
+                    body_node=body,
+                )
+            )
+
+            emit_go_method_refs(node, method_nid, line)
             if body:
                 function_bodies.append((method_nid, body))
             return
@@ -271,6 +304,24 @@ def extract_go(path: Path) -> dict:
                     if tc.type in ("struct_type", "interface_type"):
                         type_body = tc
                         break
+                symbol_kind = "type"
+                if type_body is not None:
+                    symbol_kind = (
+                        "struct" if type_body.type == "struct_type" else "interface"
+                    )
+                type_qualified_name = f"{pkg_scope}.{type_name}"
+                symbols.append(
+                    make_symbol(
+                        child,
+                        source,
+                        path,
+                        name=type_name,
+                        kind=symbol_kind,
+                        qualified_name=type_qualified_name,
+                        language="go",
+                        body_node=type_body,
+                    )
+                )
                 if type_body is None:
                     continue
                 if type_body.type == "struct_type":
@@ -283,6 +334,26 @@ def extract_go(path: Path) -> dict:
                             has_name = any(
                                 fc.type == "field_identifier" for fc in field.children
                             )
+                            for field_name_node in (
+                                field_child
+                                for field_child in field.children
+                                if field_child.type == "field_identifier"
+                            ):
+                                field_name = _read_text(field_name_node, source)
+                                symbols.append(
+                                    make_symbol(
+                                        field,
+                                        source,
+                                        path,
+                                        name=field_name,
+                                        kind="field",
+                                        qualified_name=(
+                                            f"{type_qualified_name}.{field_name}"
+                                        ),
+                                        parent_qualified_name=type_qualified_name,
+                                        language="go",
+                                    )
+                                )
                             type_node = field.child_by_field_name("type")
                             if type_node is None:
                                 for fc in field.children:
@@ -431,4 +502,9 @@ def extract_go(path: Path) -> dict:
         if src in valid_ids and (tgt in valid_ids or edge["relation"] in ("imports", "imports_from")):
             clean_edges.append(edge)
 
-    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
+    return {
+        "nodes": nodes,
+        "edges": clean_edges,
+        "symbols": symbols,
+        "raw_calls": raw_calls,
+    }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from graphify.extractors.base import _file_stem, _make_id, _read_text
+from graphify.extractors.symbols import make_symbol
 from graphify.extractors.engine import _cpp_declarator_name, _semantic_reference_edge
 from graphify.extractors.resolution import _resolve_c_include_path
 from pathlib import Path
@@ -68,12 +69,14 @@ def extract_objc(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     method_bodies: list[tuple[str, Any, str]] = []
     # #1556: unresolved message sends saved for the cross-file ObjC resolver, plus a
     # per-file `var -> ClassName` table from `Foo *f = ...;` local declarations.
     raw_calls: list[dict] = []
     objc_type_table: dict[str, str] = {}
+    qualified_names_by_node_id: dict[str, str] = {}
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -190,6 +193,27 @@ def extract_objc(path: Path) -> dict:
             cls_nid = _make_id(stem, name)
             add_node(cls_nid, name, line)
             add_edge(file_nid, cls_nid, "contains", line)
+            interface_body = next(
+                (
+                    child
+                    for child in node.children
+                    if child.type in ("property_declaration", "method_declaration")
+                ),
+                None,
+            )
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=name,
+                    kind="class",
+                    qualified_name=name,
+                    language="objective-c",
+                    body_node=interface_body,
+                )
+            )
+            qualified_names_by_node_id[cls_nid] = name
             # superclass is second identifier after ':'
             colon_seen = False
             for child in node.children:
@@ -247,6 +271,27 @@ def extract_objc(path: Path) -> dict:
             if impl_nid not in seen_ids:
                 add_node(impl_nid, name, line)
                 add_edge(file_nid, impl_nid, "contains", line)
+            implementation_body = next(
+                (
+                    child
+                    for child in node.children
+                    if child.type == "implementation_definition"
+                ),
+                None,
+            )
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=name,
+                    kind="class",
+                    qualified_name=name,
+                    language="objective-c",
+                    body_node=implementation_body,
+                )
+            )
+            qualified_names_by_node_id[impl_nid] = name
             for child in node.children:
                 if child.type == "implementation_definition":
                     for sub in child.children:
@@ -263,6 +308,27 @@ def extract_objc(path: Path) -> dict:
                 proto_nid = _make_id(stem, name)
                 add_node(proto_nid, f"<{name}>", line)
                 add_edge(file_nid, proto_nid, "contains", line)
+                protocol_body = next(
+                    (
+                        child
+                        for child in node.children
+                        if child.type in ("method_declaration", "property_declaration")
+                    ),
+                    None,
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=name,
+                        kind="interface",
+                        qualified_name=name,
+                        language="objective-c",
+                        body_node=protocol_body,
+                    )
+                )
+                qualified_names_by_node_id[proto_nid] = name
                 # Adopted protocols: `@protocol Derived <Base, Other>`. These
                 # nest under a protocol_reference_list node (distinct from the
                 # parameterized_arguments node used by @interface adoption), so
@@ -298,6 +364,31 @@ def extract_objc(path: Path) -> dict:
                 method_nid = _make_id(container, method_name)
                 add_node(method_nid, f"{prefix}{method_name}", line)
                 add_edge(container, method_nid, "method", line)
+                parent_name = qualified_names_by_node_id.get(container)
+                qualified_name = (
+                    f"{parent_name}.{method_name}" if parent_name else method_name
+                )
+                method_body = next(
+                    (
+                        child
+                        for child in node.children
+                        if child.type == "compound_statement"
+                    ),
+                    None,
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=method_name,
+                        kind="method",
+                        qualified_name=qualified_name,
+                        parent_qualified_name=parent_name,
+                        language="objective-c",
+                        body_node=method_body,
+                    )
+                )
                 if t == "method_definition":
                     method_bodies.append((method_nid, node, container))
             return
@@ -423,7 +514,8 @@ def extract_objc(path: Path) -> dict:
                 walk_calls(child)
         walk_calls(body_node)
 
-    result = {"nodes": nodes, "edges": edges, "raw_calls": raw_calls,
+    result = {"nodes": nodes, "edges": edges, "symbols": symbols,
+              "raw_calls": raw_calls,
               "input_tokens": 0, "output_tokens": 0}
     if objc_type_table:
         result["objc_type_table"] = {"path": str_path, "table": objc_type_table}

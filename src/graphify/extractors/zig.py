@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from graphify.extractors.base import _file_stem, _make_id, _read_text
+from graphify.extractors.symbols import make_symbol
 
 
 def extract_zig(path: Path) -> dict:
@@ -28,8 +29,10 @@ def extract_zig(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     function_bodies: list[tuple[str, Any]] = []
+    qualified_names_by_node_id: dict[str, str] = {}
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -91,6 +94,24 @@ def extract_zig(path: Path) -> dict:
                     add_node(func_nid, f"{func_name}()", line)
                     add_edge(file_nid, func_nid, "contains", line)
                 body = node.child_by_field_name("body")
+                parent_name = qualified_names_by_node_id.get(parent_struct_nid or "")
+                qualified_name = (
+                    f"{parent_name}.{func_name}" if parent_name else func_name
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=func_name,
+                        kind="method" if parent_name else "function",
+                        qualified_name=qualified_name,
+                        parent_qualified_name=parent_name,
+                        language="zig",
+                        body_node=body,
+                    )
+                )
+                qualified_names_by_node_id[func_nid] = qualified_name
                 if body:
                     function_bodies.append((func_nid, body))
             return
@@ -113,6 +134,19 @@ def extract_zig(path: Path) -> dict:
                     struct_nid = _make_id(stem, struct_name)
                     add_node(struct_nid, struct_name, line)
                     add_edge(file_nid, struct_nid, "contains", line)
+                    symbols.append(
+                        make_symbol(
+                            node,
+                            source,
+                            path,
+                            name=struct_name,
+                            kind="struct",
+                            qualified_name=struct_name,
+                            language="zig",
+                            body_node=value_node,
+                        )
+                    )
+                    qualified_names_by_node_id[struct_nid] = struct_name
                     for child in value_node.children:
                         walk(child, parent_struct_nid=struct_nid)
                 return
@@ -124,6 +158,22 @@ def extract_zig(path: Path) -> dict:
                     type_nid = _make_id(stem, type_name)
                     add_node(type_nid, type_name, line)
                     add_edge(file_nid, type_nid, "contains", line)
+                    symbols.append(
+                        make_symbol(
+                            node,
+                            source,
+                            path,
+                            name=type_name,
+                            kind=(
+                                "enum"
+                                if value_node.type == "enum_declaration"
+                                else "type"
+                            ),
+                            qualified_name=type_name,
+                            language="zig",
+                            body_node=value_node,
+                        )
+                    )
                 return
 
             if value_node and value_node.type in ("builtin_function", "field_expression"):
@@ -172,4 +222,5 @@ def extract_zig(path: Path) -> dict:
 
     clean_edges = [e for e in edges if e["source"] in seen_ids and
                    (e["target"] in seen_ids or e["relation"] == "imports_from")]
-    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
+    return {"nodes": nodes, "edges": clean_edges, "symbols": symbols,
+            "raw_calls": raw_calls}

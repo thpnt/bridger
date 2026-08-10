@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from graphify.extractors.base import _file_stem, _make_id, _read_text
 from graphify.extractors.engine import _semantic_reference_edge
+from graphify.extractors.symbols import make_symbol
 from pathlib import Path
 
 
@@ -27,8 +28,10 @@ def extract_julia(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     function_bodies: list[tuple[str, object]] = []
+    qualified_names_by_node_id: dict[str, str] = {}
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -129,6 +132,27 @@ def extract_julia(path: Path) -> dict:
                 line = node.start_point[0] + 1
                 add_node(mod_nid, mod_name, line)
                 add_edge(file_nid, mod_nid, "defines", line)
+                module_body = next(
+                    (
+                        child
+                        for child in node.children
+                        if child.is_named and child.start_byte > name_node.end_byte
+                    ),
+                    None,
+                )
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=mod_name,
+                        kind="module",
+                        qualified_name=mod_name,
+                        language="julia",
+                        body_node=module_body,
+                    )
+                )
+                qualified_names_by_node_id[mod_nid] = mod_name
                 for child in node.children:
                     walk(child, mod_nid)
             return
@@ -158,6 +182,32 @@ def extract_julia(path: Path) -> dict:
             line = node.start_point[0] + 1
             add_node(struct_nid, struct_name, line)
             add_edge(scope_nid, struct_nid, "defines", line)
+            parent_name = qualified_names_by_node_id.get(scope_nid)
+            qualified_name = (
+                f"{parent_name}.{struct_name}" if parent_name else struct_name
+            )
+            struct_body = next(
+                (
+                    child
+                    for child in node.children
+                    if child.is_named and child.start_byte > type_head.end_byte
+                ),
+                None,
+            )
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=struct_name,
+                    kind="struct",
+                    qualified_name=qualified_name,
+                    parent_qualified_name=parent_name,
+                    language="julia",
+                    body_node=struct_body,
+                )
+            )
+            qualified_names_by_node_id[struct_nid] = qualified_name
             if super_name:
                 add_edge(struct_nid, ensure_named_node(super_name, line),
                          "inherits", line, confidence="EXTRACTED")
@@ -185,6 +235,23 @@ def extract_julia(path: Path) -> dict:
                     line = node.start_point[0] + 1
                     add_node(abs_nid, abs_name, line)
                     add_edge(scope_nid, abs_nid, "defines", line)
+                    parent_name = qualified_names_by_node_id.get(scope_nid)
+                    qualified_name = (
+                        f"{parent_name}.{abs_name}" if parent_name else abs_name
+                    )
+                    symbols.append(
+                        make_symbol(
+                            node,
+                            source,
+                            path,
+                            name=abs_name,
+                            kind="type",
+                            qualified_name=qualified_name,
+                            parent_qualified_name=parent_name,
+                            language="julia",
+                        )
+                    )
+                    qualified_names_by_node_id[abs_nid] = qualified_name
             return
 
         # Function: function foo(...) ... end
@@ -197,6 +264,31 @@ def extract_julia(path: Path) -> dict:
                     line = node.start_point[0] + 1
                     add_node(func_nid, f"{func_name}()", line)
                     add_edge(scope_nid, func_nid, "defines", line)
+                    parent_name = qualified_names_by_node_id.get(scope_nid)
+                    qualified_name = (
+                        f"{parent_name}.{func_name}" if parent_name else func_name
+                    )
+                    body_start = next(
+                        (
+                            child
+                            for child in node.children
+                            if child.is_named and child.start_byte > sig_node.end_byte
+                        ),
+                        None,
+                    )
+                    symbols.append(
+                        make_symbol(
+                            node,
+                            source,
+                            path,
+                            name=func_name,
+                            kind="method" if parent_name else "function",
+                            qualified_name=qualified_name,
+                            parent_qualified_name=parent_name,
+                            language="julia",
+                            body_node=body_start,
+                        )
+                    )
                     function_bodies.append((func_nid, node))
             return
 
@@ -211,8 +303,25 @@ def extract_julia(path: Path) -> dict:
                     line = node.start_point[0] + 1
                     add_node(func_nid, f"{func_name}()", line)
                     add_edge(scope_nid, func_nid, "defines", line)
+                    parent_name = qualified_names_by_node_id.get(scope_nid)
+                    qualified_name = (
+                        f"{parent_name}.{func_name}" if parent_name else func_name
+                    )
                     # Only walk the RHS (index 2 after lhs and operator) to avoid self-loops
                     rhs = node.children[-1] if len(node.children) >= 3 else None
+                    symbols.append(
+                        make_symbol(
+                            node,
+                            source,
+                            path,
+                            name=func_name,
+                            kind="method" if parent_name else "function",
+                            qualified_name=qualified_name,
+                            parent_qualified_name=parent_name,
+                            language="julia",
+                            body_node=rhs,
+                        )
+                    )
                     if rhs:
                         function_bodies.append((func_nid, rhs))
             return
@@ -272,4 +381,4 @@ def extract_julia(path: Path) -> dict:
         else:
             walk_calls(body_node, func_nid)
 
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "symbols": symbols}

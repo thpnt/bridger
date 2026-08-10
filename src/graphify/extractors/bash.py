@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from graphify.extractors.base import _file_stem, _make_id, _read_text
+from graphify.extractors.symbols import make_symbol
 
 
 # Leading `${VAR}` / `$VAR` expansion segment(s) of a `source` path argument. The
@@ -89,6 +90,7 @@ def extract_bash(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     # Cross-file resolution scaffolding consumed by resolve_bash_source_edges in
     # the extract pipeline: `bash_sources` records which files this one `source`s,
     # `raw_calls` records calls whose callee isn't defined in this file (candidate
@@ -247,6 +249,18 @@ def extract_bash(path: Path) -> dict:
                 # and added to function_bodies for the second-pass walk_calls.
                 if body is not None:
                     walk(body, fn_nid)
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=name,
+                        kind="function",
+                        qualified_name=name,
+                        language="bash",
+                        body_node=body,
+                    )
+                )
             return
 
         if t == "command":
@@ -444,5 +458,5 @@ def extract_bash(path: Path) -> dict:
     for fn_nid, body in function_bodies:
         walk_calls(body, fn_nid, set())
 
-    return {"nodes": nodes, "edges": edges,
+    return {"nodes": nodes, "edges": edges, "symbols": symbols,
             "raw_calls": raw_calls, "bash_sources": bash_sources}

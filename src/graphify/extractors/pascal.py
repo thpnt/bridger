@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from graphify.extractors.base import _file_stem, _make_id
 from graphify.extractors.resolution import _pascal_resolve_class, _pascal_resolve_unit
+from graphify.extractors.symbols import make_symbol
 from pathlib import Path
 from typing import Any, Callable
 
@@ -241,6 +242,7 @@ def _extract_pascal_regex(path: Path) -> dict:
     stem = _file_stem(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     seen_call_pairs: set[tuple[str, str]] = set()
     seen_edges: set[tuple[str, str, str]] = set()
@@ -281,6 +283,31 @@ def _extract_pascal_regex(path: Path) -> dict:
     def _lineno(text: str, offset: int) -> int:
         return text.count("\n", 0, offset) + 1
 
+    def _emit_symbol(
+        start: int,
+        end: int,
+        name: str,
+        kind: str,
+        qualified_name: str,
+        parent_qualified_name: str | None = None,
+        signature: str | None = None,
+    ) -> None:
+        symbols.append(
+            {
+                "name": name,
+                "qualified_name": qualified_name,
+                "kind": kind,
+                "source_file": str_path,
+                "start_line": _lineno(stripped, start),
+                "end_line": _lineno(stripped, max(start, end - 1)),
+                "parent_qualified_name": parent_qualified_name,
+                "signature": " ".join(signature.split())[:500]
+                if signature
+                else None,
+                "language": "pascal",
+            }
+        )
+
     file_nid = _make_id(str_path)
     _add_node(file_nid, path.name, 1)
 
@@ -294,6 +321,16 @@ def _extract_pascal_regex(path: Path) -> dict:
         module_nid = _make_id(stem, mod_name)
         _add_node(module_nid, mod_name, _lineno(stripped, mod_m.start()))
         _add_edge(file_nid, module_nid, "contains", _lineno(stripped, mod_m.start()))
+        _emit_symbol(
+            mod_m.start(),
+            mod_m.end(),
+            mod_name,
+            "module",
+            mod_name,
+            signature=mod_m.group(0),
+        )
+    else:
+        mod_name = path.stem
 
     iface_text, iface_off, impl_text, impl_off = _pascal_split_sections(stripped)
 
@@ -350,6 +387,16 @@ def _extract_pascal_regex(path: Path) -> dict:
         end_m = _PAS_END_SEMI_RE.search(search_text, hm.end())
         body_text = search_text[hm.end():end_m.start()] if end_m else ""
         body_off = search_off + hm.end()
+        type_end = search_off + (end_m.end() if end_m else hm.end())
+        _emit_symbol(
+            search_off + hm.start(),
+            type_end,
+            type_name,
+            "interface" if hm.group("kind").lower() == "interface" else "class",
+            f"{mod_name}.{type_name}",
+            mod_name if mod_m else None,
+            hm.group(0),
+        )
 
         # Forward method declarations inside the class body
         for mm in _PAS_METHOD_DECL_RE.finditer(body_text):
@@ -358,6 +405,17 @@ def _extract_pascal_regex(path: Path) -> dict:
             method_nid = _make_id(cls_nid, mname)
             _add_node(method_nid, f"{mname}()", mline)
             _add_edge(cls_nid, method_nid, "method", mline)
+            _emit_symbol(
+                body_off + mm.start(),
+                body_off + mm.end(),
+                mname,
+                "constructor"
+                if mm.group(0).lstrip().lower().startswith("constructor")
+                else "method",
+                f"{mod_name}.{type_name}.{mname}",
+                f"{mod_name}.{type_name}",
+                mm.group(0),
+            )
 
         pos = end_m.end() if end_m else len(search_text)
 
@@ -385,6 +443,23 @@ def _extract_pascal_regex(path: Path) -> dict:
         body_start, body_end = _pascal_find_body(impl_text, fm.end())
         body_text = impl_text[body_start:body_end] if body_start else ""
         impl_records.append((proc_nid, line, body_text, container, name_lower))
+        declaration_name = qualified.split(".", 1)[-1]
+        parent_name = (
+            f"{mod_name}.{qualified.split('.', 1)[0]}"
+            if "." in qualified and cls_nid in seen_ids
+            else (mod_name if mod_m else None)
+        )
+        _emit_symbol(
+            impl_off + fm.start(),
+            impl_off + (body_end if body_start else fm.end()),
+            declaration_name,
+            "constructor"
+            if fm.group(0).lstrip().lower().startswith("constructor")
+            else ("method" if "." in qualified and cls_nid in seen_ids else "function"),
+            f"{parent_name}.{declaration_name}" if parent_name else declaration_name,
+            parent_name,
+            fm.group(0),
+        )
 
     # Intra-file call edges, scoped by the caller's own class, then its
     # ancestor chain (via `inherits` edges already emitted above), then
@@ -424,7 +499,7 @@ def _extract_pascal_regex(path: Path) -> dict:
 
     return {
         "nodes": nodes, "edges": edges, "input_tokens": 0, "output_tokens": 0,
-        "raw_calls": raw_calls,
+        "raw_calls": raw_calls, "symbols": symbols,
     }
 
 def extract_pascal(path: Path) -> dict:
@@ -467,6 +542,7 @@ def extract_pascal(path: Path) -> dict:
     str_path = str(path)
     nodes: list[dict] = []
     edges: list[dict] = []
+    symbols: list[dict] = []
     seen_ids: set[str] = set()
     seen_edges: set[tuple[str, str, str]] = set()
     proc_bodies: list[tuple[str, Any, str, str]] = []
@@ -508,6 +584,7 @@ def extract_pascal(path: Path) -> dict:
     file_nid = _make_id(str(path))
     add_node(file_nid, path.name, 1)
     module_nid = file_nid
+    qualified_names_by_nid: dict[str, str] = {}
 
     def _proc_name(header_node) -> str | None:  # type: ignore[no-untyped-def]
         name_node = header_node.child_by_field_name("name")
@@ -530,6 +607,18 @@ def extract_pascal(path: Path) -> dict:
             add_node(mod_nid, mod_name, line)
             add_edge(file_nid, mod_nid, "contains", line)
             module_nid = mod_nid
+            qualified_names_by_nid[mod_nid] = mod_name
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=mod_name,
+                    kind="module",
+                    qualified_name=mod_name,
+                    language="pascal",
+                )
+            )
             for child in node.children:
                 walk(child, mod_nid)
             return
@@ -554,6 +643,24 @@ def extract_pascal(path: Path) -> dict:
                 cls_nid = _make_id(stem, type_name)
                 add_node(cls_nid, type_name, line)
                 add_edge(parent_nid, cls_nid, "contains", line)
+                parent_name = qualified_names_by_nid.get(parent_nid)
+                qualified_name = (
+                    f"{parent_name}.{type_name}" if parent_name else type_name
+                )
+                qualified_names_by_nid[cls_nid] = qualified_name
+                symbols.append(
+                    make_symbol(
+                        node,
+                        source,
+                        path,
+                        name=type_name,
+                        kind="interface" if kind_node.type == "declIntf" else "class",
+                        qualified_name=qualified_name,
+                        parent_qualified_name=parent_name,
+                        language="pascal",
+                        body_node=kind_node,
+                    )
+                )
                 for child in kind_node.children:
                     if child.type == "typeref":
                         base_name = _read(child)
@@ -592,6 +699,24 @@ def extract_pascal(path: Path) -> dict:
                     method_nid = _make_id(parent_nid, name)
                     add_node(method_nid, f"{name}()", line)
                     add_edge(parent_nid, method_nid, "method", line)
+                    parent_name = qualified_names_by_nid.get(parent_nid)
+                    header_text = _read(header).lstrip().lower()
+                    symbols.append(
+                        make_symbol(
+                            node,
+                            source,
+                            path,
+                            name=name,
+                            kind="constructor"
+                            if header_text.startswith("constructor")
+                            else "method",
+                            qualified_name=f"{parent_name}.{name}"
+                            if parent_name
+                            else name,
+                            parent_qualified_name=parent_name,
+                            language="pascal",
+                        )
+                    )
             return
 
         if t == "defProc":
@@ -621,6 +746,26 @@ def extract_pascal(path: Path) -> dict:
                 container, proc_nid,
                 "method" if container != parent_nid else "contains",
                 line,
+            )
+            declaration_name = name.split(".", 1)[-1]
+            parent_name = qualified_names_by_nid.get(container)
+            header_text = _read(header).lstrip().lower()
+            symbols.append(
+                make_symbol(
+                    node,
+                    source,
+                    path,
+                    name=declaration_name,
+                    kind="constructor"
+                    if header_text.startswith("constructor")
+                    else ("method" if container != parent_nid else "function"),
+                    qualified_name=f"{parent_name}.{declaration_name}"
+                    if parent_name
+                    else declaration_name,
+                    parent_qualified_name=parent_name,
+                    language="pascal",
+                    body_node=body_node,
+                )
             )
             if body_node:
                 proc_bodies.append((proc_nid, body_node, container, label.removesuffix("()").lower()))
@@ -684,5 +829,5 @@ def extract_pascal(path: Path) -> dict:
 
     return {
         "nodes": nodes, "edges": edges, "input_tokens": 0, "output_tokens": 0,
-        "raw_calls": raw_calls,
+        "raw_calls": raw_calls, "symbols": symbols,
     }
