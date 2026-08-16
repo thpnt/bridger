@@ -4,13 +4,18 @@ from openai import AsyncOpenAI
 
 from llm.client import LLMClient
 from llm.errors import LLMConfigurationError
-from llm.profiles import resolve_llm_profile
+from llm.profiles import LLMProfile, resolve_llm_profile
 from llm.providers.openai import OpenAILLMClient
 
 
 def create_llm_client(profile_name: str = "balanced") -> LLMClient:
     """Construct a provider-independent LLM client from environment settings."""
     profile = resolve_llm_profile(profile_name)
+    return create_llm_client_from_profile(profile)
+
+
+def create_llm_client_from_profile(profile: LLMProfile) -> LLMClient:
+    """Construct a provider-independent client from an explicit typed profile."""
     if profile.provider != "openai":
         raise LLMConfigurationError(f"Unsupported LLM provider: {profile.provider}")
 

@@ -12,7 +12,7 @@ from llm.errors import (
     LLMStructuredOutputError,
     LLMTimeoutError,
 )
-from llm.factory import create_llm_client
+from llm.factory import create_llm_client, create_llm_client_from_profile
 from llm.models import (
     LLMMessage,
     LLMOperation,
@@ -20,9 +20,12 @@ from llm.models import (
     LLMResponse,
     LLMToolCall,
     LLMToolDefinition,
+    LLMToolError,
+    LLMToolResult,
     LLMUsage,
 )
 from llm.profiles import LLMProfile, RetryPolicy, resolve_llm_profile
+from llm.tools import LLMTool, ToolExecutor
 
 __all__ = [
     "LLMAuthenticationError",
@@ -44,8 +47,13 @@ __all__ = [
     "LLMTimeoutError",
     "LLMToolCall",
     "LLMToolDefinition",
+    "LLMToolError",
+    "LLMToolResult",
     "LLMUsage",
+    "LLMTool",
     "RetryPolicy",
+    "ToolExecutor",
     "create_llm_client",
+    "create_llm_client_from_profile",
     "resolve_llm_profile",
 ]
