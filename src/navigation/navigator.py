@@ -93,6 +93,9 @@ class RepositoryNavigator:
         }
         self._hyperedges_by_id = self._index_hyperedges()
         self._enrichment = self._index_enrichment(overlay)
+        self._enrichment_overlay_id = (
+            overlay.overlay_id if overlay is not None else None
+        )
         self._node_symbol_ids = {
             node_id: [
                 symbol.symbol_id for symbol in self._match_symbols_for_node(node_id)
@@ -111,6 +114,16 @@ class RepositoryNavigator:
     @property
     def _communities(self) -> dict[int, list[str]]:
         return cast(dict[int, list[str]], self._structural["communities"])
+
+    @property
+    def source_identity(self) -> tuple[str, str, str, str | None]:
+        """Return the exact immutable repository/graph authority identities."""
+        return (
+            self._context.repository_id,
+            self._context.revision,
+            self._graph_build.manifest.snapshot_id,
+            self._enrichment_overlay_id,
+        )
 
     def search_repository(
         self,

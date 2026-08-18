@@ -1,4 +1,4 @@
-"""Explicit Stage 0-2 memory-harness failures."""
+"""Explicit deterministic memory-harness failures."""
 
 
 class MemoryHarnessError(RuntimeError):
@@ -25,11 +25,36 @@ class FleetSchedulingError(MemoryHarnessError):
     """Stage 2 received invalid or inconsistent authoritative state."""
 
 
+class WorkerContextInvocationError(MemoryHarnessError):
+    """Stage 3 was invoked for a task that cannot legally enter hydration."""
+
+
+class WorkerContextHydrationError(MemoryHarnessError):
+    """Stage 3 encountered invalid configuration or authoritative state."""
+
+
+class ContextWindowConfigurationError(WorkerContextHydrationError):
+    """The V0 tokenizer or model context-window configuration is invalid."""
+
+
+class WorkerCycleInvocationError(MemoryHarnessError):
+    """Stage 4 was invoked outside its locked hydration boundary."""
+
+
+class WorkerCyclePreflightError(MemoryHarnessError):
+    """Stage 4 could not safely begin actual worker execution."""
+
+
 __all__ = [
+    "ContextWindowConfigurationError",
     "FleetInitializationError",
     "FleetSchedulingError",
     "InvalidTargetArtifacts",
     "MemoryHarnessError",
     "MemoryRunBindingError",
     "TargetActivationError",
+    "WorkerContextHydrationError",
+    "WorkerContextInvocationError",
+    "WorkerCycleInvocationError",
+    "WorkerCyclePreflightError",
 ]

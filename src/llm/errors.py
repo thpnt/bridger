@@ -21,6 +21,7 @@ class LLMError(RuntimeError):
         self.operation = operation
         self.retryable = retryable
         self.safe_message = message
+        self.attempt_count = 1
 
 
 class LLMConfigurationError(LLMError):

@@ -23,6 +23,7 @@ async def run_with_retries(
             return await operation(), attempt - 1
         except LLMError as error:
             if not error.retryable or attempt >= policy.max_attempts:
+                error.attempt_count = attempt
                 raise
             retry_after = getattr(error, "retry_after_seconds", None)
             sleep_seconds = retry_after if retry_after is not None else delay

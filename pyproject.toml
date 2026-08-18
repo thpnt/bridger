@@ -14,6 +14,7 @@ dependencies = [
     "pydantic>=2.10",
     "pyyaml>=6.0.3",
     "rapidfuzz>=3.0",
+    "tiktoken>=0.14.0",
     "tree-sitter>=0.23.0,<0.26",
     "tree-sitter-bash>=0.23,<0.27",
     "tree-sitter-c>=0.23,<0.25",
