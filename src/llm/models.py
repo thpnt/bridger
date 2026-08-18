@@ -26,6 +26,7 @@ class LLMOperation(StrEnum):
     CONTEXT_PLAN_REVIEW = "context_plan_review"
     MEMORY_AGENT_EVIDENCE = "memory_agent_evidence"
     MEMORY_AGENT_RECONCILIATION = "memory_agent_reconciliation"
+    MEMORY_AGENT_WORKER = "memory_agent_worker"
     AGENTS_EXPORT = "agents_export"
     PROMPT_GENERATION = "prompt_generation"
     TICKET_GENERATION = "ticket_generation"
@@ -47,7 +48,13 @@ class LLMToolError(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    code: Literal["unknown_tool", "invalid_arguments", "tool_execution_error"]
+    code: Literal[
+        "unknown_tool",
+        "invalid_arguments",
+        "tool_execution_error",
+        "permission_denied",
+        "protocol_error",
+    ]
     message: str = Field(min_length=1)
 
 
@@ -205,11 +212,11 @@ class LLMRequest(BaseModel):
 class LLMUsage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    total_tokens: int | None = None
-    cached_input_tokens: int | None = None
-    reasoning_tokens: int | None = None
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    cached_input_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
 
 
 class LLMResponse(BaseModel, Generic[StructuredOutputT]):
