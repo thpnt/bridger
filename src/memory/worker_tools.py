@@ -13,6 +13,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validat
 
 from llm.models import LLMToolCall, LLMToolDefinition, LLMToolError, LLMToolResult
 from llm.tools import LLMTool, ToolExecutor
+from memory.durability import FleetRuntimeStore
 from models.hydration import PermissionProfile, WorkerContext
 from models.memory import (
     CandidateArtifactRef,
@@ -21,6 +22,7 @@ from models.memory import (
     ObligationApplicability,
     TargetCompletionState,
     TargetDefinition,
+    TargetPhase,
     TargetTaskSpec,
     TargetTaskState,
 )
@@ -101,9 +103,11 @@ class TargetWorkspace:
         self,
         target_spec: TargetTaskSpec,
         target_state: TargetTaskState,
+        persistence: FleetRuntimeStore | None = None,
     ) -> None:
         self._spec = target_spec
         self._state = target_state
+        self._persistence = persistence
         configured_root = Path(target_spec.target_workspace)
         if configured_root.is_symlink():
             raise ValueError("target workspace cannot be a symlink")
@@ -170,6 +174,7 @@ class TargetWorkspace:
         expected_revision: int | None = None,
     ) -> CandidateArtifactRef:
         """Create or whole-file replace one candidate artifact."""
+        _require_working_phase(self._state)
         destination = self._resolve_path(path)
         encoded = content.encode()
         if len(encoded) > MAX_ARTIFACT_BYTES:
@@ -187,16 +192,27 @@ class TargetWorkspace:
             self._read_current(existing)
             artifact_id = existing.artifact_id
             revision = existing.revision + 1
-        destination.parent.mkdir(parents=True, exist_ok=True)
         self._require_within_root(destination)
-        destination.write_text(content, encoding="utf-8")
         reference = CandidateArtifactRef(
             artifact_id=artifact_id,
             relative_path=path,
             revision=revision,
             digest=hashlib.sha256(encoded).hexdigest(),
         )
-        self._replace_reference(existing, reference)
+        if self._persistence is None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(encoded)
+            self._replace_reference(existing, reference)
+        else:
+            after_state = self._state_with_reference(existing, reference)
+            self._persistence.commit_artifact_mutation(
+                self._spec,
+                self._state,
+                after_state,
+                writes={destination: encoded},
+                action="write",
+                artifact_id=reference.artifact_id,
+            )
         return reference
 
     def edit_target_artifact_range(
@@ -209,6 +225,7 @@ class TargetWorkspace:
         replacement: str,
     ) -> CandidateArtifactRef:
         """Replace one inclusive line range using optimistic revision control."""
+        _require_working_phase(self._state)
         reference = self._reference_for_path(path)
         self._require_revision(reference, expected_revision)
         if start_line < 1 or end_line < start_line:
@@ -236,16 +253,30 @@ class TargetWorkspace:
         expected_revision: int,
     ) -> CandidateArtifactRef:
         """Delete one current artifact and remove its authoritative reference."""
+        _require_working_phase(self._state)
         reference = self._reference_for_path(path)
         self._require_revision(reference, expected_revision)
         source = self._resolve_path(path)
         self._read_current(reference)
-        source.unlink()
-        self._state.artifact_refs = [
+        after_state = self._state.model_copy(deep=True)
+        after_state.artifact_refs = [
             item
-            for item in self._state.artifact_refs
+            for item in after_state.artifact_refs
             if item.artifact_id != reference.artifact_id
         ]
+        if self._persistence is None:
+            source.unlink()
+            self._state.artifact_refs = after_state.artifact_refs
+        else:
+            self._persistence.commit_artifact_mutation(
+                self._spec,
+                self._state,
+                after_state,
+                writes={},
+                deletions=[source],
+                action="delete",
+                artifact_id=reference.artifact_id,
+            )
         return reference
 
     def move_target_artifact(
@@ -256,6 +287,7 @@ class TargetWorkspace:
         expected_revision: int,
     ) -> CandidateArtifactRef:
         """Move one artifact without changing its identity."""
+        _require_working_phase(self._state)
         reference = self._reference_for_path(source_path)
         self._require_revision(reference, expected_revision)
         source = self._resolve_path(source_path)
@@ -265,16 +297,29 @@ class TargetWorkspace:
             raise ValueError("destination artifact already exists")
         if destination.exists() or destination.is_symlink():
             raise ValueError("destination workspace path already exists")
-        destination.parent.mkdir(parents=True, exist_ok=True)
         self._require_within_root(destination)
-        source.replace(destination)
+        content = source.read_bytes()
         moved = reference.model_copy(
             update={
                 "relative_path": destination_path,
                 "revision": reference.revision + 1,
             }
         )
-        self._replace_reference(reference, moved)
+        if self._persistence is None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source.replace(destination)
+            self._replace_reference(reference, moved)
+        else:
+            after_state = self._state_with_reference(reference, moved)
+            self._persistence.commit_artifact_mutation(
+                self._spec,
+                self._state,
+                after_state,
+                writes={destination: content},
+                deletions=[source],
+                action="move",
+                artifact_id=reference.artifact_id,
+            )
         return moved
 
     def _reference_for_path(self, path: str) -> CandidateArtifactRef:
@@ -344,6 +389,24 @@ class TargetWorkspace:
             key=lambda item: (item.relative_path, item.artifact_id),
         )
 
+    def _state_with_reference(
+        self,
+        previous: CandidateArtifactRef | None,
+        current: CandidateArtifactRef,
+    ) -> TargetTaskState:
+        after_state = self._state.model_copy(deep=True)
+        references = [
+            item
+            for item in after_state.artifact_refs
+            if previous is None or item.artifact_id != previous.artifact_id
+        ]
+        references.append(current)
+        after_state.artifact_refs = sorted(
+            references,
+            key=lambda item: (item.relative_path, item.artifact_id),
+        )
+        return after_state
+
 
 class EvidenceRecorder:
     """Validate, create, and target-deduplicate durable evidence references."""
@@ -354,11 +417,13 @@ class EvidenceRecorder:
         target_state: TargetTaskState,
         navigator: RepositoryNavigator,
         evidence: MutableMapping[str, EvidenceReference],
+        persistence: FleetRuntimeStore | None = None,
     ) -> None:
         self._spec = target_spec
         self._state = target_state
         self._navigator = navigator
         self._evidence = evidence
+        self._persistence = persistence
         expected_source = (
             target_spec.source.repository_id,
             target_spec.source.repository_revision,
@@ -374,6 +439,7 @@ class EvidenceRecorder:
         locator: EvidenceLocator,
     ) -> EvidenceReference:
         """Create or reuse one mechanically validated evidence reference."""
+        _require_working_phase(self._state)
         self._validate_locator(kind, locator)
         key = self._canonical_key(kind, locator)
         for reference in self._evidence.values():
@@ -382,7 +448,13 @@ class EvidenceRecorder:
                 and reference.source == self._spec.source
                 and self._canonical_key(reference.kind, reference.locator) == key
             ):
-                self._add_state_reference(reference.evidence_id)
+                if reference.evidence_id not in self._state.evidence_refs:
+                    if self._persistence is None:
+                        self._add_state_reference(reference.evidence_id)
+                    else:
+                        self._persistence.commit_evidence(
+                            self._spec, self._state, reference
+                        )
                 return reference
         reference = EvidenceReference(
             evidence_id=f"evidence-{uuid4().hex}",
@@ -391,8 +463,12 @@ class EvidenceRecorder:
             kind=kind,
             locator=locator,
         )
-        self._evidence[reference.evidence_id] = reference
-        self._add_state_reference(reference.evidence_id)
+        if self._persistence is None:
+            self._evidence[reference.evidence_id] = reference
+            self._add_state_reference(reference.evidence_id)
+        else:
+            self._persistence.commit_evidence(self._spec, self._state, reference)
+            self._evidence[reference.evidence_id] = reference
         return reference
 
     def _validate_locator(self, kind: EvidenceKind, locator: EvidenceLocator) -> None:
@@ -458,16 +534,22 @@ class CompletionStateUpdater:
     def __init__(
         self,
         target_spec: TargetTaskSpec,
+        target_state: TargetTaskState,
         completion_state: TargetCompletionState,
         target_definition: TargetDefinition,
         evidence: Mapping[str, EvidenceReference],
+        persistence: FleetRuntimeStore | None = None,
     ) -> None:
         self._spec = target_spec
+        self._target_state = target_state
         self._state = completion_state
         self._definition = target_definition
         self._evidence = evidence
+        self._persistence = persistence
         if completion_state.target_task_id != target_spec.target_task_id:
             raise ValueError("completion state belongs to another target")
+        if target_state.target_task_id != target_spec.target_task_id:
+            raise ValueError("target state belongs to another target")
         if (
             target_definition.target_id != target_spec.target_id
             or target_definition.target_contract_version
@@ -489,6 +571,7 @@ class CompletionStateUpdater:
         evidence_refs: Sequence[str],
     ) -> CompletionItemState:
         """Replace one obligation's mutable resolution fields atomically."""
+        _require_working_phase(self._target_state)
         if status is CompletionStatus.UNINVESTIGATED:
             raise ValueError("worker cannot restore uninvestigated")
         note = resolution_note.strip()
@@ -526,10 +609,21 @@ class CompletionStateUpdater:
             resolution_note=note,
             evidence_refs=unique_refs,
         )
-        self._state.items = [
+        after_state = self._state.model_copy(deep=True)
+        after_state.items = [
             replacement if item.obligation_id == obligation_id else item
-            for item in self._state.items
+            for item in after_state.items
         ]
+        if self._persistence is None:
+            self._state.items = after_state.items
+        else:
+            self._persistence.persist_completion_state(
+                self._spec,
+                self._target_state,
+                after_state,
+                obligation_id=obligation_id,
+            )
+            self._state.items = after_state.items
         return replacement
 
 
@@ -541,10 +635,12 @@ class ProgressUpdater:
         target_spec: TargetTaskSpec,
         target_state: TargetTaskState,
         questions: MutableMapping[str, OpenQuestion],
+        persistence: FleetRuntimeStore | None = None,
     ) -> None:
         self._spec = target_spec
         self._state = target_state
         self._questions = questions
+        self._persistence = persistence
 
     def update_progress(
         self,
@@ -554,6 +650,7 @@ class ProgressUpdater:
         question_refs_to_resolve: Sequence[str] = (),
     ) -> dict[str, object]:
         """Replace supplied summary state, open questions, and resolve current refs."""
+        _require_working_phase(self._state)
         updated_summary = self._state.working_summary
         if working_summary is not None:
             summary = working_summary.strip()
@@ -598,17 +695,35 @@ class ProgressUpdater:
             opened.append(question)
         if len(remaining_refs) + len(opened) > MAX_OPEN_QUESTIONS:
             raise ValueError("too many simultaneously open questions")
-        self._state.working_summary = updated_summary
+        after_state = self._state.model_copy(deep=True)
+        after_state.working_summary = updated_summary
+        for question in opened:
+            remaining_refs.append(question.question_id)
+        after_state.open_question_refs = remaining_refs
+        if self._persistence is None:
+            self._state.working_summary = after_state.working_summary
+            self._state.open_question_refs = after_state.open_question_refs
+        else:
+            self._persistence.commit_progress(
+                self._spec,
+                self._state,
+                after_state,
+                opened,
+                resolve_refs,
+            )
         for question in opened:
             self._questions[question.question_id] = question
-            remaining_refs.append(question.question_id)
-        self._state.open_question_refs = remaining_refs
         return {
             "working_summary": self._state.working_summary,
             "opened_questions": opened,
             "resolved_question_refs": resolve_refs,
             "open_question_refs": self._state.open_question_refs,
         }
+
+
+def _require_working_phase(target_state: TargetTaskState) -> None:
+    if target_state.phase is not TargetPhase.WORKING:
+        raise ValueError("worker mutation requires a WORKING target")
 
 
 class _Arguments(BaseModel):

@@ -218,6 +218,7 @@ class WorkerFixture:
         )
         completion_updater = CompletionStateUpdater(
             self.target_spec,
+            self.target_state,
             self.completion_state,
             self.definition,
             self.evidence,
@@ -552,6 +553,7 @@ def test_execution_permission_is_enforced_after_tool_exposure(
 
 def test_workspace_confinement_and_optimistic_revisions(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
+    fixture.target_state.phase = TargetPhase.WORKING
     workspace = TargetWorkspace(fixture.target_spec, fixture.target_state)
 
     first = workspace.write_target_artifact("notes.md", "one\ntwo\n")
@@ -586,6 +588,7 @@ def test_evidence_completion_and_progress_services_keep_authority_local(
     tmp_path: Path,
 ) -> None:
     fixture = _fixture(tmp_path)
+    fixture.target_state.phase = TargetPhase.WORKING
     recorder = EvidenceRecorder(
         fixture.target_spec,
         fixture.target_state,
@@ -603,6 +606,7 @@ def test_evidence_completion_and_progress_services_keep_authority_local(
     )
     updater = CompletionStateUpdater(
         fixture.target_spec,
+        fixture.target_state,
         fixture.completion_state,
         fixture.definition,
         fixture.evidence,

@@ -1,5 +1,6 @@
 """Filesystem publication for memory-harness Stage 0 and Stage 1 artifacts."""
 
+import os
 import shutil
 import tempfile
 from collections.abc import Sequence
@@ -52,6 +53,7 @@ def persist_fleet_spec(spec: MemoryFleetSpec) -> None:
                 f"fleet run already exists: {spec.fleet_run_id}"
             )
         staging_root.replace(run_root)
+        _fsync_directory(runtime_root)
     except BaseException:
         shutil.rmtree(staging_root, ignore_errors=True)
         raise
@@ -124,6 +126,7 @@ def persist_initialization(
         if initialization_root.exists():
             raise FleetInitializationError("fleet is already initialized")
         staging_root.replace(initialization_root)
+        _fsync_directory(run_root)
     except BaseException as error:
         shutil.rmtree(staging_root, ignore_errors=True)
         for workspace in reversed(created_workspaces):
@@ -149,6 +152,14 @@ def require_path_segment(value: str, field_name: str) -> None:
     """Require a value to be safe as one filesystem path segment."""
     if Path(value).name != value or value in {"", ".", ".."}:
         raise ValueError(f"{field_name} must be a safe path segment")
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 __all__ = [

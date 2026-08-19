@@ -27,6 +27,7 @@ class LLMOperation(StrEnum):
     MEMORY_AGENT_EVIDENCE = "memory_agent_evidence"
     MEMORY_AGENT_RECONCILIATION = "memory_agent_reconciliation"
     MEMORY_AGENT_WORKER = "memory_agent_worker"
+    MEMORY_AGENT_REVIEW = "memory_agent_review"
     AGENTS_EXPORT = "agents_export"
     PROMPT_GENERATION = "prompt_generation"
     TICKET_GENERATION = "ticket_generation"

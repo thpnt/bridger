@@ -45,14 +45,43 @@ class WorkerCyclePreflightError(MemoryHarnessError):
     """Stage 4 could not safely begin actual worker execution."""
 
 
+class PersistenceRecoveryError(MemoryHarnessError):
+    """Stage 5 could not safely persist or recover authoritative state."""
+
+
+class FinalizationRequestError(MemoryHarnessError):
+    """Stage 6 could not create or resolve a coherent candidate submission."""
+
+
+class TargetReviewError(MemoryHarnessError):
+    """Stage 8 could not compile, execute, or persist a coherent review."""
+
+
+class TargetReviewInvocationError(TargetReviewError):
+    """Stage 8 was invoked outside its exact validated-candidate boundary."""
+
+
+class TargetReviewBudgetError(TargetReviewError):
+    """A target or fleet execution budget prevents the reviewer call."""
+
+    def __init__(self, scope: str) -> None:
+        super().__init__(f"{scope} budget prevents target review")
+        self.scope = scope
+
+
 __all__ = [
     "ContextWindowConfigurationError",
     "FleetInitializationError",
     "FleetSchedulingError",
+    "FinalizationRequestError",
     "InvalidTargetArtifacts",
     "MemoryHarnessError",
     "MemoryRunBindingError",
+    "PersistenceRecoveryError",
     "TargetActivationError",
+    "TargetReviewBudgetError",
+    "TargetReviewError",
+    "TargetReviewInvocationError",
     "WorkerContextHydrationError",
     "WorkerContextInvocationError",
     "WorkerCycleInvocationError",

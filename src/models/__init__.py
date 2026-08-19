@@ -80,12 +80,34 @@ from models.navigation import (
     RepositorySearchKind,
     SourceContentMatch,
 )
+from models.persistence import (
+    RuntimeErrorRecord,
+    TargetFinalizationRequest,
+    TaskCheckpoint,
+    TaskEvent,
+)
 from models.repository import RepositoryContext
+from models.review import (
+    ReviewArtifact,
+    ReviewerInstructions,
+    ReviewFinding,
+    ReviewFindingDraft,
+    ReviewFindingSeverity,
+    ReviewVerdict,
+    TargetReviewContext,
+    TargetReviewModelResult,
+    TargetReviewVerdict,
+)
 from models.symbols import (
     SymbolIndex,
     SymbolIndexSummary,
     SymbolKind,
     SymbolRecord,
+)
+from models.validation import (
+    TargetValidationReport,
+    ValidationFinding,
+    ValidationVerdict,
 )
 from models.worker_cycle import (
     EvidenceKind,
@@ -159,6 +181,13 @@ __all__ = [
     "RepositorySearchKind",
     "RemainingExecutionBudget",
     "RepairFinding",
+    "ReviewArtifact",
+    "ReviewFinding",
+    "ReviewFindingDraft",
+    "ReviewFindingSeverity",
+    "ReviewerInstructions",
+    "ReviewVerdict",
+    "RuntimeErrorRecord",
     "SourceReadRequest",
     "SourceReadResult",
     "SourceContentMatch",
@@ -174,9 +203,18 @@ __all__ = [
     "TargetCompletionState",
     "TargetContractView",
     "TargetDefinition",
+    "TargetFinalizationRequest",
     "TargetPhase",
+    "TargetReviewContext",
+    "TargetReviewModelResult",
+    "TargetReviewVerdict",
     "TargetTaskSpec",
     "TargetTaskState",
+    "TargetValidationReport",
+    "TaskCheckpoint",
+    "TaskEvent",
+    "ValidationFinding",
+    "ValidationVerdict",
     "WorkerContext",
     "WorkerContextMode",
     "WorkerInstructions",

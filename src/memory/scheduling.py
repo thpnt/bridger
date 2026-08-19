@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from pydantic import ValidationError
 
+from memory.durability import FleetRuntimeStore
 from memory.errors import FleetSchedulingError
 from models.memory import (
     ExecutionBudget,
@@ -41,6 +42,8 @@ def schedule_runnable_targets(
     fleet_state: FleetRunState,
     target_specs: Sequence[TargetTaskSpec],
     target_states: Sequence[TargetTaskState],
+    *,
+    persistence: FleetRuntimeStore | None = None,
 ) -> list[str]:
     """Admit runnable targets and return newly scheduled task IDs in fleet order."""
     specs_by_task, states_by_task = _validate_inputs(
@@ -106,6 +109,13 @@ def schedule_runnable_targets(
         specs_by_task,
         states_by_task,
     )
+    if persistence is not None:
+        persistence.persist_scheduling_snapshot(
+            fleet_state,
+            target_specs,
+            target_states,
+            scheduled,
+        )
     return scheduled
 
 

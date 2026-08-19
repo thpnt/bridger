@@ -4,10 +4,14 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from llm.client import LLMClient
+from llm.errors import LLMError
 from memory.context_window import ContextWindowManager
+from memory.durability import FleetRuntimeStore
 from memory.errors import WorkerCyclePreflightError
+from memory.finalization import handle_finalization_request
 from memory.hydration import compile_worker_context
 from memory.initialisation import initialize_fleet as _initialize_fleet
+from memory.recovery import create_checkpoint, record_runtime_error, recover_target
 from memory.scheduling import schedule_runnable_targets as _schedule_runnable_targets
 from memory.stage_zero import ActivationRule
 from memory.stage_zero import bind_memory_run as _bind_memory_run
@@ -36,6 +40,7 @@ from models.memory import (
     MemoryTargetCatalog,
     TargetCompletionState,
     TargetDefinition,
+    TargetPhase,
     TargetTaskSpec,
     TargetTaskState,
 )
@@ -63,26 +68,35 @@ async def run_worker_cycle(
     questions: dict[str, OpenQuestion],
     coordinator: FleetExecutionCoordinator,
     limits: WorkerRuntimeLimits | None = None,
+    persistence: FleetRuntimeStore | None = None,
 ) -> WorkerCycleOutcome:
     """Bind controlled Stage 4 services and execute one hydrated worker cycle."""
     if permission_profile.profile_id != target_spec.permission_profile_id:
         raise WorkerCyclePreflightError(
             "permission profile does not match the target task"
         )
-    workspace = TargetWorkspace(target_spec, target_state)
+    workspace = TargetWorkspace(target_spec, target_state, persistence)
     evidence_recorder = EvidenceRecorder(
         target_spec,
         target_state,
         navigator,
         evidence,
+        persistence,
     )
     completion_updater = CompletionStateUpdater(
         target_spec,
+        target_state,
         completion_state,
         target_definition,
         evidence,
+        persistence,
     )
-    progress_updater = ProgressUpdater(target_spec, target_state, questions)
+    progress_updater = ProgressUpdater(
+        target_spec,
+        target_state,
+        questions,
+        persistence,
+    )
     tools = WorkerToolRuntime(
         context,
         permission_profile,
@@ -108,7 +122,89 @@ async def run_worker_cycle(
         coordinator=coordinator,
         limits=limits,
     )
-    return await runner.run()
+    if persistence is not None:
+        coordinator.bind_persistence(persistence, fleet_state)
+    outcome = await runner.run()
+    if persistence is not None:
+        runtime_error = runner.last_runtime_error
+        if outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED:
+            handle_finalization_request(
+                persistence,
+                target_spec,
+                target_state,
+                completion_state,
+                evidence,
+                questions,
+            )
+        elif (
+            outcome is WorkerCycleOutcome.EXECUTION_INTERRUPTED
+            and isinstance(runtime_error, LLMError)
+            and not runtime_error.retryable
+        ):
+            target_state.phase = TargetPhase.FAILED
+            record_runtime_error(
+                persistence,
+                fleet_state,
+                category="provider",
+                operation="model-invocation",
+                message=runtime_error.safe_message,
+                retryable=False,
+                target_spec=target_spec,
+                target_state=target_state,
+                phase=TargetPhase.WORKING.value,
+            )
+            create_checkpoint(
+                persistence,
+                target_spec,
+                target_state,
+                completion_state,
+                evidence,
+                questions,
+            )
+        elif (
+            outcome
+            in {
+                WorkerCycleOutcome.EXECUTION_INTERRUPTED,
+                WorkerCycleOutcome.FLEET_BUDGET_STOP,
+            }
+            and target_state.phase is TargetPhase.WORKING
+        ):
+            recover_target(
+                persistence,
+                target_spec,
+                target_state,
+                completion_state,
+                evidence,
+                questions,
+                error_category=(
+                    "provider" if isinstance(runtime_error, LLMError) else "runtime"
+                ),
+                error_operation=(
+                    "model-invocation"
+                    if isinstance(runtime_error, LLMError)
+                    else "worker-cycle"
+                ),
+                error_message=(
+                    runtime_error.safe_message
+                    if isinstance(runtime_error, LLMError)
+                    else "active worker trajectory was interrupted"
+                ),
+                error_retryable=(
+                    runtime_error.retryable
+                    if isinstance(runtime_error, LLMError)
+                    else True
+                ),
+            )
+        else:
+            create_checkpoint(
+                persistence,
+                target_spec,
+                target_state,
+                completion_state,
+                evidence,
+                questions,
+            )
+    return outcome
 
 
 def resolve_target_activation(
@@ -194,6 +290,8 @@ def schedule_runnable_targets(
     fleet_state: FleetRunState,
     target_specs: Sequence[TargetTaskSpec],
     target_states: Sequence[TargetTaskState],
+    *,
+    persistence: FleetRuntimeStore | None = None,
 ) -> list[str]:
     """Compose Stage 2 and return target tasks admitted by this pass."""
     return _schedule_runnable_targets(
@@ -201,6 +299,7 @@ def schedule_runnable_targets(
         fleet_state,
         target_specs,
         target_states,
+        persistence=persistence,
     )
 
 

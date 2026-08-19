@@ -12,12 +12,14 @@ from pydantic_core import to_jsonable_python
 
 from artifacts.writer import write_artifact
 from memory.context_window import ContextWindowManager
+from memory.durability import FleetRuntimeStore
 from memory.errors import (
     InvalidTargetArtifacts,
     WorkerContextHydrationError,
     WorkerContextInvocationError,
 )
 from memory.persistence import require_path_segment
+from memory.recovery import record_runtime_error
 from memory.targets import _resolve_catalog_definitions
 from models.hydration import (
     CompletionObligationView,
@@ -167,10 +169,21 @@ def compile_worker_context(
     fixed_request_input: str = "",
     provider_framing_tokens: int = 0,
     debug_writer: WorkerContextDebugWriter | None = None,
+    persistence: FleetRuntimeStore | None = None,
 ) -> WorkerContext:
     """Compile one complete mandatory context and enter the HYDRATING phase."""
     _validate_invocation(fleet_spec, target_spec, target_state)
     target_state.phase = TargetPhase.HYDRATING
+    if persistence is not None:
+        persistence.persist_target_state(
+            target_spec,
+            target_state,
+            event_type="phase_transition",
+            payload={
+                "from_phase": TargetPhase.SCHEDULED.value,
+                "to_phase": TargetPhase.HYDRATING.value,
+            },
+        )
 
     try:
         context, serialized, diagnostics = _compile_hydrating_context(
@@ -188,11 +201,35 @@ def compile_worker_context(
             fixed_request_input=fixed_request_input,
             provider_framing_tokens=provider_framing_tokens,
         )
-    except WorkerContextHydrationError:
+    except WorkerContextHydrationError as error:
         _mark_hydration_failed(target_state)
+        if persistence is not None:
+            record_runtime_error(
+                persistence,
+                None,
+                category="configuration",
+                operation="context-hydration",
+                message=str(error),
+                retryable=False,
+                target_spec=target_spec,
+                target_state=target_state,
+                phase=TargetPhase.HYDRATING.value,
+            )
         raise
     except Exception as error:
         _mark_hydration_failed(target_state)
+        if persistence is not None:
+            record_runtime_error(
+                persistence,
+                None,
+                category="runtime",
+                operation="context-hydration",
+                message="worker context hydration failed",
+                retryable=False,
+                target_spec=target_spec,
+                target_state=target_state,
+                phase=TargetPhase.HYDRATING.value,
+            )
         raise WorkerContextHydrationError("worker context hydration failed") from error
 
     if debug_writer is not None:
@@ -211,6 +248,13 @@ def compile_worker_context(
                 "could not write non-authoritative worker-context debug snapshot",
                 exc_info=True,
             )
+    if persistence is not None:
+        persistence.persist_target_state(
+            target_spec,
+            target_state,
+            event_type="context_hydrated",
+            payload={},
+        )
     return context
 
 

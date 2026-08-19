@@ -284,6 +284,15 @@ class OpenAILLMClient:
             latency_ms=latency_ms,
         )
 
+    async def generate_once(
+        self,
+        request: LLMRequest,
+        *,
+        output_type: type[StructuredOutputT] | None = None,
+    ) -> LLMResponse[StructuredOutputT]:
+        """Perform one provider attempt for a runtime-owned retry loop."""
+        return await self._generate_once(request, output_type=output_type)
+
     def _extract_tool_calls(
         self, provider_response: Any, request: LLMRequest
     ) -> list[LLMToolCall]:
