@@ -45,14 +45,77 @@ class WorkerCyclePreflightError(MemoryHarnessError):
     """Stage 4 could not safely begin actual worker execution."""
 
 
+class PersistenceRecoveryError(MemoryHarnessError):
+    """Stage 5 could not safely persist or recover authoritative state."""
+
+
+class FinalizationRequestError(MemoryHarnessError):
+    """Stage 6 could not create or resolve a coherent candidate submission."""
+
+
+class TargetReviewError(MemoryHarnessError):
+    """Stage 8 could not compile, execute, or persist a coherent review."""
+
+
+class TargetReviewInvocationError(TargetReviewError):
+    """Stage 8 was invoked outside its exact validated-candidate boundary."""
+
+
+class TargetReviewBudgetError(TargetReviewError):
+    """A target or fleet execution budget prevents the reviewer call."""
+
+    def __init__(self, scope: str) -> None:
+        super().__init__(f"{scope} budget prevents target review")
+        self.scope = scope
+
+
+class TargetAcceptanceError(MemoryHarnessError):
+    """Stage 10 could not establish or persist coherent local acceptance."""
+
+
+class FleetValidationError(MemoryHarnessError):
+    """Stage 11 was invoked outside its fleet-validation admission boundary."""
+
+
+class FleetReviewError(MemoryHarnessError):
+    """Stage 12 could not compile, execute, or persist a coherent review."""
+
+
+class FleetReviewInvocationError(FleetReviewError):
+    """Stage 12 was invoked outside its exact Stage 11 PASS boundary."""
+
+
+class FleetReviewBudgetError(FleetReviewError):
+    """The fleet execution budget prevents a reconciliation call."""
+
+    def __init__(self, scope: str) -> None:
+        super().__init__(f"{scope} budget prevents fleet review")
+        self.scope = scope
+
+
+class FleetAcceptanceError(MemoryHarnessError):
+    """Stage 13 could not establish coherent final fleet acceptance."""
+
+
 __all__ = [
     "ContextWindowConfigurationError",
     "FleetInitializationError",
     "FleetSchedulingError",
+    "FleetValidationError",
+    "FleetAcceptanceError",
+    "FleetReviewBudgetError",
+    "FleetReviewError",
+    "FleetReviewInvocationError",
+    "FinalizationRequestError",
     "InvalidTargetArtifacts",
     "MemoryHarnessError",
     "MemoryRunBindingError",
+    "PersistenceRecoveryError",
     "TargetActivationError",
+    "TargetAcceptanceError",
+    "TargetReviewBudgetError",
+    "TargetReviewError",
+    "TargetReviewInvocationError",
     "WorkerContextHydrationError",
     "WorkerContextInvocationError",
     "WorkerCycleInvocationError",

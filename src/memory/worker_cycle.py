@@ -10,6 +10,7 @@ import orjson
 from pydantic import JsonValue
 
 from llm.client import LLMClient
+from llm.errors import LLMError
 from llm.models import (
     LLMMessage,
     LLMOperation,
@@ -21,8 +22,10 @@ from llm.models import (
     LLMUsage,
 )
 from memory.context_window import ContextWindowManager
+from memory.durability import FleetRuntimeStore
 from memory.errors import WorkerCycleInvocationError, WorkerCyclePreflightError
 from memory.hydration import serialize_worker_context
+from memory.provider_recovery import run_provider_with_retry
 from memory.worker_tools import FINALIZATION_TOOL_ID, WorkerToolRuntime
 from models.hydration import WorkerContext, WorkerContextMode, WorkerProfile
 from models.memory import (
@@ -83,6 +86,10 @@ class _ModelReservation:
     input_tokens: int
     output_tokens: int
     active: bool = True
+    attempt_id: str | None = None
+    target_spec: TargetTaskSpec | None = None
+    target_state: TargetTaskState | None = None
+    fleet_state: FleetRunState | None = None
 
 
 @dataclass(slots=True)
@@ -94,11 +101,36 @@ class _ToolReservation:
 class FleetExecutionCoordinator:
     """Concurrency-safe in-flight coordination for one fleet's hard budgets."""
 
-    def __init__(self) -> None:
+    def __init__(self, persistence: FleetRuntimeStore | None = None) -> None:
         self._lock = asyncio.Lock()
+        self._persistence = persistence
+        self._fleet_state: FleetRunState | None = None
         self._reserved_input_tokens = 0
         self._reserved_output_tokens = 0
         self._reserved_tool_calls = 0
+        self._durable_holds_loaded = False
+
+    def bind_persistence(
+        self,
+        persistence: FleetRuntimeStore,
+        fleet_state: FleetRunState,
+    ) -> None:
+        """Bind one shared durable fleet authority before worker execution."""
+        if self._persistence is not None and self._persistence is not persistence:
+            raise ValueError("coordinator is already bound to another fleet store")
+        if self._fleet_state is not None and self._fleet_state is not fleet_state:
+            raise ValueError("coordinator is already bound to another fleet state")
+        self._persistence = persistence
+        self._fleet_state = fleet_state
+        if not self._durable_holds_loaded:
+            reservations = persistence.provider_reservations()
+            self._reserved_input_tokens += sum(
+                item.input_token_reservation for item in reservations
+            )
+            self._reserved_output_tokens += sum(
+                item.output_token_reservation for item in reservations
+            )
+            self._durable_holds_loaded = True
 
     async def start_cycle_and_reserve_first_model_call(
         self,
@@ -151,13 +183,35 @@ class FleetExecutionCoordinator:
             if requested_output_tokens < 1:
                 raise _BudgetStop(_BudgetScope.FLEET)
 
-            target_state.phase = TargetPhase.WORKING
-            _apply_usage_delta(target_usage, fleet_usage, cycles=1, model_calls=1)
-            if repair:
-                _apply_usage_delta(target_usage, fleet_usage, repair_cycles=1)
+            attempt_id: str | None = None
+            target_spec: TargetTaskSpec | None = None
+            if self._persistence is None:
+                target_state.phase = TargetPhase.WORKING
+                _apply_usage_delta(target_usage, fleet_usage, cycles=1, model_calls=1)
+                if repair:
+                    _apply_usage_delta(target_usage, fleet_usage, repair_cycles=1)
+            else:
+                fleet_state = self._require_bound_fleet_state(fleet_usage)
+                target_spec = self._target_spec(target_state.target_task_id)
+                attempt_id = self._persistence.prepare_provider_attempt(
+                    fleet_state,
+                    target_spec,
+                    target_state,
+                    input_tokens=input_tokens,
+                    output_tokens=requested_output_tokens,
+                    cycle_start=True,
+                    repair=repair,
+                )
             self._reserved_input_tokens += input_tokens
             self._reserved_output_tokens += requested_output_tokens
-            return _ModelReservation(input_tokens, requested_output_tokens)
+            return _ModelReservation(
+                input_tokens,
+                requested_output_tokens,
+                attempt_id=attempt_id,
+                target_spec=target_spec,
+                target_state=target_state if target_spec is not None else None,
+                fleet_state=(self._fleet_state if target_spec is not None else None),
+            )
 
     async def reserve_model_call(
         self,
@@ -168,6 +222,8 @@ class FleetExecutionCoordinator:
         *,
         input_tokens: int,
         requested_output_tokens: int,
+        target_state: TargetTaskState | None = None,
+        target_spec: TargetTaskSpec | None = None,
     ) -> _ModelReservation:
         """Reserve exact input and maximum output, then charge the call attempt."""
         if target_usage.model_calls >= target_budget.max_model_calls:
@@ -201,10 +257,83 @@ class FleetExecutionCoordinator:
                 requested_output_tokens = min(requested_output_tokens, fleet_output)
             if requested_output_tokens < 1:
                 raise _BudgetStop(_BudgetScope.FLEET)
-            _apply_usage_delta(target_usage, fleet_usage, model_calls=1)
+            attempt_id: str | None = None
+            if self._persistence is None:
+                _apply_usage_delta(target_usage, fleet_usage, model_calls=1)
+            else:
+                if target_state is None or target_spec is None:
+                    raise ValueError(
+                        "durable model reservation requires target authorities"
+                    )
+                fleet_state = self._require_bound_fleet_state(fleet_usage)
+                attempt_id = self._persistence.prepare_provider_attempt(
+                    fleet_state,
+                    target_spec,
+                    target_state,
+                    input_tokens=input_tokens,
+                    output_tokens=requested_output_tokens,
+                    cycle_start=False,
+                )
             self._reserved_input_tokens += input_tokens
             self._reserved_output_tokens += requested_output_tokens
-            return _ModelReservation(input_tokens, requested_output_tokens)
+            return _ModelReservation(
+                input_tokens,
+                requested_output_tokens,
+                attempt_id=attempt_id,
+                target_spec=target_spec,
+                target_state=target_state,
+                fleet_state=self._fleet_state,
+            )
+
+    async def reserve_fleet_model_call(
+        self,
+        fleet_budget: ExecutionBudget,
+        fleet_state: FleetRunState,
+        *,
+        input_tokens: int,
+        requested_output_tokens: int,
+    ) -> _ModelReservation:
+        """Reserve and charge one fleet-only model invocation."""
+        async with self._lock:
+            usage = fleet_state.usage
+            if usage.model_calls >= fleet_budget.max_model_calls:
+                raise _BudgetStop(_BudgetScope.FLEET)
+            if fleet_budget.max_input_tokens is not None and (
+                usage.input_tokens + self._reserved_input_tokens + input_tokens
+                > fleet_budget.max_input_tokens
+            ):
+                raise _BudgetStop(_BudgetScope.FLEET)
+            fleet_output = _remaining_optional(
+                fleet_budget.max_output_tokens,
+                usage.output_tokens + self._reserved_output_tokens,
+            )
+            if fleet_output is not None:
+                requested_output_tokens = min(requested_output_tokens, fleet_output)
+            if requested_output_tokens < 1:
+                raise _BudgetStop(_BudgetScope.FLEET)
+            attempt_id: str | None = None
+            if self._persistence is None:
+                usage.model_calls += 1
+            else:
+                bound = self._require_bound_fleet_state(usage)
+                attempt_id = self._persistence.prepare_fleet_provider_attempt(
+                    bound,
+                    input_tokens=input_tokens,
+                    output_tokens=requested_output_tokens,
+                )
+            self._reserved_input_tokens += input_tokens
+            self._reserved_output_tokens += requested_output_tokens
+            return _ModelReservation(
+                input_tokens,
+                requested_output_tokens,
+                attempt_id=attempt_id,
+                fleet_state=self._fleet_state,
+            )
+
+    async def mark_model_invoked(self, reservation: _ModelReservation) -> None:
+        """Persist the provider invocation boundary before network dispatch."""
+        if self._persistence is not None and reservation.attempt_id is not None:
+            self._persistence.mark_provider_invoked(reservation.attempt_id)
 
     async def finish_model_call(
         self,
@@ -220,7 +349,23 @@ class FleetExecutionCoordinator:
             reservation.active = False
             self._reserved_input_tokens -= reservation.input_tokens
             self._reserved_output_tokens -= reservation.output_tokens
-            if usage is not None:
+            if self._persistence is not None and reservation.attempt_id is not None:
+                if (
+                    reservation.target_spec is None
+                    or reservation.target_state is None
+                    or reservation.fleet_state is None
+                ):
+                    raise RuntimeError("durable model reservation lost authorities")
+                self._persistence.settle_provider_attempt(
+                    reservation.fleet_state,
+                    reservation.target_spec,
+                    reservation.target_state,
+                    reservation.attempt_id,
+                    input_tokens=(usage.input_tokens or 0) if usage else 0,
+                    output_tokens=(usage.output_tokens or 0) if usage else 0,
+                    failed=usage is None,
+                )
+            elif usage is not None:
                 _apply_usage_delta(
                     target_usage,
                     fleet_usage,
@@ -228,20 +373,170 @@ class FleetExecutionCoordinator:
                     output_tokens=usage.output_tokens or 0,
                 )
 
+    async def finish_fleet_model_call(
+        self,
+        reservation: _ModelReservation,
+        fleet_state: FleetRunState,
+        usage: LLMUsage | None,
+    ) -> None:
+        """Settle a fleet-only model invocation and release its allowance."""
+        async with self._lock:
+            if not reservation.active:
+                return
+            reservation.active = False
+            self._reserved_input_tokens -= reservation.input_tokens
+            self._reserved_output_tokens -= reservation.output_tokens
+            if self._persistence is not None and reservation.attempt_id is not None:
+                if reservation.fleet_state is None:
+                    raise RuntimeError("durable fleet reservation lost authority")
+                self._persistence.settle_fleet_provider_attempt(
+                    reservation.fleet_state,
+                    reservation.attempt_id,
+                    input_tokens=(usage.input_tokens or 0) if usage else 0,
+                    output_tokens=(usage.output_tokens or 0) if usage else 0,
+                    failed=usage is None,
+                )
+            elif usage is not None:
+                fleet_state.usage.input_tokens += usage.input_tokens or 0
+                fleet_state.usage.output_tokens += usage.output_tokens or 0
+
+    async def charge_additional_fleet_model_attempts(
+        self,
+        fleet_state: FleetRunState,
+        attempts: int,
+    ) -> None:
+        """Charge fleet-only retries performed inside one logical request."""
+        if attempts < 0:
+            raise ValueError("additional provider attempts cannot be negative")
+        async with self._lock:
+            if (
+                fleet_state.usage.model_calls + attempts
+                > self._fleet_budget().max_model_calls
+            ):
+                raise _BudgetStop(_BudgetScope.FLEET)
+            if self._persistence is None:
+                fleet_state.usage.model_calls += attempts
+            else:
+                self._persistence.apply_fleet_usage_delta(
+                    fleet_state,
+                    {"model_calls": attempts},
+                )
+
+    async def charge_fleet_reported_tokens(
+        self,
+        fleet_state: FleetRunState,
+        usage: LLMUsage,
+    ) -> None:
+        """Charge tokens from a definitive fleet-review retry failure."""
+        delta = {
+            "input_tokens": usage.input_tokens or 0,
+            "output_tokens": usage.output_tokens or 0,
+        }
+        async with self._lock:
+            if self._persistence is None:
+                fleet_state.usage.input_tokens += delta["input_tokens"]
+                fleet_state.usage.output_tokens += delta["output_tokens"]
+            else:
+                self._persistence.apply_fleet_usage_delta(fleet_state, delta)
+
     async def charge_additional_model_attempts(
         self,
         target_usage: ExecutionUsage,
         fleet_usage: ExecutionUsage,
         attempts: int,
+        *,
+        target_state: TargetTaskState | None = None,
+        target_spec: TargetTaskSpec | None = None,
     ) -> None:
         """Charge provider retries already performed inside an existing client."""
         if attempts < 0:
             raise ValueError("additional provider attempts cannot be negative")
         async with self._lock:
-            _apply_usage_delta(
-                target_usage,
-                fleet_usage,
-                model_calls=attempts,
+            if (
+                target_spec is not None
+                and target_usage.model_calls + attempts
+                > target_spec.budget.max_model_calls
+            ):
+                raise _BudgetStop(_BudgetScope.TARGET)
+            if (
+                self._persistence is not None
+                and fleet_usage.model_calls + attempts
+                > self._persistence.fleet_spec.fleet_budget.max_model_calls
+            ):
+                raise _BudgetStop(_BudgetScope.FLEET)
+            if self._persistence is None:
+                _apply_usage_delta(
+                    target_usage,
+                    fleet_usage,
+                    model_calls=attempts,
+                )
+            else:
+                if target_state is None or target_spec is None:
+                    raise ValueError("durable retry charge requires target authorities")
+                self._persistence.apply_usage_delta(
+                    self._require_bound_fleet_state(fleet_usage),
+                    target_spec,
+                    target_state,
+                    {"model_calls": attempts},
+                )
+
+    def record_retry(
+        self,
+        target_task_id: str | None,
+        attempt: int,
+        delay_seconds: float,
+    ) -> None:
+        """Append compact provider retry scheduling metadata."""
+        if self._persistence is None:
+            return
+        self._persistence.append_event(
+            "retry_scheduled",
+            {"attempt": attempt, "delay_seconds": delay_seconds},
+            target_task_id=target_task_id,
+        )
+
+    def record_retry_attempt_boundary(
+        self,
+        target_task_id: str | None,
+        logical_attempt_id: str,
+        provider_attempt: int,
+        *,
+        failed: bool,
+    ) -> None:
+        """Trace one physical retry boundary within a logical model request."""
+        if self._persistence is None:
+            return
+        self._persistence.append_event(
+            "model_attempt_failed" if failed else "model_attempt_started",
+            {
+                "attempt_id": logical_attempt_id,
+                "provider_attempt": provider_attempt,
+            },
+            target_task_id=target_task_id,
+            operation_id=logical_attempt_id,
+        )
+
+    async def charge_reported_tokens(
+        self,
+        target_state: TargetTaskState,
+        fleet_state: FleetRunState,
+        usage: LLMUsage,
+    ) -> None:
+        """Charge tokens reported by a definitive intermediate retry failure."""
+        delta = {
+            "input_tokens": usage.input_tokens or 0,
+            "output_tokens": usage.output_tokens or 0,
+        }
+        async with self._lock:
+            if self._persistence is None:
+                _apply_usage_delta(target_state.usage, fleet_state.usage, **delta)
+                return
+            target_spec = self._target_spec(target_state.target_task_id)
+            self._persistence.apply_usage_delta(
+                fleet_state,
+                target_spec,
+                target_state,
+                delta,
             )
 
     async def reserve_tool_batch(
@@ -269,6 +564,10 @@ class FleetExecutionCoordinator:
         reservation: _ToolReservation,
         target_usage: ExecutionUsage,
         fleet_usage: ExecutionUsage,
+        *,
+        target_state: TargetTaskState | None = None,
+        target_spec: TargetTaskSpec | None = None,
+        tool: str = "operational",
     ) -> None:
         """Charge one attempted operational dispatch from a reserved batch."""
         async with self._lock:
@@ -276,7 +575,21 @@ class FleetExecutionCoordinator:
                 raise RuntimeError("tool dispatch does not have a live reservation")
             reservation.remaining -= 1
             self._reserved_tool_calls -= 1
-            _apply_usage_delta(target_usage, fleet_usage, tool_calls=1)
+            if self._persistence is None:
+                _apply_usage_delta(target_usage, fleet_usage, tool_calls=1)
+            else:
+                if target_state is None or target_spec is None:
+                    raise ValueError(
+                        "durable tool dispatch requires target authorities"
+                    )
+                self._persistence.apply_usage_delta(
+                    self._require_bound_fleet_state(fleet_usage),
+                    target_spec,
+                    target_state,
+                    {"tool_calls": 1},
+                    event_type="tool_dispatch_started",
+                    payload={"tool": tool},
+                )
 
     async def release_tool_batch(self, reservation: _ToolReservation) -> None:
         """Release any operational calls not attempted after an interruption."""
@@ -286,6 +599,47 @@ class FleetExecutionCoordinator:
             reservation.active = False
             self._reserved_tool_calls -= reservation.remaining
             reservation.remaining = 0
+
+    def record_tool_result(
+        self,
+        target_task_id: str,
+        tool: str,
+        *,
+        failed: bool,
+    ) -> None:
+        """Append compact tool completion metadata when persistence is active."""
+        if self._persistence is None:
+            return
+        self._persistence.append_event(
+            "tool_dispatch_rejected" if failed else "tool_dispatch_completed",
+            {"tool": tool, "status": "error" if failed else "ok"},
+            target_task_id=target_task_id,
+        )
+
+    def _require_bound_fleet_state(
+        self,
+        fleet_usage: ExecutionUsage,
+    ) -> FleetRunState:
+        if self._fleet_state is None or self._fleet_state.usage is not fleet_usage:
+            raise ValueError("durable coordinator fleet state is not bound")
+        return self._fleet_state
+
+    def _fleet_budget(self) -> ExecutionBudget:
+        if self._persistence is None:
+            raise RuntimeError("fleet retry budget requires persistence")
+        return self._persistence.fleet_spec.fleet_budget
+
+    def _target_spec(self, target_task_id: str) -> TargetTaskSpec:
+        if self._persistence is None:
+            raise RuntimeError("durable target lookup requires persistence")
+        matches = [
+            spec
+            for spec in self._persistence.load_target_specs()
+            if spec.target_task_id == target_task_id
+        ]
+        if len(matches) != 1:
+            raise ValueError("target task spec does not resolve uniquely")
+        return matches[0]
 
 
 @dataclass(slots=True)
@@ -408,6 +762,7 @@ class WorkerRunner:
         self._evidence = evidence
         self._questions = questions
         self._coordinator = coordinator
+        self._last_runtime_error: Exception | None = None
         self._limits = limits or WorkerRuntimeLimits()
         self._canonical_base = serialize_worker_context(context)
         self._base_completion = {
@@ -428,6 +783,11 @@ class WorkerRunner:
             context_window_manager,
             soft_tokens=self._limits.tool_context_soft_tokens,
         )
+
+    @property
+    def last_runtime_error(self) -> Exception | None:
+        """Return the transient failure that ended the current trajectory."""
+        return self._last_runtime_error
 
     async def run(self) -> WorkerCycleOutcome:
         """Preflight, charge, and execute one multi-turn hydrated worker cycle."""
@@ -457,9 +817,27 @@ class WorkerRunner:
             )
 
             response: LLMResponse | None = None
+            durable_retry_loop = False
             try:
-                response = await self._client.generate(request)
+                await self._coordinator.mark_model_invoked(reservation)
+                if reservation.attempt_id is None:
+                    response = await self._client.generate(request)
+                else:
+                    durable_retry_loop = True
+                    response = await self._generate_with_retries(
+                        request,
+                        reservation.attempt_id,
+                    )
+            except _BudgetStop as stop:
+                await self._coordinator.finish_model_call(
+                    reservation,
+                    self._target_state.usage,
+                    self._fleet_state.usage,
+                    None,
+                )
+                return self._outcome_for_budget_stop(stop.scope)
             except Exception as error:
+                self._last_runtime_error = error
                 failed_usage = getattr(error, "usage", None)
                 await self._coordinator.finish_model_call(
                     reservation,
@@ -468,11 +846,17 @@ class WorkerRunner:
                     failed_usage if isinstance(failed_usage, LLMUsage) else None,
                 )
                 attempt_count = getattr(error, "attempt_count", 1)
-                if isinstance(attempt_count, int) and attempt_count > 1:
+                if (
+                    not durable_retry_loop
+                    and isinstance(attempt_count, int)
+                    and attempt_count > 1
+                ):
                     await self._coordinator.charge_additional_model_attempts(
                         self._target_state.usage,
                         self._fleet_state.usage,
                         attempt_count - 1,
+                        target_state=self._target_state,
+                        target_spec=self._target_spec,
                     )
                 return WorkerCycleOutcome.EXECUTION_INTERRUPTED
             await self._coordinator.finish_model_call(
@@ -481,11 +865,13 @@ class WorkerRunner:
                 self._fleet_state.usage,
                 response.usage,
             )
-            if response.retry_count:
+            if response.retry_count and not durable_retry_loop:
                 await self._coordinator.charge_additional_model_attempts(
                     self._target_state.usage,
                     self._fleet_state.usage,
                     response.retry_count,
+                    target_state=self._target_state,
+                    target_spec=self._target_spec,
                 )
 
             calls = response.tool_calls
@@ -520,8 +906,16 @@ class WorkerRunner:
                         tool_reservation,
                         self._target_state.usage,
                         self._fleet_state.usage,
+                        target_state=self._target_state,
+                        target_spec=self._target_spec,
+                        tool=call.name,
                     )
                     result = await self._tools.execute_operational(call)
+                    self._coordinator.record_tool_result(
+                        self._target_spec.target_task_id,
+                        call.name,
+                        failed=result.error is not None,
+                    )
                     results.append(
                         _bound_tool_result(
                             result,
@@ -552,11 +946,71 @@ class WorkerRunner:
                     self._target_state.usage,
                     input_tokens=input_tokens,
                     requested_output_tokens=output_tokens,
+                    target_state=self._target_state,
+                    target_spec=self._target_spec,
                 )
             except _BudgetStop as stop:
                 return self._outcome_for_budget_stop(stop.scope)
 
         return WorkerCycleOutcome.EXECUTION_INTERRUPTED
+
+    async def _generate_with_retries(
+        self,
+        request: LLMRequest,
+        logical_attempt_id: str,
+    ) -> LLMResponse:
+        async def operation() -> LLMResponse:
+            generate_once = getattr(self._client, "generate_once", None)
+            if callable(generate_once):
+                return await generate_once(request)
+            return await self._client.generate(request)
+
+        async def before_attempt(attempt: int) -> None:
+            if attempt == 1:
+                return
+            await self._coordinator.charge_additional_model_attempts(
+                self._target_state.usage,
+                self._fleet_state.usage,
+                1,
+                target_state=self._target_state,
+                target_spec=self._target_spec,
+            )
+            self._coordinator.record_retry_attempt_boundary(
+                self._target_spec.target_task_id,
+                logical_attempt_id,
+                attempt,
+                failed=False,
+            )
+
+        async def on_retry(
+            next_attempt: int,
+            delay_seconds: float,
+            error: LLMError,
+        ) -> None:
+            self._coordinator.record_retry_attempt_boundary(
+                self._target_spec.target_task_id,
+                logical_attempt_id,
+                next_attempt - 1,
+                failed=True,
+            )
+            failed_usage = getattr(error, "usage", None)
+            if isinstance(failed_usage, LLMUsage):
+                await self._coordinator.charge_reported_tokens(
+                    self._target_state,
+                    self._fleet_state,
+                    failed_usage,
+                )
+            self._coordinator.record_retry(
+                self._target_spec.target_task_id,
+                next_attempt,
+                delay_seconds,
+            )
+
+        return await run_provider_with_retry(
+            operation,
+            before_attempt=before_attempt,
+            on_retry=on_retry,
+        )
 
     def _preflight(self) -> tuple[LLMRequest, int, int]:
         self._validate_invocation()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path, PurePosixPath
 from typing import Protocol
@@ -12,13 +13,16 @@ from pydantic_core import to_jsonable_python
 
 from artifacts.writer import write_artifact
 from memory.context_window import ContextWindowManager
+from memory.durability import FleetRuntimeStore
 from memory.errors import (
     InvalidTargetArtifacts,
     WorkerContextHydrationError,
     WorkerContextInvocationError,
 )
 from memory.persistence import require_path_segment
+from memory.recovery import record_runtime_error
 from memory.targets import _resolve_catalog_definitions
+from models.fleet_validation import FleetValidationFinding
 from models.hydration import (
     CompletionObligationView,
     ContextWindowDiagnostics,
@@ -44,6 +48,10 @@ from models.memory import (
     TargetTaskSpec,
     TargetTaskState,
 )
+from models.review import ReviewFinding
+from models.validation import ValidationFinding
+from models.worker_cycle import EvidenceReference
+from models.worker_cycle import OpenQuestion as DurableOpenQuestion
 
 _LOGGER = logging.getLogger(__name__)
 _HYDRATION_ERROR_REF = "stage-3-context-hydration"
@@ -94,6 +102,8 @@ class FindingRecord(BaseModel):
     is_open: bool = True
     affected_scope: str | None = Field(default=None, min_length=1)
     affected_artifact_id: str | None = Field(default=None, min_length=1)
+    affected_artifact_refs: tuple[str, ...] = ()
+    affected_obligation_ids: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
 
 
@@ -114,6 +124,224 @@ class HydrationStateReader(Protocol):
 
     def get_open_finding(self, finding_id: str) -> FindingRecord | None:
         """Return one authoritative routed finding record."""
+
+
+class _PersistedHydrationStateReader:
+    """Project Stage 5 target state through the existing Stage 3 read boundary."""
+
+    def __init__(
+        self,
+        store: FleetRuntimeStore,
+        target_spec: TargetTaskSpec,
+        target_state: TargetTaskState,
+    ) -> None:
+        """Bind one reader to the current durable state of a target task."""
+        if (
+            target_spec.fleet_run_id != store.fleet_spec.fleet_run_id
+            or target_state.fleet_run_id != store.fleet_spec.fleet_run_id
+            or target_state.target_task_id != target_spec.target_task_id
+            or target_spec.source != store.fleet_spec.source
+        ):
+            raise WorkerContextInvocationError(
+                "hydration persistence belongs to a different target"
+            )
+        self._store = store
+        self._target_spec = target_spec
+        self._target_state = target_state
+
+    def get_candidate_artifact(
+        self,
+        artifact_id: str,
+    ) -> CandidateArtifactRecord | None:
+        """Return current artifact metadata only when its workspace bytes match."""
+        reference = next(
+            (
+                item
+                for item in self._target_state.artifact_refs
+                if item.artifact_id == artifact_id
+            ),
+            None,
+        )
+        if reference is None:
+            return None
+        workspace = Path(self._target_spec.target_workspace).resolve()
+        path = (workspace / reference.relative_path).resolve()
+        if (
+            not path.is_relative_to(workspace)
+            or not path.is_file()
+            or path.is_symlink()
+            or hashlib.sha256(path.read_bytes()).hexdigest() != reference.digest
+        ):
+            return None
+        return CandidateArtifactRecord(
+            artifact_id=reference.artifact_id,
+            target_task_id=self._target_spec.target_task_id,
+            target_workspace=self._target_spec.target_workspace,
+            relative_path=reference.relative_path,
+            revision=reference.revision,
+            digest=reference.digest,
+        )
+
+    def get_evidence(self, evidence_id: str) -> EvidenceRecord | None:
+        """Load one immutable evidence identity from the target store."""
+        path = self._store.paths.evidence(self._target_spec, evidence_id)
+        if not path.is_file():
+            return None
+        try:
+            reference = EvidenceReference.model_validate_json(path.read_bytes())
+        except (OSError, ValidationError):
+            return None
+        if (
+            reference.evidence_id != evidence_id
+            or reference.target_task_id != self._target_spec.target_task_id
+        ):
+            return None
+        return EvidenceRecord(
+            evidence_id=reference.evidence_id,
+            source=reference.source,
+        )
+
+    def get_open_question(self, question_id: str) -> OpenQuestionRecord | None:
+        """Load one immutable question and project its current openness."""
+        path = self._store.paths.question(self._target_spec, question_id)
+        if not path.is_file():
+            return None
+        try:
+            question = DurableOpenQuestion.model_validate_json(path.read_bytes())
+        except (OSError, ValidationError):
+            return None
+        if (
+            question.question_id != question_id
+            or question.target_task_id != self._target_spec.target_task_id
+        ):
+            return None
+        return OpenQuestionRecord(
+            question_id=question.question_id,
+            target_task_id=question.target_task_id,
+            content=question.content,
+            is_open=question_id in self._target_state.open_question_refs,
+        )
+
+    def get_open_finding(self, finding_id: str) -> FindingRecord | None:
+        """Load one immutable evaluator finding in the current open projection."""
+        reference = next(
+            (
+                item
+                for item in self._target_state.open_finding_refs
+                if item.finding_id == finding_id
+            ),
+            None,
+        )
+        if reference is None:
+            return None
+        if reference.origin is FindingOrigin.HARD_VALIDATION:
+            return self._validation_finding(finding_id)
+        if reference.origin is FindingOrigin.TARGET_REVIEW:
+            return self._review_finding(finding_id)
+        if reference.origin is FindingOrigin.FLEET_VALIDATION:
+            return self._fleet_validation_finding(finding_id)
+        if reference.origin is FindingOrigin.FLEET_REVIEW:
+            return self._fleet_review_finding(finding_id)
+        return None
+
+    def _validation_finding(self, finding_id: str) -> FindingRecord | None:
+        path = self._store.paths.validation_finding(self._target_spec, finding_id)
+        if not path.is_file():
+            return None
+        try:
+            finding = ValidationFinding.model_validate_json(path.read_bytes())
+        except (OSError, ValidationError):
+            return None
+        if (
+            finding.finding_id != finding_id
+            or finding.target_task_id != self._target_spec.target_task_id
+        ):
+            return None
+        return FindingRecord(
+            finding_id=finding.finding_id,
+            target_task_id=finding.target_task_id,
+            origin=FindingOrigin.HARD_VALIDATION,
+            content=finding.message,
+            affected_scope=finding.subject_ref,
+            affected_artifact_id=(
+                finding.subject_ref if finding.subject_kind == "artifact" else None
+            ),
+        )
+
+    def _review_finding(self, finding_id: str) -> FindingRecord | None:
+        path = self._store.paths.review_finding(self._target_spec, finding_id)
+        if not path.is_file():
+            return None
+        try:
+            finding = ReviewFinding.model_validate_json(path.read_bytes())
+        except (OSError, ValidationError):
+            return None
+        if (
+            finding.finding_id != finding_id
+            or finding.target_task_id != self._target_spec.target_task_id
+        ):
+            return None
+        return FindingRecord(
+            finding_id=finding.finding_id,
+            target_task_id=finding.target_task_id,
+            origin=FindingOrigin.TARGET_REVIEW,
+            content=(
+                f"{finding.message}\n\nRequired outcome: " f"{finding.required_outcome}"
+            ),
+            affected_artifact_refs=tuple(finding.affected_artifact_refs),
+            affected_obligation_ids=tuple(finding.affected_obligation_ids),
+        )
+
+    def _fleet_validation_finding(
+        self,
+        finding_id: str,
+    ) -> FindingRecord | None:
+        path = self._store.paths.fleet_validation_finding(finding_id)
+        if not path.is_file():
+            return None
+        try:
+            finding = FleetValidationFinding.model_validate_json(path.read_bytes())
+        except (OSError, ValidationError):
+            return None
+        if (
+            finding.finding_id != finding_id
+            or finding.fleet_run_id != self._store.fleet_spec.fleet_run_id
+            or self._target_spec.target_task_id not in finding.affected_target_task_ids
+        ):
+            return None
+        return FindingRecord(
+            finding_id=finding.finding_id,
+            target_task_id=self._target_spec.target_task_id,
+            origin=FindingOrigin.FLEET_VALIDATION,
+            content=finding.message,
+            affected_scope=finding.subject_ref,
+        )
+
+    def _fleet_review_finding(self, finding_id: str) -> FindingRecord | None:
+        from models.fleet_review import FleetReviewFinding
+
+        path = self._store.paths.fleet_review_finding(finding_id)
+        if not path.is_file():
+            return None
+        try:
+            finding = FleetReviewFinding.model_validate_json(path.read_bytes())
+        except (OSError, ValidationError):
+            return None
+        if (
+            finding.finding_id != finding_id
+            or finding.fleet_run_id != self._store.fleet_spec.fleet_run_id
+            or self._target_spec.target_task_id not in finding.affected_target_task_ids
+        ):
+            return None
+        return FindingRecord(
+            finding_id=finding.finding_id,
+            target_task_id=self._target_spec.target_task_id,
+            origin=FindingOrigin.FLEET_REVIEW,
+            content=(
+                f"{finding.message}\n\nRequired outcome: " f"{finding.required_outcome}"
+            ),
+            affected_artifact_refs=tuple(finding.affected_artifact_paths),
+        )
 
 
 class WorkerContextDebugSnapshot(BaseModel):
@@ -161,16 +389,41 @@ def compile_worker_context(
     worker_profile: WorkerProfile | None,
     permission_profile: PermissionProfile | None,
     worker_instructions: WorkerInstructions | None,
-    state_reader: HydrationStateReader,
+    state_reader: HydrationStateReader | None = None,
     *,
     context_window_manager: ContextWindowManager | None = None,
     fixed_request_input: str = "",
     provider_framing_tokens: int = 0,
     debug_writer: WorkerContextDebugWriter | None = None,
+    persistence: FleetRuntimeStore | None = None,
 ) -> WorkerContext:
     """Compile one complete mandatory context and enter the HYDRATING phase."""
     _validate_invocation(fleet_spec, target_spec, target_state)
+    if state_reader is None:
+        if persistence is None:
+            raise WorkerContextInvocationError(
+                "hydration requires a state reader or persistence"
+            )
+        if persistence.fleet_spec != fleet_spec:
+            raise WorkerContextInvocationError(
+                "hydration persistence does not match the fleet specification"
+            )
+        state_reader = _PersistedHydrationStateReader(
+            persistence,
+            target_spec,
+            target_state,
+        )
     target_state.phase = TargetPhase.HYDRATING
+    if persistence is not None:
+        persistence.persist_target_state(
+            target_spec,
+            target_state,
+            event_type="phase_transition",
+            payload={
+                "from_phase": TargetPhase.SCHEDULED.value,
+                "to_phase": TargetPhase.HYDRATING.value,
+            },
+        )
 
     try:
         context, serialized, diagnostics = _compile_hydrating_context(
@@ -188,11 +441,35 @@ def compile_worker_context(
             fixed_request_input=fixed_request_input,
             provider_framing_tokens=provider_framing_tokens,
         )
-    except WorkerContextHydrationError:
+    except WorkerContextHydrationError as error:
         _mark_hydration_failed(target_state)
+        if persistence is not None:
+            record_runtime_error(
+                persistence,
+                None,
+                category="configuration",
+                operation="context-hydration",
+                message=str(error),
+                retryable=False,
+                target_spec=target_spec,
+                target_state=target_state,
+                phase=TargetPhase.HYDRATING.value,
+            )
         raise
     except Exception as error:
         _mark_hydration_failed(target_state)
+        if persistence is not None:
+            record_runtime_error(
+                persistence,
+                None,
+                category="runtime",
+                operation="context-hydration",
+                message="worker context hydration failed",
+                retryable=False,
+                target_spec=target_spec,
+                target_state=target_state,
+                phase=TargetPhase.HYDRATING.value,
+            )
         raise WorkerContextHydrationError("worker context hydration failed") from error
 
     if debug_writer is not None:
@@ -211,6 +488,13 @@ def compile_worker_context(
                 "could not write non-authoritative worker-context debug snapshot",
                 exc_info=True,
             )
+    if persistence is not None:
+        persistence.persist_target_state(
+            target_spec,
+            target_state,
+            event_type="context_hydrated",
+            payload={},
+        )
     return context
 
 
@@ -654,6 +938,8 @@ def _resolve_findings(
                 content=record.content,
                 affected_scope=record.affected_scope,
                 affected_artifact_id=record.affected_artifact_id,
+                affected_artifact_refs=record.affected_artifact_refs,
+                affected_obligation_ids=record.affected_obligation_ids,
                 evidence_refs=record.evidence_refs,
             )
         )

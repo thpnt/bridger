@@ -10,7 +10,7 @@ You receive:
 - the locked memory target catalog and semantic ownership rules;
 - all locally accepted target folders;
 - relevant target metadata and completion information;
-- local target review results where provided.
+- the Stage 11 fleet hard-validation PASS report.
 
 Your job is to judge whether the collection works as one coherent Repository Brain knowledge layer.
 
@@ -240,40 +240,35 @@ Return:
 
 PASS
 or
-NEEDS_REPAIR
+NEEDS_WORK
 
 Use PASS when:
 - no material cross-target ownership, contradiction, duplication, terminology, or navigability issue remains.
 
-Use NEEDS_REPAIR when:
+Use NEEDS_WORK when:
 - at least one material fleet-level issue requires target changes.
 
 Do not directly edit artifacts.
 
 # 11. Reconciliation output
 
-Return:
+Return only the requested structured result with:
 
-Outcome:
-PASS | NEEDS_REPAIR
+- `outcome`: `pass` or `needs-work`;
+- `summary`: a short assessment of the fleet as one knowledge system;
+- `findings`: concrete acceptance-blocking issues only.
 
-Fleet summary:
-Short assessment of the fleet as one knowledge system.
+Each finding must contain:
 
-Issues:
-For each material issue:
-- issue type;
-- affected target(s);
-- concise description;
-- canonical ownership decision where applicable;
-- required repair.
+- `criterion_id`;
+- `affected_target_task_ids`: only targets that actually require mutation or
+  repository reinvestigation;
+- `affected_artifact_paths`: normalized fleet-relative paths when applicable;
+- `message`: the concrete issue and relevant ownership decision;
+- `required_outcome`: what must become true, without prescribing repair steps.
 
-Targets to reopen:
-- list only targets that actually require changes.
-
-Cross-link recommendations:
-- only useful links that would materially improve navigation or reduce duplication;
-- omit if none.
+Use an empty findings list for `pass` and one or more findings for `needs-work`.
+Do not assign finding IDs; the runtime owns identity.
 
 Do not reopen unaffected targets.
 

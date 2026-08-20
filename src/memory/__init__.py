@@ -1,18 +1,51 @@
-"""Bridger memory-agent harness contracts and Stage 0-4 interfaces."""
+"""Bridger memory-agent harness contracts and Stage 0-13 interfaces."""
 
+from memory.acceptance import accept_target, resolve_accepted_target_result
 from memory.context_window import ContextWindowManager
+from memory.durability import FleetRunLock, FleetRuntimeStore, RuntimePaths
 from memory.errors import (
     ContextWindowConfigurationError,
+    FinalizationRequestError,
+    FleetAcceptanceError,
     FleetInitializationError,
+    FleetReviewBudgetError,
+    FleetReviewError,
+    FleetReviewInvocationError,
     FleetSchedulingError,
+    FleetValidationError,
     InvalidTargetArtifacts,
     MemoryHarnessError,
     MemoryRunBindingError,
+    PersistenceRecoveryError,
+    TargetAcceptanceError,
     TargetActivationError,
+    TargetReviewBudgetError,
+    TargetReviewError,
+    TargetReviewInvocationError,
     WorkerContextHydrationError,
     WorkerContextInvocationError,
     WorkerCycleInvocationError,
     WorkerCyclePreflightError,
+)
+from memory.finalization import (
+    handle_finalization_request,
+    resolve_finalization_request,
+)
+from memory.fleet_acceptance import (
+    accept_fleet,
+    resolve_accepted_memory_fleet_result,
+)
+from memory.fleet_review import (
+    compile_fleet_review_context,
+    reconcile_fleet,
+    resolve_fleet_review_finding,
+    resolve_fleet_review_verdict,
+    resume_fleet_review_routing,
+)
+from memory.fleet_validation import (
+    resolve_fleet_validation_finding,
+    resolve_fleet_validation_report,
+    validate_fleet,
 )
 from memory.hydration import (
     CandidateArtifactRecord,
@@ -24,6 +57,22 @@ from memory.hydration import (
     WorkerContextDebugWriter,
     serialize_worker_context,
 )
+from memory.provider_recovery import retry_read_only_tool_once, run_provider_with_retry
+from memory.recovery import (
+    RecoveredFleet,
+    create_checkpoint,
+    initialize_persistence,
+    record_runtime_error,
+    recover_fleet,
+    recover_target,
+    validate_checkpoint,
+)
+from memory.review import (
+    compile_target_review_context,
+    resolve_review_finding,
+    resolve_review_verdict,
+    review_target,
+)
 from memory.runtime import (
     ActivationRule,
     bind_memory_run,
@@ -34,6 +83,12 @@ from memory.runtime import (
     schedule_runnable_targets,
 )
 from memory.targets import load_target_artifacts
+from memory.validation import (
+    resolve_validation_finding,
+    resolve_validation_report,
+    resolve_validation_subject,
+    validate_target_candidate,
+)
 from memory.worker_cycle import (
     FleetExecutionCoordinator,
     WorkerCycleOutcome,
@@ -57,13 +112,26 @@ __all__ = [
     "FindingRecord",
     "FleetInitializationError",
     "FleetSchedulingError",
+    "FleetValidationError",
+    "FleetAcceptanceError",
+    "FleetReviewBudgetError",
+    "FleetReviewError",
+    "FleetReviewInvocationError",
+    "FinalizationRequestError",
     "FleetExecutionCoordinator",
+    "FleetRunLock",
+    "FleetRuntimeStore",
     "HydrationStateReader",
     "InvalidTargetArtifacts",
     "MemoryHarnessError",
     "MemoryRunBindingError",
+    "PersistenceRecoveryError",
     "OpenQuestionRecord",
     "TargetActivationError",
+    "TargetAcceptanceError",
+    "TargetReviewBudgetError",
+    "TargetReviewError",
+    "TargetReviewInvocationError",
     "WorkerContextDebugSnapshot",
     "WorkerContextDebugWriter",
     "WorkerContextHydrationError",
@@ -78,12 +146,44 @@ __all__ = [
     "EvidenceRecorder",
     "CompletionStateUpdater",
     "ProgressUpdater",
+    "RecoveredFleet",
+    "RuntimePaths",
     "bind_memory_run",
+    "accept_target",
+    "accept_fleet",
+    "compile_fleet_review_context",
     "compile_worker_context",
+    "compile_target_review_context",
+    "create_checkpoint",
+    "handle_finalization_request",
     "initialize_fleet",
+    "initialize_persistence",
     "load_target_artifacts",
     "resolve_target_activation",
+    "resolve_accepted_target_result",
+    "resolve_accepted_memory_fleet_result",
+    "resolve_finalization_request",
+    "resolve_fleet_validation_finding",
+    "resolve_fleet_validation_report",
+    "resolve_fleet_review_finding",
+    "resolve_fleet_review_verdict",
+    "resolve_review_finding",
+    "resolve_review_verdict",
+    "resolve_validation_finding",
+    "resolve_validation_report",
+    "resolve_validation_subject",
+    "record_runtime_error",
+    "recover_fleet",
+    "recover_target",
+    "retry_read_only_tool_once",
+    "run_provider_with_retry",
     "run_worker_cycle",
+    "review_target",
+    "reconcile_fleet",
+    "resume_fleet_review_routing",
     "schedule_runnable_targets",
     "serialize_worker_context",
+    "validate_checkpoint",
+    "validate_fleet",
+    "validate_target_candidate",
 ]

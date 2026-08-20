@@ -9,7 +9,7 @@ class RetryPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_attempts: int = Field(default=3, ge=1)
-    initial_backoff_seconds: float = Field(default=0.25, gt=0)
+    initial_backoff_seconds: float = Field(default=1.0, gt=0)
     max_backoff_seconds: float = Field(default=2.0, gt=0)
 
 
