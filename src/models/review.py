@@ -12,6 +12,7 @@ from models.memory import (
     CandidateArtifactRef,
     FindingOrigin,
     FindingRef,
+    SourceBinding,
     TargetCompletionState,
     TargetDefinition,
 )
@@ -26,23 +27,16 @@ class ReviewVerdict(StrEnum):
     NEEDS_WORK = "needs-work"
 
 
-class ReviewFindingSeverity(StrEnum):
-    """Acceptance effect of one reviewer finding."""
-
-    BLOCKING = "blocking"
-    NON_BLOCKING = "non-blocking"
-
-
 class ReviewFindingDraft(BaseModel):
     """Provider-produced finding content without runtime-owned identity."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    rubric_dimension: str = Field(min_length=1)
-    affected_scope: str | None = Field(default=None, min_length=1)
-    affected_artifact_id: str | None = Field(default=None, min_length=1)
+    criterion_id: str = Field(min_length=1)
+    affected_artifact_refs: list[str] = Field(default_factory=list)
+    affected_obligation_ids: list[str] = Field(default_factory=list)
     message: str = Field(min_length=1)
-    repair_instruction: str = Field(min_length=1)
+    required_outcome: str = Field(min_length=1)
 
 
 class TargetReviewModelResult(BaseModel):
@@ -52,22 +46,16 @@ class TargetReviewModelResult(BaseModel):
 
     outcome: ReviewVerdict
     summary: str = Field(min_length=1)
-    blocking_findings: list[ReviewFindingDraft] = Field(default_factory=list)
-    non_blocking_findings: list[ReviewFindingDraft] = Field(default_factory=list)
-    repair_priorities: list[str] = Field(default_factory=list)
+    findings: list[ReviewFindingDraft] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_outcome(self) -> TargetReviewModelResult:
-        """Keep the structured decision aligned with its blocking findings."""
+        """Keep the structured decision aligned with its findings."""
         if self.outcome is ReviewVerdict.PASS:
-            if self.blocking_findings:
-                raise ValueError("PASS review output cannot contain blocking findings")
-            if self.repair_priorities:
-                raise ValueError("PASS review output cannot contain repair priorities")
-        elif not self.blocking_findings:
-            raise ValueError("NEEDS_WORK review output requires a blocking finding")
-        elif not self.repair_priorities:
-            raise ValueError("NEEDS_WORK review output requires repair priorities")
+            if self.findings:
+                raise ValueError("PASS review output cannot contain findings")
+        elif not self.findings:
+            raise ValueError("NEEDS_WORK review output requires a finding")
         return self
 
 
@@ -80,12 +68,11 @@ class ReviewFinding(BaseModel):
     finding_id: str = Field(min_length=1)
     review_verdict_id: str = Field(min_length=1)
     target_task_id: str = Field(min_length=1)
-    severity: ReviewFindingSeverity
-    rubric_dimension: str = Field(min_length=1)
-    affected_scope: str | None = Field(default=None, min_length=1)
-    affected_artifact_id: str | None = Field(default=None, min_length=1)
+    criterion_id: str = Field(min_length=1)
+    affected_artifact_refs: list[str] = Field(default_factory=list)
+    affected_obligation_ids: list[str] = Field(default_factory=list)
     message: str = Field(min_length=1)
-    repair_instruction: str = Field(min_length=1)
+    required_outcome: str = Field(min_length=1)
 
 
 class TargetReviewVerdict(BaseModel):
@@ -106,35 +93,25 @@ class TargetReviewVerdict(BaseModel):
     provider_response_id: str | None = Field(default=None, min_length=1)
     verdict: ReviewVerdict
     summary: str = Field(min_length=1)
-    blocking_finding_refs: list[FindingRef] = Field(default_factory=list)
-    non_blocking_finding_refs: list[FindingRef] = Field(default_factory=list)
-    repair_priorities: list[str] = Field(default_factory=list)
+    finding_refs: list[FindingRef] = Field(default_factory=list)
     created_at: datetime
 
     @model_validator(mode="after")
     def validate_verdict(self) -> TargetReviewVerdict:
         """Keep verdict, findings, and repair guidance internally coherent."""
-        references = [
-            *self.blocking_finding_refs,
-            *self.non_blocking_finding_refs,
-        ]
         if any(
             reference.origin is not FindingOrigin.TARGET_REVIEW
-            for reference in references
+            for reference in self.finding_refs
         ):
             raise ValueError("review verdict findings must be TARGET_REVIEW")
-        finding_ids = [reference.finding_id for reference in references]
+        finding_ids = [reference.finding_id for reference in self.finding_refs]
         if len(finding_ids) != len(set(finding_ids)):
             raise ValueError("review verdict finding references must be unique")
         if self.verdict is ReviewVerdict.PASS:
-            if self.blocking_finding_refs:
-                raise ValueError("PASS review verdict cannot contain blocking findings")
-            if self.repair_priorities:
-                raise ValueError("PASS review verdict cannot contain repair priorities")
-        elif not self.blocking_finding_refs:
-            raise ValueError("NEEDS_WORK review verdict requires blocking findings")
-        elif not self.repair_priorities:
-            raise ValueError("NEEDS_WORK review verdict requires repair priorities")
+            if self.finding_refs:
+                raise ValueError("PASS review verdict cannot contain findings")
+        elif not self.finding_refs:
+            raise ValueError("NEEDS_WORK review verdict requires findings")
         return self
 
 
@@ -165,8 +142,12 @@ class TargetReviewContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     target_task_id: str = Field(min_length=1)
+    target_id: str = Field(min_length=1)
+    target_contract_version: str = Field(min_length=1)
     finalization_request_id: str = Field(min_length=1)
     candidate_checkpoint_ref: str = Field(min_length=1)
+    validation_report_ref: str = Field(min_length=1)
+    source_binding: SourceBinding
     reviewer_profile_id: str = Field(min_length=1)
     shared_reviewer_instructions: str = Field(min_length=1)
     target_reviewer_rubric: str = Field(min_length=1)
@@ -176,14 +157,12 @@ class TargetReviewContext(BaseModel):
     open_questions: list[OpenQuestion]
     candidate_artifacts: list[ReviewArtifact]
     hard_validation_report: TargetValidationReport
-    previous_review_findings: list[ReviewFinding]
 
 
 __all__ = [
     "ReviewArtifact",
     "ReviewFinding",
     "ReviewFindingDraft",
-    "ReviewFindingSeverity",
     "ReviewerInstructions",
     "ReviewVerdict",
     "TargetReviewContext",

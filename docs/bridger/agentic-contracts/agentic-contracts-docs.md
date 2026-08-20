@@ -10201,3 +10201,7361 @@ Stage 7 locks the following V0 rules:
 31. Existing target concurrency semantics remain unchanged.
 32. Stage 8 must review exactly the candidate checkpoint that Stage 7 passed.
 33. Stage 7 never accepts the target; local acceptance remains downstream of both hard validation and Stage 8 review.
+
+
+
+
+
+Stage 9 — Repair
+
+Responsibility
+
+Stage 9 routes a target rejected by hard validation or target review back into the existing worker execution path.
+
+Repair continues the same target task.
+
+Stage 7 FAIL
+or
+Stage 8 NEEDS_WORK
+        ↓
+REPAIR
+        ↓
+Stage 2 — Scheduling
+        ↓
+Stage 3 — Context Hydration
+        ↓
+Stage 4 — Worker Cycle
+        ↓
+Stage 6 — Finalization
+        ↓
+Stage 7 — Hard Validation
+        ↓
+Stage 8 — Target Review
+
+Stage 9 does not introduce a separate repair agent, repair worker loop, repair context contract, repair workspace, repair task, or repair persistence subsystem.
+
+The existing Stage 2–4 machinery is the repair execution mechanism.
+
+⸻
+
+Incoming repair state
+
+Stage 9 begins only from:
+
+TargetTaskState.phase == REPAIR
+
+The transition into REPAIR is produced durably by either:
+
+TargetValidationReport.result == FAIL
+
+or:
+
+TargetReviewVerdict.result == NEEDS_WORK
+
+At this boundary:
+
+* the rejected candidate is identified by the TargetFinalizationRequest and its immutable TaskCheckpoint;
+* the corresponding validation report or review verdict is immutable;
+* generated findings are immutable;
+* TargetTaskState.open_finding_refs contains the current unresolved repair findings;
+* pending_finalization_request_ref has been cleared;
+* no candidate is currently under evaluation;
+* the target retains its existing workspace, completion state, evidence, questions, working summary, usage, and budget.
+
+Repair does not create or replace:
+
+target_task_id
+TargetTaskSpec
+SourceBinding
+target workspace identity
+ExecutionBudget
+ExecutionUsage
+
+Historical finalization requests, checkpoints, validation reports, review verdicts, and findings remain preserved.
+
+⸻
+
+REPAIR phase semantics
+
+REPAIR is a durable waiting/admission phase.
+
+It means:
+
+The previous evaluation round failed, unresolved evaluator findings exist, and the same target task may be admitted to another worker execution through normal scheduling.
+
+While a target remains in REPAIR:
+
+* no worker is running;
+* no concurrency slot is held;
+* no model or tool usage is consumed;
+* no artifact mutation occurs;
+* no provider conversation state is required.
+
+The target leaves REPAIR only through normal Stage 2 scheduling:
+
+REPAIR
+    ↓
+SCHEDULED
+
+Direct transitions such as:
+
+REPAIR → WORKING
+
+are not allowed.
+
+⸻
+
+Scheduling and concurrency
+
+Stage 2 remains the sole scheduling authority.
+
+A REPAIR target is eligible for the same scheduling path as other executable targets.
+
+Before:
+
+REPAIR → SCHEDULED
+
+the scheduler reuses the existing admission rules, including:
+
+* dependency eligibility;
+* target execution budget;
+* fleet execution budget;
+* max_repair_cycles;
+* target-concurrency availability.
+
+SCHEDULED reserves the execution slot exactly as in ordinary execution.
+
+Repair receives no special priority, separate queue, separate worker pool, or repair-specific concurrency mechanism in V0.
+
+⸻
+
+Repair context hydration
+
+Stage 9 introduces no RepairContext.
+
+Stage 3 compiles the normal WorkerContext with:
+
+mode = REPAIR
+
+The repair context contains the same target execution information used during normal worker execution, plus every currently open repair finding.
+
+At minimum it includes:
+
+shared worker instructions
+target identity and TargetDefinition
+target scope and ownership boundaries
+SourceBinding
+current TargetCompletionState
+current artifact inventory
+working_summary
+open questions
+remaining budget
+current unresolved findings
+allowed worker tools
+
+Each repair finding exposed to the worker preserves:
+
+finding identity
+finding origin
+actionable finding content
+affected artifact / obligation / scope when available
+
+The worker receives only current actionable evaluation feedback.
+
+Normal repair hydration does not include:
+
+full worker transcript
+reviewer transcript or hidden reasoning
+complete TaskEvent history
+all historical validation reports
+all historical review verdicts
+resolved or superseded findings
+old tool outputs
+checkpoint history
+provider conversation state
+sibling worker histories
+
+Historical state remains durable and inspectable by the runtime but is not automatically loaded into the worker context.
+
+⸻
+
+Worker execution during repair
+
+Repair uses the existing Stage 4 worker.
+
+The worker retains exactly the normal worker permissions:
+
+read repository through RepositoryNavigator
+inspect graph/file/symbol/source evidence
+write inside its target workspace
+create/edit/delete/reorganize target-local generated files
+record evidence
+update completion-state resolutions
+update working summary and open questions
+request finalization
+
+Repair does not grant additional permissions.
+
+The worker decides how to address the findings.
+
+A repair may require:
+
+* a small Markdown correction;
+* fixing artifact structure;
+* correcting evidence references;
+* changing completion-state resolution;
+* additional repository investigation;
+* rewriting weak explanations;
+* resolving contradictions;
+* reducing duplication;
+* reorganizing target-local files.
+
+Validation or review findings describe why the candidate was rejected. They do not become authoritative implementation instructions.
+
+⸻
+
+Finding ownership and resolution
+
+Evaluation findings remain owned by their evaluator.
+
+The worker cannot:
+
+delete evaluator findings
+mark evaluator findings resolved
+mutate open_finding_refs directly
+declare validation or review feedback verified
+
+TargetTaskState.open_finding_refs is a projection of currently unresolved findings. The underlying finding records remain immutable.
+
+Hard-validation findings
+
+A later Stage 7 result owns the current HARD_VALIDATION projection.
+
+new Stage 7 FAIL
+    → replace current HARD_VALIDATION finding refs
+      with findings from the new validation report
+new Stage 7 PASS
+    → clear current HARD_VALIDATION finding refs
+
+Previous hard-validation findings remain immutable historical records.
+
+Target-review findings
+
+A later Stage 8 verdict owns the current TARGET_REVIEW projection.
+
+new Stage 8 NEEDS_WORK
+    → replace current TARGET_REVIEW finding refs
+      with findings from the new review verdict
+new Stage 8 PASS
+    → clear current TARGET_REVIEW finding refs
+
+Previous review findings remain immutable historical records.
+
+Findings across evaluation stages
+
+Finding origins are resolved independently.
+
+Example:
+
+Candidate A
+    ↓
+Stage 7 PASS
+    ↓
+Stage 8 NEEDS_WORK
+    ↓
+review findings R1, R2
+    ↓
+repair
+    ↓
+Candidate B
+    ↓
+Stage 7 FAIL
+    ↓
+hard finding H1
+
+The current repair projection is:
+
+R1
+R2
+H1
+
+The old review findings remain open because Stage 8 has not yet verified that the new candidate resolved them.
+
+After a later Stage 7 PASS, hard-validation findings clear, while review findings remain open until the new candidate is independently reviewed by Stage 8.
+
+This prevents worker edits from implicitly declaring evaluator findings solved.
+
+⸻
+
+Rejected checkpoint and mutable workspace
+
+Every submitted candidate is frozen by Stage 6 in an immutable TaskCheckpoint.
+
+That checkpoint is historical provenance for the candidate that produced the corresponding validation or review result.
+
+It is never mutated during repair.
+
+At the transition into REPAIR, the authoritative current candidate workspace must still correspond to the rejected checkpoint because worker mutation is forbidden while the candidate is in:
+
+FINALIZING
+VALIDATING
+REVIEWING
+
+Normal repair therefore begins conceptually from:
+
+rejected TaskCheckpoint C
+        │
+        │ same candidate at repair boundary
+        ▼
+current target workspace
+        ↓
+worker repair mutations
+        ↓
+new candidate
+
+Once Stage 4 begins, the workspace may diverge freely from the rejected checkpoint.
+
+The rejected checkpoint remains unchanged.
+
+Workspace/checkpoint mismatch
+
+If the runtime finds that the current authoritative candidate no longer corresponds to the rejected checkpoint before repair execution begins, Stage 9 must not silently restore or substitute files.
+
+Such a mismatch is a Stage 5 persistence/recovery integrity failure.
+
+Repair begins only from a valid durable candidate state.
+
+Unverified ambient filesystem contents are never treated as authoritative repair state.
+
+⸻
+
+Completion-state behavior
+
+TargetCompletionState remains mutable through the existing controlled Stage 4 completion-state operation.
+
+Stage 9 introduces no new completion-state API.
+
+Repair may change an obligation between already-allowed terminal resolutions when additional investigation or evaluator feedback changes the correct conclusion.
+
+Examples:
+
+covered → unknown
+unknown → covered
+not-applicable → covered
+covered → not-applicable
+
+Resolution notes and evidence references may also be updated.
+
+The existing prohibition remains:
+
+terminal resolution → uninvestigated
+
+Repair does not erase previous investigation.
+
+Evaluator findings represent that the current candidate requires more work; they do not require resetting semantic progress to an uninvestigated state.
+
+⸻
+
+Repair-cycle accounting
+
+ExecutionUsage.repair_cycles follows the existing Stage 4 accounting rule.
+
+A repair cycle is charged once when a repair-mode worker execution actually begins:
+
+HYDRATING → WORKING
+
+with:
+
+WorkerContext.mode == REPAIR
+
+At that transition:
+
+usage.cycles += 1
+usage.repair_cycles += 1
+
+Repair cycles are not incremented when:
+
+entering REPAIR
+being scheduled
+entering HYDRATING
+processing a finding
+making a model call
+making a tool call
+submitting finalization
+
+A semantic repair episode normally contains one repair worker cycle.
+
+If an already-started repair worker execution is lost and Stage 5 recovery intentionally begins a fresh worker execution, the original execution remains consumed and the fresh repair execution consumes another repair cycle.
+
+No separate repair-round identity is introduced in V0.
+
+Both hard-validation and target-review failures consume the same max_repair_cycles budget.
+
+⸻
+
+Model, tool, and token usage
+
+Stage 9 itself consumes no model, tool, cycle, or token usage.
+
+Usage continues through the normal Stage 4 mechanisms.
+
+Repair worker execution contributes to the same cumulative counters:
+
+cycles
+repair_cycles
+model_calls
+tool_calls
+input_tokens
+output_tokens
+
+Target and fleet usage remain monotonic.
+
+Repair never resets usage or provides a fresh target/fleet budget.
+
+⸻
+
+Persistence
+
+Stage 9 reuses Stage 5 persistence and transaction semantics.
+
+No new repair-specific transaction format is introduced.
+
+The evaluation stage that sends a target into REPAIR durably commits the relevant:
+
+validation report or review verdict
+immutable findings
+open_finding_refs projection
+pending-finalization cleanup
+phase = REPAIR
+trace/events
+
+Subsequent durable transitions remain owned by their existing stages:
+
+Stage 2:
+REPAIR → SCHEDULED
+Stage 3:
+SCHEDULED → HYDRATING
+Stage 4 / Stage 5:
+HYDRATING → WORKING
+usage/cycle accounting
+worker mutations
+Stage 6:
+new finalization request
+new candidate checkpoint
+
+Stage 9 introduces no:
+
+RepairRecord
+RepairState
+RepairCheckpoint
+RepairAttempt
+repair-specific event log
+
+⸻
+
+Recovery and idempotency
+
+REPAIR is a safe durable recovery point.
+
+Crash while in REPAIR
+
+The runtime reloads the durable target state.
+
+If:
+
+phase == REPAIR
+current findings resolve
+candidate state is valid
+
+the target may later be scheduled normally.
+
+Crash before repair admission
+
+The target remains in REPAIR.
+
+No repair-cycle usage has been consumed.
+
+Crash during REPAIR → SCHEDULED
+
+Stage 5 transaction recovery determines whether the authoritative result is:
+
+REPAIR
+
+or:
+
+SCHEDULED
+
+The same repair execution must never receive two concurrency reservations.
+
+Duplicate scheduling
+
+Only a target currently in REPAIR may undergo:
+
+REPAIR → SCHEDULED
+
+A target already in:
+
+SCHEDULED
+HYDRATING
+WORKING
+
+has already been admitted and is not scheduled again.
+
+Crash after repair-cycle accounting
+
+The HYDRATING → WORKING phase transition and its usage delta remain one crash-safe durable mutation.
+
+Replaying recovery must not accidentally charge the same transition twice.
+
+If Stage 5 determines that the interrupted WORKING execution is consumed and starts a new worker execution, that fresh repair execution receives its own repair-cycle charge.
+
+Worker failure during repair
+
+A worker/provider/runtime failure while WORKING is handled by the existing Stage 5 recovery policy.
+
+It does not create a new semantic REPAIR transition and does not generate validation or review findings.
+
+Already committed artifact, evidence, completion, summary, and question mutations remain authoritative according to existing persistence semantics.
+
+Provider conversation state is never recovery authority.
+
+⸻
+
+Multiple repair rounds
+
+A target may undergo multiple repair/evaluation rounds without changing its identity.
+
+Example:
+
+Candidate A
+    ↓
+Stage 7 FAIL
+    ↓
+Repair 1
+    ↓
+Candidate B
+    ↓
+Stage 7 PASS
+    ↓
+Stage 8 NEEDS_WORK
+    ↓
+Repair 2
+    ↓
+Candidate C
+    ↓
+Stage 7 PASS
+    ↓
+Stage 8 PASS
+
+Across all rounds, the following remain unchanged:
+
+target_task_id
+TargetTaskSpec
+SourceBinding
+target workspace identity
+configured budgets
+
+Usage continues cumulatively.
+
+Each round produces new immutable evaluation lineage:
+
+TargetFinalizationRequest
+TaskCheckpoint
+TargetValidationReport
+ValidationFinding[]
+TargetReviewVerdict?
+TargetReviewFinding[]?
+
+Previous rounds are never rewritten or discarded.
+
+⸻
+
+No-progress and repeated failures
+
+Stage 9 introduces no repair-specific loop detector.
+
+Existing:
+
+last_progress_signature
+stall_count
+
+remain governed by the previously locked runtime policy.
+
+Stage 9 does not reset or reinterpret them.
+
+An unchanged candidate may be resubmitted.
+
+It still produces:
+
+new TargetFinalizationRequest
+new TaskCheckpoint
+new Stage 7 evaluation
+
+If the same defect remains, the new evaluator may produce equivalent findings again.
+
+Recurring findings remain distinct immutable evaluation records tied to distinct candidate rounds.
+
+Repair termination is enforced through existing execution budgets, including max_repair_cycles, rather than a new finding-repetition counter.
+
+⸻
+
+New finalization after repair
+
+Repair returns the target to ordinary worker execution.
+
+When the worker believes the repaired candidate is ready, it uses the existing Stage 6 finalization interface.
+
+Stage 6 creates:
+
+new TargetFinalizationRequest
+new immutable TaskCheckpoint
+
+The previous rejected checkpoint is never reused or mutated.
+
+The new checkpoint identifies the exact repaired candidate submitted for evaluation.
+
+⸻
+
+Mandatory Stage 7 re-entry
+
+Every repaired candidate must pass hard validation again.
+
+The required path is always:
+
+REPAIR
+    ↓
+normal worker execution
+    ↓
+new finalization request
+    ↓
+new TaskCheckpoint
+    ↓
+VALIDATING
+
+A target rejected by Stage 8 must not return directly to Stage 8 after repair.
+
+Even if the previous candidate passed hard validation, any worker mutation creates a new candidate whose mechanical validity must be established again.
+
+Therefore:
+
+new candidate
+    → Stage 7
+    → Stage 8 only after Stage 7 PASS
+
+is invariant.
+
+⸻
+
+Stage 10 boundary
+
+Stage 9 never accepts a target.
+
+The only path toward target acceptance after repair is:
+
+repair
+    ↓
+new finalization
+    ↓
+Stage 7 PASS
+    ↓
+Stage 8 PASS
+    ↓
+Stage 10 — Target Acceptance
+
+Stage 9 does not:
+
+set ACCEPTED
+create an accepted target result
+define acceptance provenance
+bypass validation or review
+
+Target acceptance remains exclusively downstream.
+
+⸻
+
+Locked invariants
+
+1. Repair continues the same target task.
+2. REPAIR is a durable non-executing phase awaiting normal scheduling.
+3. Stage 2 exclusively owns REPAIR → SCHEDULED.
+4. Stage 3 hydrates repair through the existing WorkerContext with mode = REPAIR.
+5. Stage 4 uses the same worker, permissions, tools, and workspace mechanisms for normal and repair execution.
+6. No separate repair agent, repair context, repair task, repair workspace, or repair loop exists in V0.
+7. Target identity, source binding, workspace identity, configured budget, and accumulated usage never reset during repair.
+8. Historical candidates, checkpoints, reports, verdicts, and findings are immutable.
+9. open_finding_refs contains the current unresolved finding projection, not duplicated evaluation history.
+10. The worker cannot mutate or declare evaluator findings resolved.
+11. Each evaluation origin supersedes or clears only its own current finding projection.
+12. Review findings remain unresolved until a later Stage 8 verdict evaluates a repaired candidate.
+13. Hard-validation and target-review findings may therefore coexist temporarily.
+14. Repair normally begins from the exact candidate that produced the current findings.
+15. A pre-repair checkpoint/workspace mismatch is a persistence/recovery integrity failure, not a semantic repair action.
+16. The rejected checkpoint remains immutable while the current workspace becomes mutable again during worker execution.
+17. Completion-state changes during repair use the existing completion-state operation.
+18. Terminal completion states may change to another permitted terminal state; they do not revert to uninvestigated.
+19. Stage 9 itself consumes no execution usage.
+20. repair_cycles increments once for each actual repair-mode worker execution at HYDRATING → WORKING.
+21. A fresh recovery worker execution may consume an additional repair cycle if the previous execution was already consumed.
+22. Hard-validation and target-review repair share the same repair-cycle budget.
+23. Repair receives no special scheduling or concurrency policy.
+24. Provider/runtime failures are handled through Stage 5 recovery and do not become semantic repair findings.
+25. Stage 9 introduces no new V0 no-progress or repeated-failure mechanism.
+26. Every repaired submission creates a new finalization request and immutable candidate checkpoint.
+27. Every repaired candidate must pass Stage 7 again.
+28. Stage 8 independently reviews the new candidate after Stage 7 PASS.
+29. Stage 9 never produces an accepted target.
+1. Responsibility
+
+Stage 10 is the deterministic local acceptance commit boundary for one target.
+
+Its lifecycle boundary is:
+
+Stage 8
+TargetTaskState.phase = REVIEWING
++
+TargetValidationReport = PASS
++
+TargetReviewVerdict = PASS
+        ↓
+Stage 10
+verify acceptance provenance
+freeze exact accepted candidate
+persist AcceptedTargetResult
+REVIEWING → ACCEPTED
+        ↓
+Stage 11
+fleet-level validation may consume the
+locally accepted target result
+
+A target reaches Stage 10 only after both local evaluation gates have succeeded.
+
+Stage 10 owns:
+
+* validating local-acceptance preconditions;
+* proving that finalization, hard-validation, review and current candidate state refer to the same exact candidate;
+* creating the immutable AcceptedTargetResult;
+* persisting that result through the existing Stage 5 persistence boundary;
+* performing REVIEWING → ACCEPTED;
+* updating TargetTaskState.last_accepted_result_ref;
+* clearing pending_finalization_request_ref;
+* making the accepted target available to later fleet stages;
+* preserving idempotency across duplicate execution and crash recovery.
+
+Stage 10 does not own:
+
+* repository exploration;
+* artifact generation or mutation;
+* completion-state mutation;
+* evidence creation or mutation;
+* hard validation;
+* target review;
+* semantic evaluation;
+* finding generation;
+* finding resolution;
+* repair;
+* scheduling;
+* fleet validation;
+* fleet reconciliation;
+* fleet acceptance;
+* Repository Brain publication.
+
+Stage 10 performs no new judgment.
+
+It records that the exact candidate already proven by Stages 7 and 8 is now the target’s authoritative locally accepted result. This preserves the existing separation between mutable target execution and immutable accepted outputs.
+
+⸻
+
+2. Existing authorities consumed
+
+Stage 10 consumes the already-locked authorities:
+
+MemoryFleetSpec
+TargetTaskSpec
+TargetTaskState
+TargetCompletionState
+candidate artifact state
+EvidenceReference state
+TargetFinalizationRequest
+TargetValidationReport
+TargetReviewVerdict
+finding state
+Stage 5 persistence / recovery machinery
+
+Stage 10 does not replace or reinterpret these authorities.
+
+The target lifecycle remains owned exclusively by:
+
+TargetTaskState.phase
+
+FleetRunState remains shallow and references target tasks rather than storing a copied per-target lifecycle map.
+
+⸻
+
+3. Acceptance meaning
+
+Local acceptance means:
+
+The exact candidate identified by the accepted result has passed the target’s deterministic hard-validation gate and artifact-level target review under the target’s immutable assignment and source binding.
+
+It does not mean:
+
+the complete fleet is valid
+cross-target links are valid
+cross-target ownership is correct
+cross-target duplication is absent
+cross-target contradictions are absent
+global terminology is coherent
+fleet reconciliation has passed
+the memory fleet is accepted
+the Repository Brain is publishable
+
+Those are later fleet-level responsibilities.
+
+The distinction is:
+
+TARGET ACCEPTANCE
+    exact candidate passed its local gates
+FLEET ACCEPTANCE
+    complete set of locally accepted targets
+    passed fleet validation and reconciliation
+
+⸻
+
+4. AcceptedTargetResult
+
+Stage 10 introduces one new durable contract:
+
+AcceptedTargetResult
+
+No separate acceptance report, acceptance state, acceptance attempt, acceptance checkpoint or acceptance manifest is introduced.
+
+Semantic definition
+
+AcceptedTargetResult is the immutable identity of one exact target candidate that successfully passed both local evaluation gates.
+
+It answers:
+
+Which exact version of this target was locally accepted, against which source and contract, and through which evaluation results?
+
+It is historical accepted provenance, not mutable execution state.
+
+Contract
+
+Conceptually:
+
+class AcceptedTargetResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    schema_version: int = 1
+    accepted_target_result_id: str
+    target_task_id: str
+    fleet_run_id: str
+    target_id: str
+    target_contract_version: str
+    source: SourceBinding
+    artifact_refs: list[CandidateArtifactRef]
+    completion_items: list[CompletionItemState]
+    evidence_refs: list[str]
+    finalization_request_ref: str
+    validation_report_ref: str
+    review_verdict_ref: str
+
+The exact ID encoding is implementation-private.
+
+Ownership / mutability
+
+Property	Rule
+Created by	Target runtime during Stage 10
+Mutable by	Nobody
+Persisted	Yes
+Lifetime	Retained provenance for the fleet run
+Parent	TargetTaskSpec / owning fleet
+Consumed by	Stages 11–13 and later publication handoff
+
+⸻
+
+5. Identity and source provenance
+
+The accepted result carries:
+
+target_task_id
+fleet_run_id
+target_id
+target_contract_version
+SourceBinding
+
+These values are frozen from the immutable target assignment.
+
+They must satisfy:
+
+accepted_result.target_task_id
+    == TargetTaskSpec.target_task_id
+accepted_result.fleet_run_id
+    == TargetTaskSpec.fleet_run_id
+accepted_result.target_id
+    == TargetTaskSpec.target_id
+accepted_result.target_contract_version
+    == TargetTaskSpec.target_contract_version
+accepted_result.source
+    == TargetTaskSpec.source
+    == MemoryFleetSpec.source
+
+SourceBinding is copied intentionally into the immutable accepted result.
+
+The accepted result must remain independently sufficient to establish the repository revision, graph snapshot and optional enrichment overlay against which the target was accepted.
+
+No source identity is inferred from the current workspace at acceptance time.
+
+⸻
+
+6. Accepted artifact set
+
+artifact_refs freezes the exact current candidate artifact set using the already-locked CandidateArtifactRef contract:
+
+artifact_id
+relative_path
+revision
+digest
+
+Stage 10 does not copy artifact contents into AcceptedTargetResult.
+
+The accepted result therefore identifies:
+
+which artifacts
+which artifact revisions
+which content digests
+
+constituted the locally accepted target.
+
+Artifact-version preservation
+
+Every artifact version referenced by an AcceptedTargetResult must remain resolvable after acceptance.
+
+A later repair may:
+
+edit an artifact
+replace an artifact
+delete an artifact from the current candidate
+reorganize the target workspace
+
+but it must not destroy the historical artifact version required by an earlier accepted result.
+
+Stage 10 reuses Stage 5 artifact-version persistence for this purpose.
+
+No parallel accepted-artifacts/ authority is introduced.
+
+⸻
+
+7. Accepted completion state
+
+The accepted result contains a frozen snapshot of:
+
+CompletionItemState[]
+
+from the exact TargetCompletionState evaluated by the successful local gates.
+
+This snapshot includes the existing fields:
+
+obligation_id
+status
+resolution_note
+evidence_refs
+
+The static obligation definitions remain owned by the referenced TargetDefinition.
+
+Stage 10 does not duplicate:
+
+obligation description
+applicability metadata
+investigation guidance
+target semantics
+
+Why completion state is copied
+
+TargetCompletionState is mutable runtime state.
+
+A target may later be reopened and its completion resolutions may change.
+
+Therefore an accepted result must preserve:
+
+what the semantic completion state was when this candidate was locally accepted.
+
+Referencing only the live TargetCompletionState would allow historical accepted provenance to change retroactively.
+
+No separate AcceptedCompletionState contract is introduced.
+
+⸻
+
+8. Evidence references
+
+AcceptedTargetResult.evidence_refs freezes the exact evidence-reference set associated with the accepted candidate.
+
+Only evidence IDs are copied.
+
+The full immutable EvidenceReference objects remain in their existing evidence authority.
+
+Every referenced evidence object must:
+
+exist
+belong to the accepted target task
+match the accepted SourceBinding
+remain resolvable after acceptance
+
+Stage 10 does not create new evidence and does not reinterpret existing evidence.
+
+⸻
+
+9. Evaluation provenance
+
+The accepted result references exactly one successful local evaluation chain:
+
+finalization_request_ref
+validation_report_ref
+review_verdict_ref
+
+The referenced objects remain independent immutable historical records.
+
+Stage 10 does not embed or rewrite them.
+
+The accepted evaluation chain must establish:
+
+TargetFinalizationRequest
+        ↓
+TargetValidationReport = PASS
+        ↓
+TargetReviewVerdict = PASS
+
+for the exact candidate being accepted.
+
+Previous validation reports, review verdicts and repair rounds remain durable history and are not removed or superseded in place.
+
+⸻
+
+10. Exact-candidate invariant
+
+The central Stage 10 rule is:
+
+The candidate accepted by Stage 10 must be exactly the candidate that passed both local gates.
+
+Conceptually:
+
+candidate finalized
+    =
+candidate hard-validated
+    =
+candidate reviewed
+    =
+candidate frozen into AcceptedTargetResult
+
+Acceptance-relevant identity includes at least:
+
+target/source identity
+artifact IDs
+artifact revisions
+artifact digests
+completion-state snapshot
+evidence binding
+
+Stage 10 must use the candidate-provenance mechanisms already established by Stages 6–8 rather than reconstructing provenance from conversation history.
+
+If the candidate changed after the relevant evaluation was produced, the previous PASS result does not authorize acceptance of the changed candidate.
+
+Examples of invalid drift include:
+
+artifact revision changed
+artifact digest changed
+artifact added or removed
+completion resolution changed
+evidence binding changed
+target/source identity mismatch
+
+Stage 10 must fail explicitly rather than:
+
+accept stale evaluation
+guess intended provenance
+silently rerun evaluation
+create semantic repair findings
+
+Candidate-provenance corruption is a runtime integrity failure, not worker feedback.
+
+⸻
+
+11. Acceptance preconditions
+
+accept_target() may succeed only when all of the following hold.
+
+Lifecycle
+
+TargetTaskState.phase == REVIEWING
+
+Assignment
+
+The target task resolves to one immutable TargetTaskSpec, and all target/fleet/source identities remain compatible.
+
+Validation
+
+The applicable TargetValidationReport:
+
+exists
+belongs to this target task
+has verdict PASS
+applies to the exact candidate being accepted
+
+Review
+
+The applicable TargetReviewVerdict:
+
+exists
+belongs to this target task
+has verdict PASS
+was produced from the successful local validation path
+applies to the exact candidate being accepted
+
+Candidate integrity
+
+Every accepted artifact and evidence reference resolves exactly.
+
+The current completion state matches the completion state evaluated by the successful local path.
+
+Findings
+
+No unresolved local finding may currently block acceptance.
+
+Stage 10 verifies this invariant but does not resolve findings itself.
+
+⸻
+
+12. Acceptance operation
+
+The Stage 10 runtime interface is conceptually:
+
+accept_target(target_task_id)
+    → AcceptedTargetResult
+
+The runtime resolves all authoritative inputs internally.
+
+The caller does not provide arbitrary:
+
+artifact refs
+completion state
+evidence refs
+validation result
+review result
+source binding
+
+as acceptance claims.
+
+Those values are loaded from durable authoritative state.
+
+The normal operation is:
+
+load authoritative target state
+        ↓
+verify REVIEWING
+        ↓
+resolve successful validation/review chain
+        ↓
+verify exact candidate identity
+        ↓
+construct immutable AcceptedTargetResult
+        ↓
+persist accepted result
+        ↓
+update TargetTaskState
+        ↓
+append trace transition
+        ↓
+return AcceptedTargetResult
+
+No LLM is invoked.
+
+⸻
+
+13. Lifecycle mutation
+
+On successful first acceptance:
+
+TargetTaskState.phase
+    REVIEWING → ACCEPTED
+
+Stage 10 owns this transition.
+
+The runtime also sets:
+
+last_accepted_result_ref
+    = accepted_target_result_id
+pending_finalization_request_ref
+    = null
+
+The runtime does not clear unrelated durable target state merely because acceptance succeeded.
+
+In particular, Stage 10 does not automatically erase:
+
+working_summary
+open_question_refs
+artifact_refs
+evidence_refs
+usage
+checkpoint history
+trace history
+
+These remain available for provenance, debugging and possible later reopening.
+
+⸻
+
+14. FleetRunState
+
+Stage 10 does not introduce or maintain a copied per-target acceptance map inside FleetRunState.
+
+The locked global state remains:
+
+FleetRunState
+    └── target_task_ids[]
+
+and current target lifecycle is obtained from each authoritative:
+
+TargetTaskState.phase
+
+Therefore Stage 10 does not add:
+
+accepted_target_ids
+target_statuses
+target_result_map
+
+to FleetRunState.
+
+When all required target tasks have:
+
+phase == ACCEPTED
+
+the condition is derived from target states and the scheduler stops admitting ordinary target work.
+
+Control may then proceed to Stage 11. The existing scheduler already defines all-required-targets-accepted as the handoff condition to the fleet gates.
+
+Stage 10 itself does not transition the fleet into a fleet-validation phase.
+
+⸻
+
+15. Persistence commit
+
+Stage 10 reuses the persistence and recovery semantics locked in Stage 5.
+
+The logical acceptance commit is:
+
+1. persist complete immutable AcceptedTargetResult
+2. persist TargetTaskState update:
+       phase = ACCEPTED
+       last_accepted_result_ref = result ID
+       pending_finalization_request_ref = null
+3. append the corresponding acceptance / lifecycle trace event
+
+The implementation must preserve the invariant:
+
+TargetTaskState.phase == ACCEPTED
+    ⇒
+last_accepted_result_ref resolves to
+a complete valid AcceptedTargetResult
+
+The runtime must never expose durable state equivalent to:
+
+phase = ACCEPTED
+last_accepted_result_ref = null
+
+Stage 10 does not define a second persistence protocol.
+
+Atomic replacement, crash-safe state writes, artifact version durability and recovery continue to use Stage 5 mechanisms.
+
+⸻
+
+16. Idempotency
+
+Acceptance is idempotent for the same exact successful candidate and evaluation chain.
+
+Repeated execution must not create semantically duplicate accepted results simply because:
+
+the process retried
+the caller retried
+recovery reran acceptance
+the same operation was invoked twice
+
+Conceptually, accepted-result identity is derived deterministically from the accepted provenance, including:
+
+target task
+exact candidate identity
+successful validation identity
+successful review identity
+
+The precise hashing or textual ID format is implementation-private.
+
+The required semantic behavior is:
+
+same target
++
+same exact candidate
++
+same successful local evaluation chain
+        ↓
+same accepted result
+
+If the target has already reached:
+
+phase = ACCEPTED
+last_accepted_result_ref = X
+
+and X is valid for the same acceptance, another accept_target() call returns X or its equivalent loaded result without producing another acceptance.
+
+⸻
+
+17. Crash recovery
+
+Crash before accepted-result persistence
+
+Durable state remains effectively:
+
+phase = REVIEWING
+review PASS already exists
+
+Recovery may rerun acceptance from durable state.
+
+Hard validation and review do not need to rerun solely because acceptance itself was interrupted.
+
+Crash after result persistence but before target-state update
+
+Recovery detects the already-persisted valid accepted result for the same candidate and completes:
+
+REVIEWING → ACCEPTED
+
+without creating a new semantic acceptance.
+
+Crash after target-state update
+
+Recovery sees:
+
+phase = ACCEPTED
+last_accepted_result_ref = X
+
+and validates that X resolves correctly.
+
+No target work or evaluation is rerun.
+
+Invalid partial state
+
+If recovery encounters an impossible combination such as:
+
+ACCEPTED with missing accepted result
+accepted result with incompatible source/task identity
+accepted result referencing missing artifact versions
+
+the condition is treated as persistence/runtime corruption according to Stage 5 failure semantics.
+
+It is not converted into worker repair.
+
+⸻
+
+18. Usage and budgets
+
+Stage 10 consumes no worker/model execution budget.
+
+It performs:
+
+0 worker cycles
+0 repair cycles
+0 model calls
+0 tool calls
+0 input tokens
+0 output tokens
+
+Acceptance therefore does not mutate ExecutionUsage.
+
+A target that has already earned validation PASS and review PASS may still be accepted when its remaining worker execution budget is zero.
+
+Budget exhaustion governs whether additional execution may begin.
+
+It does not prevent the runtime from recording an already-earned successful acceptance.
+
+Ordinary trace/persistence activity is not counted as worker execution usage.
+
+⸻
+
+19. Concurrency consequence
+
+REVIEWING is an active target phase.
+
+ACCEPTED is not runnable and does not occupy a target execution slot.
+
+Therefore:
+
+REVIEWING → ACCEPTED
+
+naturally releases the target’s concurrency occupancy through the existing derived scheduler rules.
+
+Stage 10 introduces no:
+
+release-slot command
+lease record
+semaphore artifact
+scheduler callback contract
+
+The lifecycle transition is sufficient.
+
+⸻
+
+20. Historical local evaluation
+
+Acceptance does not rewrite prior evaluation history.
+
+Example:
+
+candidate A
+    validation FAIL
+candidate B
+    validation PASS
+    review NEEDS_WORK
+candidate C
+    validation PASS
+    review PASS
+    accepted
+
+AcceptedTargetResult for the successful local acceptance references only the final successful chain for candidate C.
+
+The previous:
+
+finalization requests
+validation reports
+review verdicts
+findings
+repair events
+checkpoints
+
+remain immutable historical records.
+
+They are not deleted or mutated merely because a later candidate succeeds.
+
+⸻
+
+21. Reopening an accepted target
+
+ACCEPTED is locally successful but reopenable.
+
+Later fleet validation or reconciliation may identify an issue that requires this target to change.
+
+The later fleet stages may therefore perform:
+
+ACCEPTED
+    ↓ fleet finding
+REPAIR
+
+When this happens:
+
+last_accepted_result_ref
+
+continues to reference the previous immutable accepted result.
+
+The old accepted result still means:
+
+This exact historical candidate passed its local gates.
+
+It does not mean:
+
+This candidate remains the current fleet-valid version.
+
+The mutable target task may then pass again through:
+
+REPAIR
+→ SCHEDULED
+→ HYDRATING
+→ WORKING
+→ FINALIZING
+→ VALIDATING
+→ REVIEWING
+→ ACCEPTED
+
+The core state already explicitly preserves last_accepted_result_ref across such reopening.
+
+⸻
+
+22. Repeated local acceptance
+
+When a reopened target produces a changed successful candidate:
+
+previous candidate A
+    → AcceptedTargetResult A
+fleet finding
+    ↓
+repair
+new candidate B
+    ↓
+validation PASS
+    ↓
+review PASS
+    ↓
+Stage 10
+    → AcceptedTargetResult B
+
+Result A remains immutable historical provenance.
+
+Result B becomes the current locally accepted result:
+
+TargetTaskState.last_accepted_result_ref = B
+
+Stage 10 does not mutate A into B.
+
+No separate acceptance-generation counter is required.
+
+The immutable results plus trace already preserve acceptance history.
+
+⸻
+
+23. Findings
+
+Stage 10 does not own finding lifecycle.
+
+Before local acceptance, all findings that block the current local evaluation path must already be resolved according to Stages 7–9.
+
+Stage 10 only verifies that no unresolved blocking local finding contradicts acceptance.
+
+It never:
+
+creates repair findings
+resolves review findings
+resolves validation findings
+resolves fleet findings
+rewrites finding history
+
+If open finding state is inconsistent with the purported PASS chain, acceptance fails explicitly.
+
+⸻
+
+24. Downstream fleet contract
+
+Stage 10 is the boundary between mutable local target execution and later fleet-level evaluation.
+
+Stages 11–13 consume exact locally accepted results rather than arbitrary current workspace state.
+
+Conceptually:
+
+TargetTaskState.last_accepted_result_ref
+        ↓
+AcceptedTargetResult
+        ↓
+exact accepted artifact versions
+exact accepted completion snapshot
+exact accepted evidence set
+exact source and contract identity
+exact local evaluation provenance
+
+Later fleet validation must not decide which target candidate is accepted by inspecting:
+
+current filesystem contents
+latest artifact revisions
+current mutable TargetCompletionState
+conversation history
+
+AcceptedTargetResult is the authoritative selector of the locally accepted candidate.
+
+This is the concrete purpose of introducing the contract.
+
+⸻
+
+25. Local acceptance versus publication
+
+AcceptedTargetResult is not a published Repository Brain artifact.
+
+The progression remains:
+
+AcceptedTargetResult[]
+        ↓
+Stage 11 — Fleet Hard Validation
+        ↓
+Stage 12 — Fleet Reconciliation
+        ↓
+Stage 13 — Fleet Acceptance
+        ↓
+AcceptedMemoryFleetResult
+        ↓
+Repository Brain publication layer
+
+Stage 10 therefore freezes a local target result only.
+
+It grants no publication authority.
+
+⸻
+
+26. Stage 10 invariants
+
+1. Stage 10 begins only from a target whose authoritative phase is REVIEWING.
+2. Stage 10 owns REVIEWING → ACCEPTED.
+3. Only the runtime may accept a target.
+4. Workers and reviewers cannot directly create acceptance state.
+5. Acceptance requires both hard-validation PASS and target-review PASS.
+6. Stage 10 performs no new semantic or mechanical evaluation beyond acceptance-integrity checks.
+7. The finalization request, validation report, review verdict and accepted candidate must all belong to the same target task.
+8. The successful validation and review must apply to the exact candidate being accepted.
+9. Candidate artifact identities, revisions and digests may not drift between successful evaluation and acceptance.
+10. Accepted source identity must equal the immutable TargetTaskSpec.source.
+11. Accepted target identity and contract version must equal the immutable TargetTaskSpec.
+12. AcceptedTargetResult is immutable.
+13. AcceptedTargetResult contains exact CandidateArtifactRef values, not artifact contents.
+14. Historical artifact versions referenced by accepted results must remain resolvable.
+15. No second accepted-artifact storage authority is introduced.
+16. AcceptedTargetResult freezes a copy of the existing completion-item state.
+17. The accepted result does not duplicate static obligation definitions.
+18. AcceptedTargetResult freezes evidence IDs but does not duplicate full EvidenceReference records.
+19. Evaluation reports/verdicts remain separate immutable authorities and are referenced rather than embedded.
+20. Previous evaluation failures and repair history are preserved.
+21. Stage 10 does not generate or resolve findings.
+22. Acceptance-integrity corruption fails explicitly and is not converted into semantic repair.
+23. Successful acceptance sets TargetTaskState.phase = ACCEPTED.
+24. Successful acceptance sets last_accepted_result_ref.
+25. Successful acceptance clears pending_finalization_request_ref.
+26. Stage 10 does not destructively clear unrelated target continuation/history state.
+27. FleetRunState does not copy target acceptance status.
+28. The authoritative target phase remains TargetTaskState.phase.
+29. All-required-targets-accepted is a derived handoff condition to Stage 11.
+30. Stage 10 does not perform fleet lifecycle transitions.
+31. phase == ACCEPTED requires a resolvable valid last_accepted_result_ref.
+32. Acceptance uses the existing Stage 5 persistence and recovery mechanisms.
+33. Acceptance is idempotent for the same exact candidate and successful evaluation chain.
+34. Duplicate acceptance execution must not create semantically duplicate accepted results.
+35. Recovery may complete interrupted acceptance without rerunning successful validation/review when their durable provenance remains valid.
+36. Stage 10 consumes no worker/model/tool/token budget.
+37. REVIEWING → ACCEPTED releases target concurrency through existing derived scheduling semantics.
+38. A previous AcceptedTargetResult remains immutable when fleet-level findings reopen the target.
+39. Reopened targets pass through their normal worker/finalization/validation/review path before becoming accepted again.
+40. A changed candidate that later passes local gates creates a new immutable AcceptedTargetResult.
+41. last_accepted_result_ref always identifies the latest locally accepted result for the mutable target execution.
+42. Stage 11 and later fleet stages use accepted-result references to select exact target candidates.
+43. Local target acceptance does not imply fleet acceptance.
+44. Local target acceptance does not grant Repository Brain publication authority.
+
+⸻
+
+27. New Stage 10 surface
+
+Stage 10 adds only:
+
+Durable contract
+
+AcceptedTargetResult
+
+Runtime interface
+
+accept_target(target_task_id)
+    → AcceptedTargetResult
+
+Existing contracts are reused directly:
+
+SourceBinding
+CandidateArtifactRef
+CompletionItemState
+TargetTaskSpec
+TargetTaskState
+TargetCompletionState
+TargetFinalizationRequest
+TargetValidationReport
+TargetReviewVerdict
+EvidenceReference
+TaskEvent
+Stage 5 persistence/recovery machinery
+
+Stage 10 does not introduce:
+
+AcceptedTargetState
+TargetAcceptanceReport
+TargetAcceptanceVerdict
+TargetAcceptanceAttempt
+TargetAcceptanceCheckpoint
+TargetAcceptanceManifest
+acceptance-specific budget
+acceptance-specific finding
+accepted-artifact duplicate store
+fleet target-status projection
+new scheduler state
+new persistence protocol
+
+⸻
+
+28. Stage 11+ deferments
+
+Stage 10 intentionally leaves the following fleet-level behavior to later stages.
+
+Stage 11 — Fleet hard validation
+
+FleetValidationReport
+fleet structural/integrity gates
+required-target accepted-result checks
+cross-target source compatibility
+cross-target artifact/link integrity
+fleet validation findings
+target reopening decisions from fleet validation
+
+Stage 12 — Fleet reconciliation
+
+FleetReviewContext
+fleet reviewer execution
+FleetReviewVerdict
+cross-target duplication
+cross-target contradiction
+terminology consistency
+semantic ownership reconciliation
+fleet review findings
+target reopening decisions from fleet review
+
+Stage 13 — Fleet acceptance
+
+AcceptedMemoryFleetResult
+final fleet ACCEPTED transition
+accepted fleet provenance
+handoff to Repository Brain publication
+
+Stage 10 remains specifically the deterministic boundary that freezes one exact locally successful target candidate and makes that immutable result available to the fleet-level stages.
+
+
+# Stage 8 — Target Review
+
+## 1. Responsibility
+
+Stage 8 is the fresh, read-only **semantic and artifact-quality review boundary** for one mechanically valid target candidate.
+
+Its lifecycle boundary is:
+
+```text
+Stage 7
+TargetTaskState.phase = REVIEWING
++
+TargetValidationReport = PASS
++
+exact validated candidate checkpoint
+        ↓
+Stage 8
+compile fresh review context
+invoke target reviewer
+persist review verdict
+        ↓
+        ├── PASS       → remain REVIEWING → Stage 10
+        └── NEEDS_WORK → REPAIR          → Stage 9
+````
+
+Stage 8 evaluates only properties visible from the target contract and the exact candidate that Stage 7 passed.
+
+Stage 8 owns:
+
+* compilation of the transient `TargetReviewContext`;
+* fresh reviewer-model execution;
+* artifact-level semantic-quality judgment;
+* creation of `TargetReviewFinding` records;
+* persistence of the immutable `TargetReviewVerdict`;
+* current `TARGET_REVIEW` finding projection updates;
+* `REVIEWING → REPAIR` on `NEEDS_WORK`;
+* reviewer-model usage accounting.
+
+Stage 8 does **not** own:
+
+* repository rediscovery;
+* repository-navigation or source-reading tools;
+* independent verification that repository evidence semantically supports the prose;
+* deterministic mechanical validation already owned by Stage 7;
+* worker execution or artifact mutation;
+* repair strategy;
+* target acceptance;
+* fleet-level reconciliation;
+* offline Bridger evaluation.
+
+Stage 10 alone owns:
+
+```text
+REVIEWING → ACCEPTED
+```
+
+A reviewer `PASS` is necessary for acceptance but is not itself acceptance.
+
+---
+
+## 2. Incoming authoritative state
+
+Stage 8 may run only when:
+
+```text
+TargetTaskState.phase == REVIEWING
+
+TargetTaskState.pending_finalization_request_ref
+    → TargetFinalizationRequest F
+
+F.candidate_checkpoint_ref
+    → TaskCheckpoint C
+
+TargetValidationReport V
+    → PASS
+    → bound to F and C
+```
+
+The review subject is exactly:
+
+```text
+TaskCheckpoint C
+```
+
+The reviewer must never silently review:
+
+* the ambient mutable target workspace;
+* later artifact revisions;
+* reconstructed state from trace history;
+* provider conversation state.
+
+The authority chain is:
+
+```text
+TargetFinalizationRequest F
+        ↓
+candidate checkpoint C
+        ↓
+TargetValidationReport V — PASS
+        ↓
+TargetReviewVerdict R
+```
+
+`R` must remain explicitly bound to the same `F`, `C`, and `V`.
+
+---
+
+## 3. Reviewer responsibility boundary
+
+The reviewer judges semantic and artifact quality visible from its legitimate inputs.
+
+V0 review concerns include:
+
+```text
+visible completion-contract coverage
+internal consistency
+scope discipline
+organization and navigability
+appropriate level of detail
+internal duplication
+terminology consistency
+writing clarity
+quality of explicit unknowns and contradictions
+visible unsupported certainty
+Markdown / metadata / completion-state semantic consistency
+quality of worker-owned file segmentation
+```
+
+The reviewer may fail visible coverage.
+
+Example:
+
+```text
+completion obligation = covered
+
+candidate artifacts contain no meaningful treatment
+of that obligation
+```
+
+The reviewer may also fail visible contradiction or overstatement.
+
+Example:
+
+```text
+completion state = unknown
+
+artifact states the same matter as certain
+```
+
+The reviewer may **not** independently decide:
+
+```text
+whether an undisclosed repository subsystem was missed
+whether a source workflow was interpreted correctly
+whether another source file would have been better evidence
+whether an EvidenceReference semantically proves a claim
+whether not-applicable is actually true in repository reality
+whether unknown could have been resolved through more discovery
+```
+
+Those require repository rediscovery or source-grounding verification and remain worker/offline-evaluation responsibilities.
+
+---
+
+## 4. `TargetDefinition` and reviewer rubric authority
+
+`TargetDefinition` remains the sole semantic contract for the target.
+
+It owns:
+
+```text
+target purpose
+semantic scope
+exclusions
+cross-target ownership
+completion obligations
+output-quality expectations
+```
+
+The reviewer rubric is an evaluation/calibration artifact for applying that contract.
+
+It may define:
+
+```text
+quality interpretation
+target-specific examples
+criterion identifiers
+expected depth
+scope-leakage examples
+organization / segmentation expectations
+```
+
+It must not introduce:
+
+```text
+new completion obligations
+new required repository topics
+new semantic ownership
+new grounding requirements
+new target exclusions
+```
+
+Therefore:
+
+```text
+TargetDefinition
+    = what successful target knowledge means
+
+reviewer rubric
+    = how that existing contract is evaluated
+```
+
+No second target contract is introduced.
+
+---
+
+## 5. `TargetReviewContext`
+
+`TargetReviewContext` is a transient, immutable, provider-neutral reviewer input.
+
+It is compiled fresh for one validated candidate and is never authoritative durable task state.
+
+Conceptually:
+
+```text
+TargetReviewContext
+
+review identity
+├── target_task_id
+├── target_id
+├── target_contract_version
+├── finalization_request_ref
+├── candidate_checkpoint_ref
+├── validation_report_ref
+└── source binding
+
+target contract
+├── purpose / canonical question
+├── scope
+├── exclusions
+├── boundary guidance
+├── completion obligations
+└── output-quality expectations
+
+candidate
+├── checkpointed TargetCompletionState
+├── exact checkpointed candidate artifacts
+├── candidate-local metadata / claims when applicable
+└── artifact identities / paths / revisions / digests
+
+evaluation
+├── Stage 7 PASS report
+├── shared reviewer instructions
+├── target-specific reviewer rubric
+└── structured review-output contract
+```
+
+The candidate material must resolve from the checkpointed artifact versions referenced by the validated submission.
+
+### Context exclusions
+
+The reviewer does not normally receive:
+
+```text
+worker transcript
+worker reasoning
+working_summary
+worker tool history
+TaskEvent history
+old checkpoints
+provider conversation state
+RepositoryNavigator
+raw repository source
+graph-navigation capability
+sibling target artifacts
+previous reviewer reasoning
+previous reviewer findings
+```
+
+Previous review findings are intentionally excluded by default.
+
+Each newly submitted candidate receives a fresh independent assessment rather than a review biased toward checking only earlier criticisms.
+
+---
+
+## 6. Reviewer permissions and execution model
+
+The Stage 8 reviewer is:
+
+```text
+fresh-context
+read-only
+artifact-focused
+tool-less
+```
+
+V0 exposes no tools to the reviewer.
+
+In particular:
+
+```text
+no RepositoryNavigator
+no TargetWorkspace
+no EvidenceRecorder
+no source reader
+no shell
+no artifact mutation tools
+```
+
+The complete reviewable candidate is compiled directly into `TargetReviewContext`.
+
+This is deliberate V0 simplicity. Candidate-reading tools or multi-pass review should be introduced only if real target sizes demonstrate that one bounded review context is insufficient.
+
+---
+
+## 7. Review verdict
+
+The V0 verdict vocabulary is exactly:
+
+```text
+PASS
+NEEDS_WORK
+```
+
+No additional status such as:
+
+```text
+UNCERTAIN
+PARTIAL_PASS
+PASS_WITH_WARNINGS
+```
+
+is introduced.
+
+### `PASS`
+
+Means:
+
+> No material issue within Stage 8's legitimate artifact-review authority should block local target acceptance.
+
+It does not mean that repository interpretation has been independently proven correct.
+
+Invariant:
+
+```text
+PASS
+→ zero review findings
+```
+
+### `NEEDS_WORK`
+
+Means:
+
+> At least one material artifact-level issue within Stage 8's authority must be repaired before local acceptance.
+
+Invariant:
+
+```text
+NEEDS_WORK
+→ one or more review findings
+```
+
+Reviewer/provider execution uncertainty is not a semantic verdict.
+
+Malformed output, provider failure, context failure, or runtime interruption remain runtime failures rather than `NEEDS_WORK`.
+
+---
+
+## 8. `TargetReviewFinding`
+
+One persisted review finding represents one concrete blocking artifact-quality issue.
+
+Conceptually:
+
+```text
+TargetReviewFinding
+├── finding_id
+├── review_id
+├── target_task_id
+├── criterion_id
+├── message
+├── affected_artifact_refs[]
+├── affected_obligation_ids[]
+└── required_outcome
+```
+
+Affected artifact and obligation references are optional when the issue applies to the complete target.
+
+`required_outcome` describes what must become true without prescribing the worker's implementation strategy.
+
+Example:
+
+```text
+criterion:
+    internal-duplication
+
+message:
+    overview.md and runtime.md contain materially duplicated
+    descriptions of the same startup flow
+
+required_outcome:
+    retain one canonical detailed explanation and reduce
+    the other to bounded orientation context
+```
+
+V0 introduces no:
+
+```text
+severity
+confidence
+priority
+repair-plan hierarchy
+root-cause model
+nested critique structure
+```
+
+All persisted Stage 8 findings are acceptance-blocking.
+
+### Finding identity
+
+The reviewer model does not create authoritative finding IDs.
+
+The runtime assigns finding identity after validating the structured reviewer output.
+
+A simple V0 identity is derived from:
+
+```text
+review_id + finding ordinal
+```
+
+Historical findings are immutable.
+
+---
+
+## 9. `TargetReviewVerdict`
+
+`TargetReviewVerdict` is the immutable persisted semantic result of Stage 8.
+
+Conceptually:
+
+```text
+TargetReviewVerdict
+├── review_id
+├── target_task_id
+├── finalization_request_ref
+├── candidate_checkpoint_ref
+├── validation_report_ref
+├── verdict
+├── finding_refs[]
+└── reviewer_profile_id
+```
+
+The verdict must bind explicitly to:
+
+```text
+the exact finalization request
+the exact candidate checkpoint
+the exact PASS validation report
+```
+
+This allows Stage 10 to prove directly that one exact candidate passed both local evaluation gates.
+
+### Review identity
+
+One finalization request has at most one committed review verdict.
+
+Conceptually:
+
+```text
+one TargetFinalizationRequest
+    → one logical review_id
+    → at most one committed TargetReviewVerdict
+```
+
+Provider retries do not create new semantic review identities.
+
+No separate:
+
+```text
+ReviewAttempt
+ReviewSession
+ReviewerConversation
+ReviewState
+```
+
+contract is introduced.
+
+---
+
+## 10. Lifecycle behavior
+
+### `REVIEWING`
+
+`REVIEWING` means:
+
+> The submitted candidate has passed Stage 7 and is within semantic review or the subsequent local-acceptance handoff.
+
+A target may therefore remain `REVIEWING` when:
+
+```text
+review has not yet been committed
+
+or
+
+TargetReviewVerdict = PASS
+and Stage 10 acceptance has not yet occurred
+```
+
+No intermediate `REVIEWED` or `AWAITING_ACCEPTANCE` phase is introduced.
+
+### `NEEDS_WORK`
+
+A committed `NEEDS_WORK` verdict owns:
+
+```text
+REVIEWING → REPAIR
+```
+
+The transition occurs only together with durable review findings and state-projection updates.
+
+### `PASS`
+
+A committed `PASS` verdict leaves:
+
+```text
+TargetTaskState.phase = REVIEWING
+```
+
+Stage 10 later consumes the durable PASS verdict and exclusively owns:
+
+```text
+REVIEWING → ACCEPTED
+```
+
+This makes review PASS crash-safe without allowing Stage 8 to perform acceptance indirectly.
+
+---
+
+## 11. `open_finding_refs`
+
+`TargetTaskState.open_finding_refs` remains a projection of **currently unresolved** findings, not evaluation history.
+
+A newly committed Stage 8 verdict supersedes the current projection whose origin is:
+
+```text
+TARGET_REVIEW
+```
+
+### New `NEEDS_WORK`
+
+```text
+remove previous TARGET_REVIEW refs
+add findings from the new review
+```
+
+### New `PASS`
+
+```text
+remove previous TARGET_REVIEW refs
+add none
+```
+
+Historical review verdicts and historical finding records remain immutable.
+
+Stage 8 must not clear findings owned by another authority:
+
+```text
+HARD_VALIDATION
+FLEET_VALIDATION
+FLEET_REVIEW
+```
+
+If an earlier semantic problem still exists in a newly submitted candidate, the fresh reviewer should emit it again as a finding for the new review round.
+
+---
+
+## 12. Persistence boundary
+
+Reviewer model invocation occurs outside the durable mutation transaction.
+
+Conceptually:
+
+```text
+1. validate REVIEWING boundary
+2. resolve F, C and PASS V
+3. return existing verdict if already committed
+4. compile TargetReviewContext
+5. perform budget/context preflight
+6. invoke reviewer
+7. parse and validate structured output
+8. assign runtime-owned finding identities
+9. atomically persist semantic review outcome
+```
+
+### PASS commit
+
+One logical durable operation establishes:
+
+```text
+TargetReviewVerdict = PASS
++
+clear current TARGET_REVIEW finding refs
++
+review TaskEvent / usage state
+```
+
+The target remains:
+
+```text
+REVIEWING
+```
+
+### NEEDS_WORK commit
+
+One logical durable operation establishes:
+
+```text
+TargetReviewFinding records
++
+TargetReviewVerdict = NEEDS_WORK
++
+replace current TARGET_REVIEW finding refs
++
+REVIEWING → REPAIR
++
+review / transition TaskEvent state
+```
+
+Stage 8 reuses the Stage 5 persistence transaction and recovery mechanisms.
+
+No Stage-8-specific workflow engine, transaction system, or checkpoint type is introduced.
+
+No new candidate checkpoint is required: Stage 6's submitted `TaskCheckpoint` remains the reviewed candidate authority.
+
+---
+
+## 13. Recovery and idempotency
+
+Stage 8 uses:
+
+```text
+at-least-once reviewer execution
++
+at-most-one committed verdict
+```
+
+### REVIEWING with no committed verdict
+
+Recovery reconstructs `TargetReviewContext` from durable state and may invoke the reviewer again.
+
+No provider conversation needs to be restored.
+
+### Provider response existed only in memory
+
+If the process crashes after the reviewer returns but before persistence, that response has no durable authority.
+
+Recovery may invoke the reviewer again.
+
+A different probabilistic response is acceptable because no earlier verdict was committed.
+
+### Verdict already committed
+
+Recovery reuses the existing verdict.
+
+The reviewer must not run again for the same finalization request.
+
+### Partial persistence
+
+If a verdict/finding record is durable but related state projection or lifecycle mutation was interrupted, Stage 5 redo/recovery semantics complete the intended operation.
+
+Provider conversation state is never authoritative recovery state.
+
+---
+
+## 14. Multiple review rounds
+
+Repair preserves the existing target execution identity.
+
+Example:
+
+```text
+same target_task_id
+
+Finalization F1
+    ↓
+Checkpoint C1
+    ↓
+Validation V1 PASS
+    ↓
+Review R1 NEEDS_WORK
+
+repair
+
+Finalization F2
+    ↓
+Checkpoint C2
+    ↓
+Validation V2 PASS
+    ↓
+Review R2 PASS
+```
+
+Historical:
+
+```text
+F1 / C1 / V1 / R1 / findings
+F2 / C2 / V2 / R2
+```
+
+remain immutable.
+
+Repair does not reset or replace:
+
+```text
+target_task_id
+TargetTaskSpec
+source binding
+target workspace identity
+execution budget
+accumulated usage
+```
+
+A later review round only replaces the current `TARGET_REVIEW` finding projection.
+
+---
+
+## 15. Usage and budgets
+
+Stage 8 uses the existing `ExecutionUsage` and `ExecutionBudget` contracts.
+
+Every actual reviewer provider invocation attempt increments:
+
+```text
+model_calls += 1
+```
+
+at both target and fleet scope.
+
+Provider-reported usage increments:
+
+```text
+input_tokens
+output_tokens
+```
+
+at both scopes.
+
+Reviewer retries consume additional model calls and tokens.
+
+Stage 8 does not increment:
+
+```text
+cycles
+repair_cycles
+tool_calls
+```
+
+because:
+
+* no worker cycle begins;
+* repair-cycle accounting belongs to repair worker admission/execution;
+* the reviewer has no tools.
+
+Before every reviewer invocation, existing target and fleet hard budgets are checked.
+
+If the target's own remaining hard budget cannot permit the required reviewer call:
+
+```text
+REVIEWING → EXHAUSTED
+```
+
+If only the fleet-wide budget prevents further execution, Stage 8 does not incorrectly mark the target as target-level `EXHAUSTED`; fleet-level exhaustion remains owned by the existing fleet budget/runtime semantics.
+
+---
+
+## 16. Concurrency
+
+Stage 8 introduces no new scheduling contract.
+
+`REVIEWING` already occupies the target's existing Stage 2 execution slot.
+
+Therefore:
+
+```text
+Stage 7 PASS
+    → REVIEWING
+    → same slot remains held
+
+NEEDS_WORK
+    → REPAIR
+    → slot released
+
+PASS
+    → remain REVIEWING
+    → slot remains held until Stage 10
+```
+
+No reviewer-specific target queue, admission system, or scheduling phase is introduced.
+
+Generic provider-level concurrency/rate limiting may be reused where already available but does not change target scheduling semantics.
+
+---
+
+## 17. Stage 9 repair handoff
+
+A committed `NEEDS_WORK` produces the durable Stage 9 boundary:
+
+```text
+TargetTaskState.phase = REPAIR
+
+same TargetTaskSpec
+same target_task_id
+same source binding
+same accumulated usage
+
+TargetFinalizationRequest F
+candidate checkpoint C
+TargetValidationReport V = PASS
+
+TargetReviewVerdict R = NEEDS_WORK
+    bound to F / C / V
+
+current TARGET_REVIEW findings
+    referenced by open_finding_refs
+```
+
+Stage 8 does not prescribe the repair strategy.
+
+The worker may later:
+
+```text
+patch
+rewrite
+reorganize
+merge/split files
+replace weak structure
+perform additional repository investigation
+```
+
+under normal Stage 9/worker rules.
+
+---
+
+## 18. Stage 10 acceptance handoff
+
+A successful Stage 8 boundary is:
+
+```text
+TargetTaskState.phase = REVIEWING
+
+pending_finalization_request_ref → F
+F.candidate_checkpoint_ref       → C
+
+TargetValidationReport V
+    verdict = PASS
+    bound to F and C
+
+TargetReviewVerdict R
+    verdict = PASS
+    bound to F, C and V
+```
+
+This is the durable proof that:
+
+> The exact candidate `C` passed both deterministic hard validation and independent target review.
+
+Stage 10 must not infer this from:
+
+```text
+trace ordering
+reviewer conversation
+worker conversation
+ambient workspace contents
+timestamps
+```
+
+Stage 10 uses these explicit durable bindings to perform local target acceptance.
+
+---
+
+## 19. Locked rules
+
+1. Stage 8 runs only from `REVIEWING` after a Stage 7 PASS.
+2. The review subject is exactly the candidate checkpoint referenced by the pending finalization request and passed by Stage 7.
+3. Ambient mutable workspace state never replaces the checkpointed candidate.
+4. The reviewer always runs from a fresh compiled context.
+5. The reviewer is read-only.
+6. The reviewer receives no repository-navigation capability.
+7. The reviewer receives no tools in V0.
+8. `TargetDefinition` remains the sole semantic target contract.
+9. Reviewer rubrics calibrate evaluation but cannot create new semantic obligations.
+10. Stage 8 judges only properties visible from its legitimate inputs.
+11. Repository truth and source-grounding verification are outside Stage 8.
+12. The verdict vocabulary is exactly `PASS` and `NEEDS_WORK`.
+13. `PASS` contains zero review findings.
+14. `NEEDS_WORK` contains at least one actionable review finding.
+15. Reviewer findings are immutable historical records.
+16. Reviewer-model output does not control authoritative finding identity.
+17. `TargetTaskState` stores current finding references rather than duplicated finding contents/history.
+18. A new review replaces only the current `TARGET_REVIEW` finding projection.
+19. Historical review verdicts and findings are never mutated.
+20. One finalization request has at most one committed `TargetReviewVerdict`.
+21. Provider retries do not create separate semantic review rounds.
+22. Provider conversation state is never authoritative.
+23. Stage 8 owns `REVIEWING → REPAIR` on `NEEDS_WORK`.
+24. A reviewer `PASS` leaves the target in `REVIEWING`.
+25. Stage 10 exclusively owns `REVIEWING → ACCEPTED`.
+26. Stage 8 reuses Stage 5 persistence and recovery semantics.
+27. A crash before verdict persistence may cause reviewer re-execution.
+28. A crash after verdict persistence must reuse the committed verdict.
+29. Review model calls consume existing target/fleet model-call and token budgets.
+30. Review does not increment worker-cycle, repair-cycle, or tool-call counters.
+31. Target-budget inability to run the required review may produce `REVIEWING → EXHAUSTED`.
+32. Fleet-only budget exhaustion does not falsely mark the target as target-level `EXHAUSTED`.
+33. `REVIEWING` continues to occupy the already-reserved target concurrency slot.
+34. Repair after review failure uses the same target task, workspace, source binding, budget, and accumulated usage.
+35. Stage 8 does not accept targets, perform repair, or perform fleet reconciliation.
+36. Simplicity remains preferred over additional review workflow machinery.
+
+---
+
+## 20. Stage 9+ deferments
+
+Stage 8 intentionally does not define:
+
+### Stage 9 — Repair
+
+```text
+repair-context compilation
+repair finding prioritization
+worker repair strategy
+exact repair execution flow
+```
+
+Stage 8 only guarantees a durable `REPAIR` state and actionable current review findings.
+
+### Stage 10 — Target acceptance
+
+```text
+AcceptedTargetResult schema
+candidate freezing for acceptance
+accepted-result persistence
+REVIEWING → ACCEPTED transaction
+last_accepted_result_ref semantics
+```
+
+Stage 8 only guarantees the durable proof that one exact candidate passed both local gates.
+
+### Stages 11–13
+
+```text
+fleet hard validation
+fleet reconciliation
+fleet-level reopening
+fleet acceptance
+```
+
+Cross-target duplication, contradiction, terminology, ownership, and whole-fleet organization remain later fleet-level responsibilities.
+
+Stage 8 remains specifically the fresh, read-only semantic/artifact review boundary between Stage 7 hard validation and later repair or target acceptance.
+
+
+
+# Stage 9 — Repair
+
+Responsibility
+
+Stage 9 routes a target rejected by hard validation or target review back into the existing worker execution path.
+
+Repair continues the same target task.
+
+Stage 7 FAIL
+or
+Stage 8 NEEDS_WORK
+        ↓
+REPAIR
+        ↓
+Stage 2 — Scheduling
+        ↓
+Stage 3 — Context Hydration
+        ↓
+Stage 4 — Worker Cycle
+        ↓
+Stage 6 — Finalization
+        ↓
+Stage 7 — Hard Validation
+        ↓
+Stage 8 — Target Review
+
+Stage 9 does not introduce a separate repair agent, repair worker loop, repair context contract, repair workspace, repair task, or repair persistence subsystem.
+
+The existing Stage 2–4 machinery is the repair execution mechanism.
+
+⸻
+
+Incoming repair state
+
+Stage 9 begins only from:
+
+TargetTaskState.phase == REPAIR
+
+The transition into REPAIR is produced durably by either:
+
+TargetValidationReport.result == FAIL
+
+or:
+
+TargetReviewVerdict.result == NEEDS_WORK
+
+At this boundary:
+
+* the rejected candidate is identified by the TargetFinalizationRequest and its immutable TaskCheckpoint;
+* the corresponding validation report or review verdict is immutable;
+* generated findings are immutable;
+* TargetTaskState.open_finding_refs contains the current unresolved repair findings;
+* pending_finalization_request_ref has been cleared;
+* no candidate is currently under evaluation;
+* the target retains its existing workspace, completion state, evidence, questions, working summary, usage, and budget.
+
+Repair does not create or replace:
+
+target_task_id
+TargetTaskSpec
+SourceBinding
+target workspace identity
+ExecutionBudget
+ExecutionUsage
+
+Historical finalization requests, checkpoints, validation reports, review verdicts, and findings remain preserved.
+
+⸻
+
+REPAIR phase semantics
+
+REPAIR is a durable waiting/admission phase.
+
+It means:
+
+The previous evaluation round failed, unresolved evaluator findings exist, and the same target task may be admitted to another worker execution through normal scheduling.
+
+While a target remains in REPAIR:
+
+* no worker is running;
+* no concurrency slot is held;
+* no model or tool usage is consumed;
+* no artifact mutation occurs;
+* no provider conversation state is required.
+
+The target leaves REPAIR only through normal Stage 2 scheduling:
+
+REPAIR
+    ↓
+SCHEDULED
+
+Direct transitions such as:
+
+REPAIR → WORKING
+
+are not allowed.
+
+⸻
+
+Scheduling and concurrency
+
+Stage 2 remains the sole scheduling authority.
+
+A REPAIR target is eligible for the same scheduling path as other executable targets.
+
+Before:
+
+REPAIR → SCHEDULED
+
+the scheduler reuses the existing admission rules, including:
+
+* dependency eligibility;
+* target execution budget;
+* fleet execution budget;
+* max_repair_cycles;
+* target-concurrency availability.
+
+SCHEDULED reserves the execution slot exactly as in ordinary execution.
+
+Repair receives no special priority, separate queue, separate worker pool, or repair-specific concurrency mechanism in V0.
+
+⸻
+
+Repair context hydration
+
+Stage 9 introduces no RepairContext.
+
+Stage 3 compiles the normal WorkerContext with:
+
+mode = REPAIR
+
+The repair context contains the same target execution information used during normal worker execution, plus every currently open repair finding.
+
+At minimum it includes:
+
+shared worker instructions
+target identity and TargetDefinition
+target scope and ownership boundaries
+SourceBinding
+current TargetCompletionState
+current artifact inventory
+working_summary
+open questions
+remaining budget
+current unresolved findings
+allowed worker tools
+
+Each repair finding exposed to the worker preserves:
+
+finding identity
+finding origin
+actionable finding content
+affected artifact / obligation / scope when available
+
+The worker receives only current actionable evaluation feedback.
+
+Normal repair hydration does not include:
+
+full worker transcript
+reviewer transcript or hidden reasoning
+complete TaskEvent history
+all historical validation reports
+all historical review verdicts
+resolved or superseded findings
+old tool outputs
+checkpoint history
+provider conversation state
+sibling worker histories
+
+Historical state remains durable and inspectable by the runtime but is not automatically loaded into the worker context.
+
+⸻
+
+Worker execution during repair
+
+Repair uses the existing Stage 4 worker.
+
+The worker retains exactly the normal worker permissions:
+
+read repository through RepositoryNavigator
+inspect graph/file/symbol/source evidence
+write inside its target workspace
+create/edit/delete/reorganize target-local generated files
+record evidence
+update completion-state resolutions
+update working summary and open questions
+request finalization
+
+Repair does not grant additional permissions.
+
+The worker decides how to address the findings.
+
+A repair may require:
+
+* a small Markdown correction;
+* fixing artifact structure;
+* correcting evidence references;
+* changing completion-state resolution;
+* additional repository investigation;
+* rewriting weak explanations;
+* resolving contradictions;
+* reducing duplication;
+* reorganizing target-local files.
+
+Validation or review findings describe why the candidate was rejected. They do not become authoritative implementation instructions.
+
+⸻
+
+Finding ownership and resolution
+
+Evaluation findings remain owned by their evaluator.
+
+The worker cannot:
+
+delete evaluator findings
+mark evaluator findings resolved
+mutate open_finding_refs directly
+declare validation or review feedback verified
+
+TargetTaskState.open_finding_refs is a projection of currently unresolved findings. The underlying finding records remain immutable.
+
+Hard-validation findings
+
+A later Stage 7 result owns the current HARD_VALIDATION projection.
+
+new Stage 7 FAIL
+    → replace current HARD_VALIDATION finding refs
+      with findings from the new validation report
+new Stage 7 PASS
+    → clear current HARD_VALIDATION finding refs
+
+Previous hard-validation findings remain immutable historical records.
+
+Target-review findings
+
+A later Stage 8 verdict owns the current TARGET_REVIEW projection.
+
+new Stage 8 NEEDS_WORK
+    → replace current TARGET_REVIEW finding refs
+      with findings from the new review verdict
+new Stage 8 PASS
+    → clear current TARGET_REVIEW finding refs
+
+Previous review findings remain immutable historical records.
+
+Findings across evaluation stages
+
+Finding origins are resolved independently.
+
+Example:
+
+Candidate A
+    ↓
+Stage 7 PASS
+    ↓
+Stage 8 NEEDS_WORK
+    ↓
+review findings R1, R2
+    ↓
+repair
+    ↓
+Candidate B
+    ↓
+Stage 7 FAIL
+    ↓
+hard finding H1
+
+The current repair projection is:
+
+R1
+R2
+H1
+
+The old review findings remain open because Stage 8 has not yet verified that the new candidate resolved them.
+
+After a later Stage 7 PASS, hard-validation findings clear, while review findings remain open until the new candidate is independently reviewed by Stage 8.
+
+This prevents worker edits from implicitly declaring evaluator findings solved.
+
+⸻
+
+Rejected checkpoint and mutable workspace
+
+Every submitted candidate is frozen by Stage 6 in an immutable TaskCheckpoint.
+
+That checkpoint is historical provenance for the candidate that produced the corresponding validation or review result.
+
+It is never mutated during repair.
+
+At the transition into REPAIR, the authoritative current candidate workspace must still correspond to the rejected checkpoint because worker mutation is forbidden while the candidate is in:
+
+FINALIZING
+VALIDATING
+REVIEWING
+
+Normal repair therefore begins conceptually from:
+
+rejected TaskCheckpoint C
+        │
+        │ same candidate at repair boundary
+        ▼
+current target workspace
+        ↓
+worker repair mutations
+        ↓
+new candidate
+
+Once Stage 4 begins, the workspace may diverge freely from the rejected checkpoint.
+
+The rejected checkpoint remains unchanged.
+
+Workspace/checkpoint mismatch
+
+If the runtime finds that the current authoritative candidate no longer corresponds to the rejected checkpoint before repair execution begins, Stage 9 must not silently restore or substitute files.
+
+Such a mismatch is a Stage 5 persistence/recovery integrity failure.
+
+Repair begins only from a valid durable candidate state.
+
+Unverified ambient filesystem contents are never treated as authoritative repair state.
+
+⸻
+
+Completion-state behavior
+
+TargetCompletionState remains mutable through the existing controlled Stage 4 completion-state operation.
+
+Stage 9 introduces no new completion-state API.
+
+Repair may change an obligation between already-allowed terminal resolutions when additional investigation or evaluator feedback changes the correct conclusion.
+
+Examples:
+
+covered → unknown
+unknown → covered
+not-applicable → covered
+covered → not-applicable
+
+Resolution notes and evidence references may also be updated.
+
+The existing prohibition remains:
+
+terminal resolution → uninvestigated
+
+Repair does not erase previous investigation.
+
+Evaluator findings represent that the current candidate requires more work; they do not require resetting semantic progress to an uninvestigated state.
+
+⸻
+
+Repair-cycle accounting
+
+ExecutionUsage.repair_cycles follows the existing Stage 4 accounting rule.
+
+A repair cycle is charged once when a repair-mode worker execution actually begins:
+
+HYDRATING → WORKING
+
+with:
+
+WorkerContext.mode == REPAIR
+
+At that transition:
+
+usage.cycles += 1
+usage.repair_cycles += 1
+
+Repair cycles are not incremented when:
+
+entering REPAIR
+being scheduled
+entering HYDRATING
+processing a finding
+making a model call
+making a tool call
+submitting finalization
+
+A semantic repair episode normally contains one repair worker cycle.
+
+If an already-started repair worker execution is lost and Stage 5 recovery intentionally begins a fresh worker execution, the original execution remains consumed and the fresh repair execution consumes another repair cycle.
+
+No separate repair-round identity is introduced in V0.
+
+Both hard-validation and target-review failures consume the same max_repair_cycles budget.
+
+⸻
+
+Model, tool, and token usage
+
+Stage 9 itself consumes no model, tool, cycle, or token usage.
+
+Usage continues through the normal Stage 4 mechanisms.
+
+Repair worker execution contributes to the same cumulative counters:
+
+cycles
+repair_cycles
+model_calls
+tool_calls
+input_tokens
+output_tokens
+
+Target and fleet usage remain monotonic.
+
+Repair never resets usage or provides a fresh target/fleet budget.
+
+⸻
+
+Persistence
+
+Stage 9 reuses Stage 5 persistence and transaction semantics.
+
+No new repair-specific transaction format is introduced.
+
+The evaluation stage that sends a target into REPAIR durably commits the relevant:
+
+validation report or review verdict
+immutable findings
+open_finding_refs projection
+pending-finalization cleanup
+phase = REPAIR
+trace/events
+
+Subsequent durable transitions remain owned by their existing stages:
+
+Stage 2:
+REPAIR → SCHEDULED
+Stage 3:
+SCHEDULED → HYDRATING
+Stage 4 / Stage 5:
+HYDRATING → WORKING
+usage/cycle accounting
+worker mutations
+Stage 6:
+new finalization request
+new candidate checkpoint
+
+Stage 9 introduces no:
+
+RepairRecord
+RepairState
+RepairCheckpoint
+RepairAttempt
+repair-specific event log
+
+⸻
+
+Recovery and idempotency
+
+REPAIR is a safe durable recovery point.
+
+Crash while in REPAIR
+
+The runtime reloads the durable target state.
+
+If:
+
+phase == REPAIR
+current findings resolve
+candidate state is valid
+
+the target may later be scheduled normally.
+
+Crash before repair admission
+
+The target remains in REPAIR.
+
+No repair-cycle usage has been consumed.
+
+Crash during REPAIR → SCHEDULED
+
+Stage 5 transaction recovery determines whether the authoritative result is:
+
+REPAIR
+
+or:
+
+SCHEDULED
+
+The same repair execution must never receive two concurrency reservations.
+
+Duplicate scheduling
+
+Only a target currently in REPAIR may undergo:
+
+REPAIR → SCHEDULED
+
+A target already in:
+
+SCHEDULED
+HYDRATING
+WORKING
+
+has already been admitted and is not scheduled again.
+
+Crash after repair-cycle accounting
+
+The HYDRATING → WORKING phase transition and its usage delta remain one crash-safe durable mutation.
+
+Replaying recovery must not accidentally charge the same transition twice.
+
+If Stage 5 determines that the interrupted WORKING execution is consumed and starts a new worker execution, that fresh repair execution receives its own repair-cycle charge.
+
+Worker failure during repair
+
+A worker/provider/runtime failure while WORKING is handled by the existing Stage 5 recovery policy.
+
+It does not create a new semantic REPAIR transition and does not generate validation or review findings.
+
+Already committed artifact, evidence, completion, summary, and question mutations remain authoritative according to existing persistence semantics.
+
+Provider conversation state is never recovery authority.
+
+⸻
+
+Multiple repair rounds
+
+A target may undergo multiple repair/evaluation rounds without changing its identity.
+
+Example:
+
+Candidate A
+    ↓
+Stage 7 FAIL
+    ↓
+Repair 1
+    ↓
+Candidate B
+    ↓
+Stage 7 PASS
+    ↓
+Stage 8 NEEDS_WORK
+    ↓
+Repair 2
+    ↓
+Candidate C
+    ↓
+Stage 7 PASS
+    ↓
+Stage 8 PASS
+
+Across all rounds, the following remain unchanged:
+
+target_task_id
+TargetTaskSpec
+SourceBinding
+target workspace identity
+configured budgets
+
+Usage continues cumulatively.
+
+Each round produces new immutable evaluation lineage:
+
+TargetFinalizationRequest
+TaskCheckpoint
+TargetValidationReport
+ValidationFinding[]
+TargetReviewVerdict?
+TargetReviewFinding[]?
+
+Previous rounds are never rewritten or discarded.
+
+⸻
+
+No-progress and repeated failures
+
+Stage 9 introduces no repair-specific loop detector.
+
+Existing:
+
+last_progress_signature
+stall_count
+
+remain governed by the previously locked runtime policy.
+
+Stage 9 does not reset or reinterpret them.
+
+An unchanged candidate may be resubmitted.
+
+It still produces:
+
+new TargetFinalizationRequest
+new TaskCheckpoint
+new Stage 7 evaluation
+
+If the same defect remains, the new evaluator may produce equivalent findings again.
+
+Recurring findings remain distinct immutable evaluation records tied to distinct candidate rounds.
+
+Repair termination is enforced through existing execution budgets, including max_repair_cycles, rather than a new finding-repetition counter.
+
+⸻
+
+New finalization after repair
+
+Repair returns the target to ordinary worker execution.
+
+When the worker believes the repaired candidate is ready, it uses the existing Stage 6 finalization interface.
+
+Stage 6 creates:
+
+new TargetFinalizationRequest
+new immutable TaskCheckpoint
+
+The previous rejected checkpoint is never reused or mutated.
+
+The new checkpoint identifies the exact repaired candidate submitted for evaluation.
+
+⸻
+
+Mandatory Stage 7 re-entry
+
+Every repaired candidate must pass hard validation again.
+
+The required path is always:
+
+REPAIR
+    ↓
+normal worker execution
+    ↓
+new finalization request
+    ↓
+new TaskCheckpoint
+    ↓
+VALIDATING
+
+A target rejected by Stage 8 must not return directly to Stage 8 after repair.
+
+Even if the previous candidate passed hard validation, any worker mutation creates a new candidate whose mechanical validity must be established again.
+
+Therefore:
+
+new candidate
+    → Stage 7
+    → Stage 8 only after Stage 7 PASS
+
+is invariant.
+
+⸻
+
+Stage 10 boundary
+
+Stage 9 never accepts a target.
+
+The only path toward target acceptance after repair is:
+
+repair
+    ↓
+new finalization
+    ↓
+Stage 7 PASS
+    ↓
+Stage 8 PASS
+    ↓
+Stage 10 — Target Acceptance
+
+Stage 9 does not:
+
+set ACCEPTED
+create an accepted target result
+define acceptance provenance
+bypass validation or review
+
+Target acceptance remains exclusively downstream.
+
+⸻
+
+Locked invariants
+
+1. Repair continues the same target task.
+2. REPAIR is a durable non-executing phase awaiting normal scheduling.
+3. Stage 2 exclusively owns REPAIR → SCHEDULED.
+4. Stage 3 hydrates repair through the existing WorkerContext with mode = REPAIR.
+5. Stage 4 uses the same worker, permissions, tools, and workspace mechanisms for normal and repair execution.
+6. No separate repair agent, repair context, repair task, repair workspace, or repair loop exists in V0.
+7. Target identity, source binding, workspace identity, configured budget, and accumulated usage never reset during repair.
+8. Historical candidates, checkpoints, reports, verdicts, and findings are immutable.
+9. open_finding_refs contains the current unresolved finding projection, not duplicated evaluation history.
+10. The worker cannot mutate or declare evaluator findings resolved.
+11. Each evaluation origin supersedes or clears only its own current finding projection.
+12. Review findings remain unresolved until a later Stage 8 verdict evaluates a repaired candidate.
+13. Hard-validation and target-review findings may therefore coexist temporarily.
+14. Repair normally begins from the exact candidate that produced the current findings.
+15. A pre-repair checkpoint/workspace mismatch is a persistence/recovery integrity failure, not a semantic repair action.
+16. The rejected checkpoint remains immutable while the current workspace becomes mutable again during worker execution.
+17. Completion-state changes during repair use the existing completion-state operation.
+18. Terminal completion states may change to another permitted terminal state; they do not revert to uninvestigated.
+19. Stage 9 itself consumes no execution usage.
+20. repair_cycles increments once for each actual repair-mode worker execution at HYDRATING → WORKING.
+21. A fresh recovery worker execution may consume an additional repair cycle if the previous execution was already consumed.
+22. Hard-validation and target-review repair share the same repair-cycle budget.
+23. Repair receives no special scheduling or concurrency policy.
+24. Provider/runtime failures are handled through Stage 5 recovery and do not become semantic repair findings.
+25. Stage 9 introduces no new V0 no-progress or repeated-failure mechanism.
+26. Every repaired submission creates a new finalization request and immutable candidate checkpoint.
+27. Every repaired candidate must pass Stage 7 again.
+28. Stage 8 independently reviews the new candidate after Stage 7 PASS.
+29. Stage 9 never produces an accepted target.
+
+
+# Stage 10 — Target Acceptance
+
+## 1. Responsibility
+
+Stage 10 is the deterministic **local acceptance commit boundary** for one target.
+
+Its lifecycle boundary is:
+
+```text
+Stage 8
+TargetTaskState.phase = REVIEWING
++
+TargetValidationReport = PASS
++
+TargetReviewVerdict = PASS
+        ↓
+Stage 10
+verify acceptance provenance
+freeze exact accepted candidate
+persist AcceptedTargetResult
+REVIEWING → ACCEPTED
+        ↓
+Stage 11
+fleet-level validation may consume the
+locally accepted target result
+```
+
+A target reaches Stage 10 only after both local evaluation gates have succeeded.
+
+Stage 10 owns:
+
+* validating local-acceptance preconditions;
+* proving that finalization, hard-validation, review and current candidate state refer to the same exact candidate;
+* creating the immutable `AcceptedTargetResult`;
+* persisting that result through the existing Stage 5 persistence boundary;
+* performing `REVIEWING → ACCEPTED`;
+* updating `TargetTaskState.last_accepted_result_ref`;
+* clearing `pending_finalization_request_ref`;
+* making the accepted target available to later fleet stages;
+* preserving idempotency across duplicate execution and crash recovery.
+
+Stage 10 does **not** own:
+
+* repository exploration;
+* artifact generation or mutation;
+* completion-state mutation;
+* evidence creation or mutation;
+* hard validation;
+* target review;
+* semantic evaluation;
+* finding generation;
+* finding resolution;
+* repair;
+* scheduling;
+* fleet validation;
+* fleet reconciliation;
+* fleet acceptance;
+* Repository Brain publication.
+
+Stage 10 performs no new judgment.
+
+It records that the exact candidate already proven by Stages 7 and 8 is now the target's authoritative **locally accepted result**. This preserves the existing separation between mutable target execution and immutable accepted outputs. 
+
+---
+
+## 2. Existing authorities consumed
+
+Stage 10 consumes the already-locked authorities:
+
+```text
+MemoryFleetSpec
+TargetTaskSpec
+TargetTaskState
+TargetCompletionState
+
+candidate artifact state
+EvidenceReference state
+
+TargetFinalizationRequest
+TargetValidationReport
+TargetReviewVerdict
+
+finding state
+Stage 5 persistence / recovery machinery
+```
+
+Stage 10 does not replace or reinterpret these authorities.
+
+The target lifecycle remains owned exclusively by:
+
+```text
+TargetTaskState.phase
+```
+
+`FleetRunState` remains shallow and references target tasks rather than storing a copied per-target lifecycle map. 
+
+---
+
+## 3. Acceptance meaning
+
+Local acceptance means:
+
+> The exact candidate identified by the accepted result has passed the target's deterministic hard-validation gate and artifact-level target review under the target's immutable assignment and source binding.
+
+It does **not** mean:
+
+```text
+the complete fleet is valid
+cross-target links are valid
+cross-target ownership is correct
+cross-target duplication is absent
+cross-target contradictions are absent
+global terminology is coherent
+fleet reconciliation has passed
+the memory fleet is accepted
+the Repository Brain is publishable
+```
+
+Those are later fleet-level responsibilities.
+
+The distinction is:
+
+```text
+TARGET ACCEPTANCE
+    exact candidate passed its local gates
+
+FLEET ACCEPTANCE
+    complete set of locally accepted targets
+    passed fleet validation and reconciliation
+```
+
+---
+
+## 4. `AcceptedTargetResult`
+
+Stage 10 introduces one new durable contract:
+
+```text
+AcceptedTargetResult
+```
+
+No separate acceptance report, acceptance state, acceptance attempt, acceptance checkpoint or acceptance manifest is introduced.
+
+### Semantic definition
+
+`AcceptedTargetResult` is the immutable identity of **one exact target candidate that successfully passed both local evaluation gates**.
+
+It answers:
+
+> Which exact version of this target was locally accepted, against which source and contract, and through which evaluation results?
+
+It is historical accepted provenance, not mutable execution state.
+
+### Contract
+
+Conceptually:
+
+```python
+class AcceptedTargetResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: int = 1
+
+    accepted_target_result_id: str
+
+    target_task_id: str
+    fleet_run_id: str
+    target_id: str
+    target_contract_version: str
+
+    source: SourceBinding
+
+    artifact_refs: list[CandidateArtifactRef]
+    completion_items: list[CompletionItemState]
+    evidence_refs: list[str]
+
+    finalization_request_ref: str
+    validation_report_ref: str
+    review_verdict_ref: str
+```
+
+The exact ID encoding is implementation-private.
+
+### Ownership / mutability
+
+| Property    | Rule                                       |
+| ----------- | ------------------------------------------ |
+| Created by  | Target runtime during Stage 10             |
+| Mutable by  | Nobody                                     |
+| Persisted   | Yes                                        |
+| Lifetime    | Retained provenance for the fleet run      |
+| Parent      | `TargetTaskSpec` / owning fleet            |
+| Consumed by | Stages 11–13 and later publication handoff |
+
+---
+
+## 5. Identity and source provenance
+
+The accepted result carries:
+
+```text
+target_task_id
+fleet_run_id
+target_id
+target_contract_version
+SourceBinding
+```
+
+These values are frozen from the immutable target assignment.
+
+They must satisfy:
+
+```text
+accepted_result.target_task_id
+    == TargetTaskSpec.target_task_id
+
+accepted_result.fleet_run_id
+    == TargetTaskSpec.fleet_run_id
+
+accepted_result.target_id
+    == TargetTaskSpec.target_id
+
+accepted_result.target_contract_version
+    == TargetTaskSpec.target_contract_version
+
+accepted_result.source
+    == TargetTaskSpec.source
+    == MemoryFleetSpec.source
+```
+
+`SourceBinding` is copied intentionally into the immutable accepted result.
+
+The accepted result must remain independently sufficient to establish the repository revision, graph snapshot and optional enrichment overlay against which the target was accepted.
+
+No source identity is inferred from the current workspace at acceptance time.
+
+---
+
+## 6. Accepted artifact set
+
+`artifact_refs` freezes the exact current candidate artifact set using the already-locked `CandidateArtifactRef` contract:
+
+```text
+artifact_id
+relative_path
+revision
+digest
+```
+
+Stage 10 does not copy artifact contents into `AcceptedTargetResult`.
+
+The accepted result therefore identifies:
+
+```text
+which artifacts
+which artifact revisions
+which content digests
+```
+
+constituted the locally accepted target.
+
+### Artifact-version preservation
+
+Every artifact version referenced by an `AcceptedTargetResult` must remain resolvable after acceptance.
+
+A later repair may:
+
+```text
+edit an artifact
+replace an artifact
+delete an artifact from the current candidate
+reorganize the target workspace
+```
+
+but it must not destroy the historical artifact version required by an earlier accepted result.
+
+Stage 10 reuses Stage 5 artifact-version persistence for this purpose.
+
+No parallel `accepted-artifacts/` authority is introduced.
+
+---
+
+## 7. Accepted completion state
+
+The accepted result contains a frozen snapshot of:
+
+```text
+CompletionItemState[]
+```
+
+from the exact `TargetCompletionState` evaluated by the successful local gates.
+
+This snapshot includes the existing fields:
+
+```text
+obligation_id
+status
+resolution_note
+evidence_refs
+```
+
+The static obligation definitions remain owned by the referenced `TargetDefinition`.
+
+Stage 10 does not duplicate:
+
+```text
+obligation description
+applicability metadata
+investigation guidance
+target semantics
+```
+
+### Why completion state is copied
+
+`TargetCompletionState` is mutable runtime state.
+
+A target may later be reopened and its completion resolutions may change.
+
+Therefore an accepted result must preserve:
+
+> what the semantic completion state was when this candidate was locally accepted.
+
+Referencing only the live `TargetCompletionState` would allow historical accepted provenance to change retroactively.
+
+No separate `AcceptedCompletionState` contract is introduced.
+
+---
+
+## 8. Evidence references
+
+`AcceptedTargetResult.evidence_refs` freezes the exact evidence-reference set associated with the accepted candidate.
+
+Only evidence IDs are copied.
+
+The full immutable `EvidenceReference` objects remain in their existing evidence authority.
+
+Every referenced evidence object must:
+
+```text
+exist
+belong to the accepted target task
+match the accepted SourceBinding
+remain resolvable after acceptance
+```
+
+Stage 10 does not create new evidence and does not reinterpret existing evidence.
+
+---
+
+## 9. Evaluation provenance
+
+The accepted result references exactly one successful local evaluation chain:
+
+```text
+finalization_request_ref
+validation_report_ref
+review_verdict_ref
+```
+
+The referenced objects remain independent immutable historical records.
+
+Stage 10 does not embed or rewrite them.
+
+The accepted evaluation chain must establish:
+
+```text
+TargetFinalizationRequest
+        ↓
+TargetValidationReport = PASS
+        ↓
+TargetReviewVerdict = PASS
+```
+
+for the exact candidate being accepted.
+
+Previous validation reports, review verdicts and repair rounds remain durable history and are not removed or superseded in place.
+
+---
+
+## 10. Exact-candidate invariant
+
+The central Stage 10 rule is:
+
+> **The candidate accepted by Stage 10 must be exactly the candidate that passed both local gates.**
+
+Conceptually:
+
+```text
+candidate finalized
+    =
+candidate hard-validated
+    =
+candidate reviewed
+    =
+candidate frozen into AcceptedTargetResult
+```
+
+Acceptance-relevant identity includes at least:
+
+```text
+target/source identity
+artifact IDs
+artifact revisions
+artifact digests
+completion-state snapshot
+evidence binding
+```
+
+Stage 10 must use the candidate-provenance mechanisms already established by Stages 6–8 rather than reconstructing provenance from conversation history.
+
+If the candidate changed after the relevant evaluation was produced, the previous PASS result does not authorize acceptance of the changed candidate.
+
+Examples of invalid drift include:
+
+```text
+artifact revision changed
+artifact digest changed
+artifact added or removed
+completion resolution changed
+evidence binding changed
+target/source identity mismatch
+```
+
+Stage 10 must fail explicitly rather than:
+
+```text
+accept stale evaluation
+guess intended provenance
+silently rerun evaluation
+create semantic repair findings
+```
+
+Candidate-provenance corruption is a runtime integrity failure, not worker feedback.
+
+---
+
+## 11. Acceptance preconditions
+
+`accept_target()` may succeed only when all of the following hold.
+
+### Lifecycle
+
+```text
+TargetTaskState.phase == REVIEWING
+```
+
+### Assignment
+
+The target task resolves to one immutable `TargetTaskSpec`, and all target/fleet/source identities remain compatible.
+
+### Validation
+
+The applicable `TargetValidationReport`:
+
+```text
+exists
+belongs to this target task
+has verdict PASS
+applies to the exact candidate being accepted
+```
+
+### Review
+
+The applicable `TargetReviewVerdict`:
+
+```text
+exists
+belongs to this target task
+has verdict PASS
+was produced from the successful local validation path
+applies to the exact candidate being accepted
+```
+
+### Candidate integrity
+
+Every accepted artifact and evidence reference resolves exactly.
+
+The current completion state matches the completion state evaluated by the successful local path.
+
+### Findings
+
+No unresolved local finding may currently block acceptance.
+
+Stage 10 verifies this invariant but does not resolve findings itself.
+
+---
+
+## 12. Acceptance operation
+
+The Stage 10 runtime interface is conceptually:
+
+```text
+accept_target(target_task_id)
+    → AcceptedTargetResult
+```
+
+The runtime resolves all authoritative inputs internally.
+
+The caller does not provide arbitrary:
+
+```text
+artifact refs
+completion state
+evidence refs
+validation result
+review result
+source binding
+```
+
+as acceptance claims.
+
+Those values are loaded from durable authoritative state.
+
+The normal operation is:
+
+```text
+load authoritative target state
+        ↓
+verify REVIEWING
+        ↓
+resolve successful validation/review chain
+        ↓
+verify exact candidate identity
+        ↓
+construct immutable AcceptedTargetResult
+        ↓
+persist accepted result
+        ↓
+update TargetTaskState
+        ↓
+append trace transition
+        ↓
+return AcceptedTargetResult
+```
+
+No LLM is invoked.
+
+---
+
+## 13. Lifecycle mutation
+
+On successful first acceptance:
+
+```text
+TargetTaskState.phase
+    REVIEWING → ACCEPTED
+```
+
+Stage 10 owns this transition.
+
+The runtime also sets:
+
+```text
+last_accepted_result_ref
+    = accepted_target_result_id
+
+pending_finalization_request_ref
+    = null
+```
+
+The runtime does not clear unrelated durable target state merely because acceptance succeeded.
+
+In particular, Stage 10 does not automatically erase:
+
+```text
+working_summary
+open_question_refs
+artifact_refs
+evidence_refs
+usage
+checkpoint history
+trace history
+```
+
+These remain available for provenance, debugging and possible later reopening.
+
+---
+
+## 14. `FleetRunState`
+
+Stage 10 does not introduce or maintain a copied per-target acceptance map inside `FleetRunState`.
+
+The locked global state remains:
+
+```text
+FleetRunState
+    └── target_task_ids[]
+```
+
+and current target lifecycle is obtained from each authoritative:
+
+```text
+TargetTaskState.phase
+```
+
+Therefore Stage 10 does not add:
+
+```text
+accepted_target_ids
+target_statuses
+target_result_map
+```
+
+to `FleetRunState`.
+
+When all required target tasks have:
+
+```text
+phase == ACCEPTED
+```
+
+the condition is derived from target states and the scheduler stops admitting ordinary target work.
+
+Control may then proceed to Stage 11. The existing scheduler already defines all-required-targets-accepted as the handoff condition to the fleet gates. 
+
+Stage 10 itself does not transition the fleet into a fleet-validation phase.
+
+---
+
+## 15. Persistence commit
+
+Stage 10 reuses the persistence and recovery semantics locked in Stage 5.
+
+The logical acceptance commit is:
+
+```text
+1. persist complete immutable AcceptedTargetResult
+
+2. persist TargetTaskState update:
+       phase = ACCEPTED
+       last_accepted_result_ref = result ID
+       pending_finalization_request_ref = null
+
+3. append the corresponding acceptance / lifecycle trace event
+```
+
+The implementation must preserve the invariant:
+
+```text
+TargetTaskState.phase == ACCEPTED
+    ⇒
+last_accepted_result_ref resolves to
+a complete valid AcceptedTargetResult
+```
+
+The runtime must never expose durable state equivalent to:
+
+```text
+phase = ACCEPTED
+last_accepted_result_ref = null
+```
+
+Stage 10 does not define a second persistence protocol.
+
+Atomic replacement, crash-safe state writes, artifact version durability and recovery continue to use Stage 5 mechanisms.
+
+---
+
+## 16. Idempotency
+
+Acceptance is idempotent for the same exact successful candidate and evaluation chain.
+
+Repeated execution must not create semantically duplicate accepted results simply because:
+
+```text
+the process retried
+the caller retried
+recovery reran acceptance
+the same operation was invoked twice
+```
+
+Conceptually, accepted-result identity is derived deterministically from the accepted provenance, including:
+
+```text
+target task
+exact candidate identity
+successful validation identity
+successful review identity
+```
+
+The precise hashing or textual ID format is implementation-private.
+
+The required semantic behavior is:
+
+```text
+same target
++
+same exact candidate
++
+same successful local evaluation chain
+        ↓
+same accepted result
+```
+
+If the target has already reached:
+
+```text
+phase = ACCEPTED
+last_accepted_result_ref = X
+```
+
+and `X` is valid for the same acceptance, another `accept_target()` call returns `X` or its equivalent loaded result without producing another acceptance.
+
+---
+
+## 17. Crash recovery
+
+### Crash before accepted-result persistence
+
+Durable state remains effectively:
+
+```text
+phase = REVIEWING
+review PASS already exists
+```
+
+Recovery may rerun acceptance from durable state.
+
+Hard validation and review do not need to rerun solely because acceptance itself was interrupted.
+
+### Crash after result persistence but before target-state update
+
+Recovery detects the already-persisted valid accepted result for the same candidate and completes:
+
+```text
+REVIEWING → ACCEPTED
+```
+
+without creating a new semantic acceptance.
+
+### Crash after target-state update
+
+Recovery sees:
+
+```text
+phase = ACCEPTED
+last_accepted_result_ref = X
+```
+
+and validates that `X` resolves correctly.
+
+No target work or evaluation is rerun.
+
+### Invalid partial state
+
+If recovery encounters an impossible combination such as:
+
+```text
+ACCEPTED with missing accepted result
+accepted result with incompatible source/task identity
+accepted result referencing missing artifact versions
+```
+
+the condition is treated as persistence/runtime corruption according to Stage 5 failure semantics.
+
+It is not converted into worker repair.
+
+---
+
+## 18. Usage and budgets
+
+Stage 10 consumes no worker/model execution budget.
+
+It performs:
+
+```text
+0 worker cycles
+0 repair cycles
+0 model calls
+0 tool calls
+0 input tokens
+0 output tokens
+```
+
+Acceptance therefore does not mutate `ExecutionUsage`.
+
+A target that has already earned validation PASS and review PASS may still be accepted when its remaining worker execution budget is zero.
+
+Budget exhaustion governs whether additional execution may begin.
+
+It does not prevent the runtime from recording an already-earned successful acceptance.
+
+Ordinary trace/persistence activity is not counted as worker execution usage.
+
+---
+
+## 19. Concurrency consequence
+
+`REVIEWING` is an active target phase.
+
+`ACCEPTED` is not runnable and does not occupy a target execution slot.
+
+Therefore:
+
+```text
+REVIEWING → ACCEPTED
+```
+
+naturally releases the target's concurrency occupancy through the existing derived scheduler rules.
+
+Stage 10 introduces no:
+
+```text
+release-slot command
+lease record
+semaphore artifact
+scheduler callback contract
+```
+
+The lifecycle transition is sufficient.
+
+---
+
+## 20. Historical local evaluation
+
+Acceptance does not rewrite prior evaluation history.
+
+Example:
+
+```text
+candidate A
+    validation FAIL
+
+candidate B
+    validation PASS
+    review NEEDS_WORK
+
+candidate C
+    validation PASS
+    review PASS
+    accepted
+```
+
+`AcceptedTargetResult` for the successful local acceptance references only the final successful chain for candidate C.
+
+The previous:
+
+```text
+finalization requests
+validation reports
+review verdicts
+findings
+repair events
+checkpoints
+```
+
+remain immutable historical records.
+
+They are not deleted or mutated merely because a later candidate succeeds.
+
+---
+
+## 21. Reopening an accepted target
+
+`ACCEPTED` is locally successful but reopenable.
+
+Later fleet validation or reconciliation may identify an issue that requires this target to change.
+
+The later fleet stages may therefore perform:
+
+```text
+ACCEPTED
+    ↓ fleet finding
+REPAIR
+```
+
+When this happens:
+
+```text
+last_accepted_result_ref
+```
+
+continues to reference the previous immutable accepted result.
+
+The old accepted result still means:
+
+> This exact historical candidate passed its local gates.
+
+It does **not** mean:
+
+> This candidate remains the current fleet-valid version.
+
+The mutable target task may then pass again through:
+
+```text
+REPAIR
+→ SCHEDULED
+→ HYDRATING
+→ WORKING
+→ FINALIZING
+→ VALIDATING
+→ REVIEWING
+→ ACCEPTED
+```
+
+The core state already explicitly preserves `last_accepted_result_ref` across such reopening. 
+
+---
+
+## 22. Repeated local acceptance
+
+When a reopened target produces a changed successful candidate:
+
+```text
+previous candidate A
+    → AcceptedTargetResult A
+
+fleet finding
+    ↓
+repair
+
+new candidate B
+    ↓
+validation PASS
+    ↓
+review PASS
+    ↓
+Stage 10
+    → AcceptedTargetResult B
+```
+
+Result A remains immutable historical provenance.
+
+Result B becomes the current locally accepted result:
+
+```text
+TargetTaskState.last_accepted_result_ref = B
+```
+
+Stage 10 does not mutate A into B.
+
+No separate acceptance-generation counter is required.
+
+The immutable results plus trace already preserve acceptance history.
+
+---
+
+## 23. Findings
+
+Stage 10 does not own finding lifecycle.
+
+Before local acceptance, all findings that block the current local evaluation path must already be resolved according to Stages 7–9.
+
+Stage 10 only verifies that no unresolved blocking local finding contradicts acceptance.
+
+It never:
+
+```text
+creates repair findings
+resolves review findings
+resolves validation findings
+resolves fleet findings
+rewrites finding history
+```
+
+If open finding state is inconsistent with the purported PASS chain, acceptance fails explicitly.
+
+---
+
+## 24. Downstream fleet contract
+
+Stage 10 is the boundary between mutable local target execution and later fleet-level evaluation.
+
+Stages 11–13 consume exact locally accepted results rather than arbitrary current workspace state.
+
+Conceptually:
+
+```text
+TargetTaskState.last_accepted_result_ref
+        ↓
+AcceptedTargetResult
+        ↓
+exact accepted artifact versions
+exact accepted completion snapshot
+exact accepted evidence set
+exact source and contract identity
+exact local evaluation provenance
+```
+
+Later fleet validation must not decide which target candidate is accepted by inspecting:
+
+```text
+current filesystem contents
+latest artifact revisions
+current mutable TargetCompletionState
+conversation history
+```
+
+`AcceptedTargetResult` is the authoritative selector of the locally accepted candidate.
+
+This is the concrete purpose of introducing the contract.
+
+---
+
+## 25. Local acceptance versus publication
+
+`AcceptedTargetResult` is not a published Repository Brain artifact.
+
+The progression remains:
+
+```text
+AcceptedTargetResult[]
+        ↓
+Stage 11 — Fleet Hard Validation
+        ↓
+Stage 12 — Fleet Reconciliation
+        ↓
+Stage 13 — Fleet Acceptance
+        ↓
+AcceptedMemoryFleetResult
+        ↓
+Repository Brain publication layer
+```
+
+Stage 10 therefore freezes a local target result only.
+
+It grants no publication authority.
+
+---
+
+## 26. Stage 10 invariants
+
+1. Stage 10 begins only from a target whose authoritative phase is `REVIEWING`.
+2. Stage 10 owns `REVIEWING → ACCEPTED`.
+3. Only the runtime may accept a target.
+4. Workers and reviewers cannot directly create acceptance state.
+5. Acceptance requires both hard-validation PASS and target-review PASS.
+6. Stage 10 performs no new semantic or mechanical evaluation beyond acceptance-integrity checks.
+7. The finalization request, validation report, review verdict and accepted candidate must all belong to the same target task.
+8. The successful validation and review must apply to the exact candidate being accepted.
+9. Candidate artifact identities, revisions and digests may not drift between successful evaluation and acceptance.
+10. Accepted source identity must equal the immutable `TargetTaskSpec.source`.
+11. Accepted target identity and contract version must equal the immutable `TargetTaskSpec`.
+12. `AcceptedTargetResult` is immutable.
+13. `AcceptedTargetResult` contains exact `CandidateArtifactRef` values, not artifact contents.
+14. Historical artifact versions referenced by accepted results must remain resolvable.
+15. No second accepted-artifact storage authority is introduced.
+16. `AcceptedTargetResult` freezes a copy of the existing completion-item state.
+17. The accepted result does not duplicate static obligation definitions.
+18. `AcceptedTargetResult` freezes evidence IDs but does not duplicate full `EvidenceReference` records.
+19. Evaluation reports/verdicts remain separate immutable authorities and are referenced rather than embedded.
+20. Previous evaluation failures and repair history are preserved.
+21. Stage 10 does not generate or resolve findings.
+22. Acceptance-integrity corruption fails explicitly and is not converted into semantic repair.
+23. Successful acceptance sets `TargetTaskState.phase = ACCEPTED`.
+24. Successful acceptance sets `last_accepted_result_ref`.
+25. Successful acceptance clears `pending_finalization_request_ref`.
+26. Stage 10 does not destructively clear unrelated target continuation/history state.
+27. `FleetRunState` does not copy target acceptance status.
+28. The authoritative target phase remains `TargetTaskState.phase`.
+29. All-required-targets-accepted is a derived handoff condition to Stage 11.
+30. Stage 10 does not perform fleet lifecycle transitions.
+31. `phase == ACCEPTED` requires a resolvable valid `last_accepted_result_ref`.
+32. Acceptance uses the existing Stage 5 persistence and recovery mechanisms.
+33. Acceptance is idempotent for the same exact candidate and successful evaluation chain.
+34. Duplicate acceptance execution must not create semantically duplicate accepted results.
+35. Recovery may complete interrupted acceptance without rerunning successful validation/review when their durable provenance remains valid.
+36. Stage 10 consumes no worker/model/tool/token budget.
+37. `REVIEWING → ACCEPTED` releases target concurrency through existing derived scheduling semantics.
+38. A previous `AcceptedTargetResult` remains immutable when fleet-level findings reopen the target.
+39. Reopened targets pass through their normal worker/finalization/validation/review path before becoming accepted again.
+40. A changed candidate that later passes local gates creates a new immutable `AcceptedTargetResult`.
+41. `last_accepted_result_ref` always identifies the latest locally accepted result for the mutable target execution.
+42. Stage 11 and later fleet stages use accepted-result references to select exact target candidates.
+43. Local target acceptance does not imply fleet acceptance.
+44. Local target acceptance does not grant Repository Brain publication authority.
+
+---
+
+## 27. New Stage 10 surface
+
+Stage 10 adds only:
+
+### Durable contract
+
+```text
+AcceptedTargetResult
+```
+
+### Runtime interface
+
+```text
+accept_target(target_task_id)
+    → AcceptedTargetResult
+```
+
+Existing contracts are reused directly:
+
+```text
+SourceBinding
+CandidateArtifactRef
+CompletionItemState
+TargetTaskSpec
+TargetTaskState
+TargetCompletionState
+TargetFinalizationRequest
+TargetValidationReport
+TargetReviewVerdict
+EvidenceReference
+TaskEvent
+Stage 5 persistence/recovery machinery
+```
+
+Stage 10 does **not** introduce:
+
+```text
+AcceptedTargetState
+TargetAcceptanceReport
+TargetAcceptanceVerdict
+TargetAcceptanceAttempt
+TargetAcceptanceCheckpoint
+TargetAcceptanceManifest
+acceptance-specific budget
+acceptance-specific finding
+accepted-artifact duplicate store
+fleet target-status projection
+new scheduler state
+new persistence protocol
+```
+
+---
+
+## 28. Stage 11+ deferments
+
+Stage 10 intentionally leaves the following fleet-level behavior to later stages.
+
+### Stage 11 — Fleet hard validation
+
+```text
+FleetValidationReport
+fleet structural/integrity gates
+required-target accepted-result checks
+cross-target source compatibility
+cross-target artifact/link integrity
+fleet validation findings
+target reopening decisions from fleet validation
+```
+
+### Stage 12 — Fleet reconciliation
+
+```text
+FleetReviewContext
+fleet reviewer execution
+FleetReviewVerdict
+cross-target duplication
+cross-target contradiction
+terminology consistency
+semantic ownership reconciliation
+fleet review findings
+target reopening decisions from fleet review
+```
+
+### Stage 13 — Fleet acceptance
+
+```text
+AcceptedMemoryFleetResult
+final fleet ACCEPTED transition
+accepted fleet provenance
+handoff to Repository Brain publication
+```
+
+Stage 10 remains specifically the deterministic boundary that freezes one exact locally successful target candidate and makes that immutable result available to the fleet-level stages.
+
+
+# Stage 12 — Fleet Reconciliation
+
+## 1. Responsibility
+
+Stage 12 is the semantic **fleet-reconciliation boundary** over the exact mechanically valid fleet passed by Stage 11.
+
+Its lifecycle boundary is:
+
+```text
+Stage 11
+FleetRunState.phase = REVIEWING
++
+FleetValidationReport = PASS
++
+report.accepted_target_result_refs
+    = exact current accepted fleet
+        ↓
+Stage 12
+compile fresh full-corpus review context
+invoke tool-less fleet reviewer
+persist FleetReviewVerdict
+        │
+        ├── PASS
+        │     ↓
+        │  remain REVIEWING
+        │     ↓
+        │  Stage 13
+        │
+        └── NEEDS_WORK
+              ↓
+           FleetReviewFinding[]
+              ↓
+           REVIEWING → REPAIRING
+              ↓
+           reopen affected targets
+              ↓
+           REPAIRING → RUNNING
+              ↓
+           normal target repair lifecycle
+```
+
+Stage 12 owns:
+
+* validating fleet-review admission;
+* consuming exactly the Stage 11-passed fleet;
+* compiling the transient `FleetReviewContext`;
+* invoking one fresh fleet reviewer over the complete accepted corpus;
+* evaluating cross-target semantic and organizational quality;
+* creating immutable `FleetReviewFinding` records;
+* creating the immutable `FleetReviewVerdict`;
+* maintaining the current `FLEET_REVIEW` finding projection;
+* performing `REVIEWING → REPAIRING` on `NEEDS_WORK`;
+* routing findings to the smallest actionable affected-target set;
+* reopening affected targets through `ACCEPTED → REPAIR`;
+* performing `REPAIRING → RUNNING` after repair routing is durably established;
+* model/token usage accounting for the fleet reviewer;
+* preserving review idempotency and crash recovery.
+
+Stage 12 does **not** own:
+
+* repository exploration or rediscovery;
+* repository-navigation tools;
+* source-grounding verification;
+* artifact mutation;
+* completion-state mutation;
+* evidence mutation;
+* deterministic fleet validation already owned by Stage 11;
+* target-local hard validation;
+* target-local review;
+* repair execution;
+* target acceptance;
+* fleet acceptance;
+* Repository Brain publication.
+
+Its purpose is:
+
+> **Determine whether the exact mechanically valid set of locally accepted target outputs forms one semantically coherent and well-organized memory corpus.**
+
+---
+
+## 2. Existing authorities consumed
+
+Stage 12 consumes the already-locked authorities:
+
+```text
+MemoryFleetSpec
+MemoryTargetCatalog
+TargetDefinition
+
+FleetRunState
+
+TargetTaskSpec
+TargetTaskState
+
+AcceptedTargetResult
+CandidateArtifactRef
+CompletionItemState
+
+FleetValidationReport
+
+FindingRef
+FindingOrigin
+
+ExecutionBudget
+ExecutionUsage
+
+TaskEvent
+Stage 5 persistence / recovery machinery
+```
+
+Stage 12 does not replace or reinterpret these authorities.
+
+In particular:
+
+```text
+MemoryFleetSpec.target_ids
+```
+
+remains the activated target scope and target ordering.
+
+```text
+MemoryTargetCatalog
++
+TargetDefinition
+```
+
+remain the semantic ownership authorities.
+
+```text
+TargetTaskState.last_accepted_result_ref
+```
+
+remains the current locally accepted result selector.
+
+```text
+AcceptedTargetResult
+```
+
+remains the immutable accepted-target provenance authority.
+
+```text
+FleetValidationReport.accepted_target_result_refs
+```
+
+defines the exact fleet that Stage 12 is permitted to review.
+
+No second fleet-candidate authority is introduced.
+
+---
+
+## 3. Stage 12 admission
+
+Stage 12 may begin only when:
+
+```text
+FleetRunState.phase == REVIEWING
+```
+
+and there exists a valid:
+
+```text
+FleetValidationReport
+    verdict = PASS
+```
+
+whose:
+
+```text
+accepted_target_result_refs
+```
+
+exactly equal the fleet's current accepted-result refs in `MemoryFleetSpec.target_ids` order.
+
+Every activated target must still be:
+
+```text
+TargetTaskState.phase == ACCEPTED
+```
+
+and every:
+
+```text
+last_accepted_result_ref
+```
+
+must still resolve to the accepted result referenced by the PASS report.
+
+Stage 12 does not independently choose its review subject.
+
+It must not derive the fleet from:
+
+```text
+current filesystem contents
+latest artifact revisions
+mutable target workspaces
+historical accepted results
+timestamps
+trace ordering
+conversation history
+```
+
+The central admission invariant is:
+
+```text
+fleet hard-validated
+    =
+fleet sent to fleet reconciliation
+```
+
+If any target has been reopened or has acquired a different locally accepted result after the Stage 11 PASS, that PASS no longer authorizes Stage 12.
+
+The changed fleet must return through Stage 11.
+
+---
+
+## 4. Runtime corruption versus semantic reconciliation failure
+
+Stage 12 separates runtime integrity failure from legitimate reviewer findings.
+
+### Runtime / persistence integrity failure
+
+If Stage 12 cannot reconstruct the exact Stage 11-passed corpus because an already-guaranteed durable invariant is broken, review does not begin or fails as runtime/persistence corruption.
+
+Examples:
+
+```text
+FleetValidationReport.PASS does not resolve
+
+accepted_target_result_refs differ from current accepted refs
+
+AcceptedTargetResult is missing
+
+accepted historical artifact version is missing
+
+artifact digest no longer matches
+
+target/fleet/source identity is incompatible
+
+accepted target is no longer ACCEPTED
+without a new Stage 11 validation path
+```
+
+These conditions do not produce:
+
+```text
+FleetReviewVerdict.NEEDS_WORK
+FleetReviewFinding
+worker repair
+```
+
+Workers cannot repair corrupted provenance.
+
+### Semantic reconciliation failure
+
+Once the exact valid accepted corpus has been reconstructed, a material semantic or organizational defect visible in that corpus is a legitimate Stage 12 finding.
+
+The distinction is:
+
+```text
+cannot trust or reconstruct review subject
+    → runtime/persistence failure
+
+trusted exact accepted corpus
+but semantic fleet quality is insufficient
+    → NEEDS_WORK
+```
+
+---
+
+## 5. Reviewer authority
+
+The fleet reviewer applies the locked target catalog and cross-target ownership model.
+
+The central ownership rule remains:
+
+> The target whose primary question is being answered owns the canonical detailed explanation. Other targets may repeat only enough context to explain their own concern, then should reference the canonical owner rather than reproducing its detail.
+
+Stage 12 may judge:
+
+```text
+cross-target duplication
+cross-target contradictions
+terminology consistency
+semantic target ownership
+scope leakage
+cross-target coupling
+global organization
+global navigability
+semantic link quality
+```
+
+### Duplication
+
+Context-setting overlap is allowed.
+
+Stage 12 should reject material duplicated ownership, not every repeated sentence.
+
+Example:
+
+```text
+architecture/
+    briefly states that payment orchestration activates entitlement
+
+business-logic/
+    owns the detailed entitlement rules
+```
+
+is valid.
+
+Two detailed, substantially equivalent explanations of the same canonical responsibility may require reconciliation.
+
+### Contradictions
+
+Stage 12 may identify that two accepted artifacts make incompatible statements.
+
+It does not determine repository truth by rediscovering source.
+
+When the correct resolution cannot be established from:
+
+```text
+target ownership rules
++
+the accepted generated corpus
+```
+
+the relevant target workers are reopened so repository investigation can occur through the normal worker path.
+
+### Terminology
+
+Materially inconsistent vocabulary for the same important repository concept may be rejected when it harms understanding or navigation.
+
+Minor stylistic wording differences are not themselves blocking.
+
+### Ownership and scope leakage
+
+Stage 12 applies the semantic ownership boundaries already defined by the target catalog.
+
+It does not invent new target boundaries.
+
+### Global organization
+
+Stage 12 may reject a corpus whose target-level outputs are individually acceptable but collectively difficult to navigate or understand.
+
+### Semantic link quality
+
+Stage 11 proves whether generated-memory links mechanically resolve.
+
+Stage 12 may judge:
+
+```text
+whether a cross-target link makes semantic sense
+whether duplicated detail should become a link
+whether navigation between canonical owners is materially unclear
+```
+
+Zero cross-target links is not automatically a failure.
+
+---
+
+## 6. What the reviewer may not judge
+
+The reviewer has no authority to independently determine:
+
+```text
+whether repository implementation actually supports a claim
+
+whether an undiscovered repository subsystem exists
+
+whether a worker selected the best source evidence
+
+whether a different source file contradicts the generated knowledge
+
+whether an EvidenceReference semantically proves a claim
+
+whether an unknown could have been resolved with more repository exploration
+
+whether a not-applicable decision is actually true in repository reality
+```
+
+Those require repository rediscovery or source-grounding verification.
+
+Repository semantic discovery remains worker-owned and is measured independently through Bridger's offline evaluation.
+
+Stage 12 judges the generated fleet as a corpus.
+
+---
+
+## 7. Fleet reconciliation rubric
+
+The fleet reconciliation prompt/rubric is an evaluation artifact.
+
+It may define:
+
+```text
+criterion identifiers
+quality interpretation
+examples of acceptable context overlap
+examples of duplicated ownership
+contradiction examples
+terminology expectations
+scope-leakage examples
+global navigation expectations
+semantic-link expectations
+```
+
+It may not introduce:
+
+```text
+new memory targets
+new target completion obligations
+new semantic ownership rules
+new repository-grounding requirements
+new target activation requirements
+new target exclusions
+```
+
+Therefore:
+
+```text
+MemoryTargetCatalog + TargetDefinition
+    = semantic authority
+
+fleet reconciliation rubric
+    = how the existing authority is evaluated
+```
+
+No second fleet semantic contract is introduced.
+
+---
+
+## 8. `FleetReviewContext`
+
+`FleetReviewContext` is a transient, immutable, provider-neutral review input.
+
+It is compiled fresh for one exact Stage 11 PASS and is not durable execution authority.
+
+Conceptually:
+
+```text
+FleetReviewContext
+
+review identity
+├── fleet_review_id
+├── fleet_run_id
+├── source binding
+├── target_catalog_id
+├── target_catalog_version
+└── fleet_validation_report_ref
+
+semantic contract
+├── global cross-target ownership rules
+└── activated TargetDefinition values
+    ├── purpose / canonical question
+    ├── scope
+    ├── exclusions
+    ├── boundary guidance
+    └── output-quality expectations
+
+accepted fleet
+└── ordered accepted targets
+    ├── target identity
+    ├── target contract version
+    ├── AcceptedTargetResult identity
+    ├── exact frozen accepted artifact contents
+    ├── artifact paths / revisions / digests
+    └── accepted completion-item snapshot when relevant
+
+evaluation
+├── Stage 11 PASS report
+├── fleet reviewer instructions
+├── fleet reconciliation rubric
+└── structured review-output contract
+```
+
+Accepted artifact contents resolve from the immutable artifact versions referenced by the `AcceptedTargetResult` objects named by the Stage 11 PASS report.
+
+The mutable target workspace is never substituted for those versions.
+
+---
+
+## 9. Full-corpus review
+
+V0 uses exactly one:
+
+```text
+fresh
+tool-less
+full-corpus
+fleet reviewer execution
+```
+
+The complete accepted fleet is mandatory review context.
+
+Stage 12 does not:
+
+```text
+review only selected targets
+sample documents
+silently omit large artifacts
+rank artifacts for inclusion
+use artifact-reading tools
+use repository retrieval tools
+run parallel sub-reviewers
+perform hierarchical review
+perform multi-pass reconciliation
+summarize away required corpus content
+```
+
+This follows the same V0 philosophy as Stage 8.
+
+The full generated corpus is the object being reconciled, so partial corpus review would not establish the required fleet-level property.
+
+### Context capacity
+
+Before the reviewer invocation, the runtime performs the existing model/context-capacity preflight against the complete request.
+
+If the required full-corpus review request cannot fit:
+
+```text
+review does not run
+```
+
+The runtime must not silently reduce the review subject.
+
+Context-capacity failure is a runtime/configuration failure, not:
+
+```text
+NEEDS_WORK
+```
+
+Tool-backed or hierarchical fleet review may be introduced later only if real accepted-corpus sizes demonstrate a concrete need.
+
+---
+
+## 10. Context exclusions
+
+The fleet reviewer does not receive:
+
+```text
+RepositoryNavigator
+raw source repository
+FileIndex / SymbolIndex exploration
+graph-navigation capability
+source-reading tools
+
+TargetWorkspace
+EvidenceRecorder
+shell
+mutation tools
+
+worker transcripts
+worker reasoning
+target reviewer reasoning
+TaskEvent history
+historical rejected candidates
+historical accepted candidates no longer selected
+provider conversation state
+```
+
+Previous fleet-review reasoning and previous fleet-review findings are excluded from the fresh reviewer context by default.
+
+The repair workers already receive actionable previous findings.
+
+A subsequent Stage 12 review independently evaluates the complete newly accepted corpus instead of merely checking whether earlier criticisms were addressed.
+
+Historical review records remain available for observability and offline harness evaluation.
+
+---
+
+## 11. Reviewer execution profile
+
+Stage 12 reuses the reviewer profile already bound by the fleet configuration.
+
+V0 does not introduce a new:
+
+```text
+FleetReviewProfile
+fleet-review model contract
+fleet-review permission profile
+```
+
+The exact reviewer profile used by the committed review is recorded in the verdict.
+
+The reviewer receives no tools, so no reviewer permission/tool contract is required.
+
+---
+
+## 12. Review verdict vocabulary
+
+Stage 12 reuses the exact existing Stage 8 reviewer verdict vocabulary:
+
+```text
+PASS
+NEEDS_WORK
+```
+
+Implementation should reuse the existing reviewer verdict enum/type rather than introduce a fleet-specific semantic status taxonomy.
+
+No additional status such as:
+
+```text
+ISSUES
+UNCERTAIN
+PARTIAL_PASS
+PASS_WITH_WARNINGS
+```
+
+is introduced.
+
+### `PASS`
+
+Means:
+
+> No material issue within Stage 12's legitimate fleet-reconciliation authority blocks final fleet acceptance.
+
+Invariant:
+
+```text
+PASS
+→ zero FleetReviewFinding records
+```
+
+A Stage 12 PASS does not itself accept the fleet.
+
+### `NEEDS_WORK`
+
+Means:
+
+> At least one material cross-target semantic or organizational defect must be repaired before final fleet acceptance.
+
+Invariant:
+
+```text
+NEEDS_WORK
+→ one or more FleetReviewFinding records
+```
+
+Provider errors, malformed reviewer output, context failure, persistence failure, or budget failure are not semantic `NEEDS_WORK` verdicts.
+
+---
+
+## 13. `FleetReviewFinding`
+
+One persisted `FleetReviewFinding` represents one concrete blocking fleet-reconciliation issue.
+
+Conceptually:
+
+```text
+FleetReviewFinding
+├── finding_id
+├── fleet_review_id
+├── fleet_run_id
+├── criterion_id
+├── affected_target_task_ids[]
+├── affected_artifact_paths[]
+├── message
+└── required_outcome
+```
+
+### `criterion_id`
+
+`criterion_id` identifies the fleet-review concern.
+
+Representative V0 criteria include:
+
+```text
+cross-target-duplication
+cross-target-contradiction
+terminology-consistency
+semantic-ownership
+scope-leakage
+global-organization
+semantic-link-quality
+```
+
+Exact identifiers belong to the fleet-review rubric.
+
+### Affected targets
+
+```text
+affected_target_task_ids
+```
+
+contains the smallest set of target tasks whose mutable candidates must change or be reinvestigated to resolve the finding.
+
+A target mentioned only as comparison context is not automatically reopened.
+
+Example:
+
+```text
+architecture/runtime.md
+duplicates detailed business-rule ownership
+already correctly held by business-logic/
+```
+
+may require:
+
+```text
+affected_target_task_ids = [architecture]
+```
+
+If a contradiction cannot safely be resolved from target ownership and the accepted artifacts alone:
+
+```text
+affected_target_task_ids
+    = all targets that genuinely require repository re-investigation
+      or candidate mutation
+```
+
+Every affected target must belong to the reviewed fleet.
+
+At least one affected target is required for a persisted blocking finding.
+
+### Affected artifacts
+
+`affected_artifact_paths` uses normalized fleet-relative generated-memory paths from the exact accepted fleet.
+
+Examples:
+
+```text
+architecture/runtime.md
+business-logic/subscriptions.md
+```
+
+The list may be empty for a target-wide or corpus-wide issue.
+
+No new global artifact-identity contract is introduced.
+
+### Required outcome
+
+`required_outcome` states what must become true without prescribing the worker's repair implementation.
+
+Example:
+
+```text
+message:
+    architecture/runtime.md and business-logic/subscriptions.md
+    both contain detailed canonical explanations of subscription
+    renewal rules
+
+required_outcome:
+    retain the detailed product rule explanation in business-logic/
+    and reduce architecture/ to the runtime context required for
+    understanding component interaction
+```
+
+V0 introduces no:
+
+```text
+severity
+confidence
+priority
+repair strategy
+repair plan
+root-cause graph
+nested critique hierarchy
+```
+
+Every persisted fleet-review finding is acceptance-blocking.
+
+---
+
+## 14. Finding identity
+
+The reviewer model does not create authoritative finding IDs.
+
+After validating structured reviewer output, the runtime assigns finding identity.
+
+A simple V0 identity may be derived from:
+
+```text
+fleet_review_id
++
+finding ordinal
+```
+
+The exact textual encoding is implementation-private.
+
+Historical findings are immutable.
+
+Provider retries before a committed verdict do not create durable semantic finding history.
+
+---
+
+## 15. `FleetReviewVerdict`
+
+`FleetReviewVerdict` is the immutable persisted semantic result of Stage 12.
+
+Conceptually:
+
+```text
+FleetReviewVerdict
+├── fleet_review_id
+├── fleet_run_id
+├── fleet_validation_report_ref
+├── verdict
+├── finding_refs[]
+└── reviewer_profile_id
+```
+
+The verdict does not duplicate:
+
+```text
+accepted_target_result_refs
+```
+
+because the referenced immutable `FleetValidationReport` already defines the exact ordered fleet review subject.
+
+The provenance chain is:
+
+```text
+FleetReviewVerdict
+        ↓
+fleet_validation_report_ref
+        ↓
+FleetValidationReport.PASS
+        ↓
+accepted_target_result_refs[]
+        ↓
+AcceptedTargetResult[]
+```
+
+This is sufficient to establish the exact fleet that was reconciled.
+
+### PASS
+
+```text
+verdict = PASS
+finding_refs = []
+```
+
+### NEEDS_WORK
+
+```text
+verdict = NEEDS_WORK
+finding_refs != []
+```
+
+Every finding ref must use:
+
+```text
+FindingOrigin.FLEET_REVIEW
+```
+
+and resolve to a `FleetReviewFinding` belonging to the verdict.
+
+---
+
+## 16. Fleet review identity
+
+One successful Stage 11 PASS report has at most one committed `FleetReviewVerdict`.
+
+Conceptually:
+
+```text
+one FleetValidationReport.PASS
+    → one logical fleet_review_id
+    → at most one committed FleetReviewVerdict
+```
+
+Provider retries do not create new semantic review rounds.
+
+No separate:
+
+```text
+FleetReviewAttempt
+FleetReviewSession
+FleetReviewerConversation
+FleetReviewState
+```
+
+contract is introduced.
+
+A new fleet review round requires a new valid Stage 11 handoff after repair has produced a changed accepted fleet.
+
+---
+
+## 17. Successful Stage 12 path
+
+A committed PASS establishes:
+
+```text
+FleetRunState.phase = REVIEWING
+
+FleetReviewVerdict
+    verdict = PASS
+
+FleetReviewVerdict.fleet_validation_report_ref
+    → exact Stage 11 PASS
+
+current FLEET_REVIEW finding projection = []
+```
+
+Stage 12 leaves:
+
+```text
+FleetRunState.phase = REVIEWING
+```
+
+Stage 13 exclusively owns:
+
+```text
+REVIEWING → ACCEPTED
+```
+
+The reviewer cannot directly accept the fleet.
+
+---
+
+## 18. Failed Stage 12 path
+
+A committed `NEEDS_WORK` produces:
+
+```text
+FleetReviewVerdict.NEEDS_WORK
++
+FleetReviewFinding[]
+```
+
+and the fleet repair path:
+
+```text
+REVIEWING
+    ↓
+persist verdict/findings
+    ↓
+REPAIRING
+    ↓
+route findings
+    ↓
+affected target(s)
+ACCEPTED → REPAIR
+    ↓
+REPAIRING → RUNNING
+```
+
+Only targets identified as requiring repair are reopened.
+
+Unaffected targets remain:
+
+```text
+ACCEPTED
+```
+
+and keep their current:
+
+```text
+last_accepted_result_ref
+```
+
+Stage 12 does not invalidate or rewrite their historical accepted provenance.
+
+---
+
+## 19. `REPAIRING` semantics
+
+Stage 12 reuses the exact fleet-level `REPAIRING` semantics established by Stage 11.
+
+`REPAIRING` means:
+
+> A fleet-level evaluation result has been durably committed, but the affected target repair states and current finding projections have not yet been fully and durably installed.
+
+While:
+
+```text
+FleetRunState.phase == REPAIRING
+```
+
+ordinary Stage 2 scheduling is prohibited.
+
+After every affected target has durably reached:
+
+```text
+TargetTaskState.phase = REPAIR
+```
+
+and its current `FLEET_REVIEW` finding refs are installed, the fleet runtime completes:
+
+```text
+REPAIRING → RUNNING
+```
+
+Normal Stage 2 scheduling may then resume.
+
+No second reopening state or fleet-repair state object is introduced.
+
+---
+
+## 20. Fleet-review finding projection
+
+Fleet review verdicts and findings are immutable history.
+
+Runtime state contains only the current unresolved projection.
+
+Current fleet-level reconciliation findings are projected through:
+
+```text
+FleetRunState.open_finding_refs
+```
+
+and affected target findings through:
+
+```text
+TargetTaskState.open_finding_refs
+```
+
+using:
+
+```text
+FindingOrigin.FLEET_REVIEW
+```
+
+Every completed Stage 12 review replaces only the current:
+
+```text
+FLEET_REVIEW
+```
+
+projection.
+
+It must not clear findings owned by:
+
+```text
+HARD_VALIDATION
+TARGET_REVIEW
+FLEET_VALIDATION
+```
+
+unless their owning stages separately replace or clear them.
+
+### PASS
+
+```text
+previous current FLEET_REVIEW refs
+    → removed
+
+new FLEET_REVIEW refs
+    → none
+```
+
+### NEEDS_WORK
+
+```text
+previous current FLEET_REVIEW refs
+    → removed
+
+new verdict finding refs
+    → installed at fleet scope
+    → installed on affected target states
+```
+
+Historical verdicts and findings remain immutable.
+
+---
+
+## 21. Findings across local re-acceptance
+
+A target reopened by Stage 12 may later pass its local gates and earn a new `AcceptedTargetResult`.
+
+That proves only:
+
+```text
+the repaired target is locally acceptable
+```
+
+It does not prove:
+
+```text
+the cross-target reconciliation defect is globally resolved
+```
+
+Therefore renewed local acceptance does **not** clear the current:
+
+```text
+FLEET_REVIEW
+```
+
+finding projection.
+
+The finding remains current until the next completed Stage 12 review replaces that projection.
+
+This preserves the separation:
+
+```text
+Stage 10
+    proves local target quality
+
+Stage 11
+    proves deterministic fleet composition
+
+Stage 12
+    proves semantic fleet reconciliation
+```
+
+---
+
+## 22. Repair re-entry
+
+Affected targets use the ordinary target lifecycle:
+
+```text
+REPAIR
+    ↓ Stage 2
+SCHEDULED
+    ↓ Stage 3
+HYDRATING
+    ↓ Stage 4
+WORKING
+    ↓ Stage 6
+FINALIZING
+    ↓ Stage 7
+VALIDATING
+    ↓ Stage 8
+REVIEWING
+    ↓ Stage 10
+ACCEPTED
+```
+
+Stage 12 does not permit:
+
+```text
+fleet finding
+    → direct artifact mutation
+    → remain ACCEPTED
+```
+
+or:
+
+```text
+fleet finding
+    → Stage 8 directly
+```
+
+A repaired target must pass its normal local validation and review gates again.
+
+If its candidate changes and passes local acceptance, Stage 10 creates a new immutable `AcceptedTargetResult`.
+
+Historical accepted results remain immutable and resolvable.
+
+---
+
+## 23. Revalidation after fleet repair
+
+When every activated target is again:
+
+```text
+ACCEPTED
+```
+
+the fleet returns first to:
+
+```text
+Stage 11 — Fleet Hard Validation
+```
+
+Stage 12 may not directly re-review the repaired fleet.
+
+The progression is always:
+
+```text
+repaired targets locally accepted
+        ↓
+Stage 11 — full fleet hard validation
+        ↓
+Stage 12 — fresh full-corpus reconciliation
+```
+
+V0 implements neither:
+
+```text
+incremental fleet validation
+incremental fleet review
+affected-target-only fleet review
+finding-specific reconciliation
+```
+
+The small fixed V0 fleet makes full re-evaluation simpler and safer.
+
+---
+
+## 24. Persistence boundary
+
+The fleet reviewer model invocation occurs outside the durable mutation transaction.
+
+Conceptually:
+
+```text
+1. validate Stage 12 admission
+
+2. resolve exact FleetValidationReport.PASS
+   and its accepted fleet
+
+3. return existing committed FleetReviewVerdict
+   when one already exists
+
+4. compile FleetReviewContext
+
+5. perform context / fleet-budget preflight
+
+6. invoke reviewer
+
+7. parse and validate structured output
+
+8. assign runtime-owned finding identities
+
+9. atomically persist the semantic review outcome
+
+10. route lifecycle according to PASS / NEEDS_WORK
+```
+
+### PASS commit
+
+One logical durable operation establishes:
+
+```text
+FleetReviewVerdict = PASS
++
+clear current FLEET_REVIEW finding refs
++
+fleet review usage / TaskEvent state
+```
+
+The fleet remains:
+
+```text
+REVIEWING
+```
+
+### NEEDS_WORK commit
+
+A durable operation establishes:
+
+```text
+FleetReviewFinding records
++
+FleetReviewVerdict = NEEDS_WORK
++
+replace current FLEET_REVIEW finding refs
++
+REVIEWING → REPAIRING
++
+fleet review usage / TaskEvent state
+```
+
+Repair routing then durably performs:
+
+```text
+affected targets:
+    ACCEPTED → REPAIR
+
+install affected target FLEET_REVIEW refs
+
+REPAIRING → RUNNING
+```
+
+Stage 12 reuses Stage 5 persistence and recovery machinery.
+
+No Stage-12-specific transaction or checkpoint protocol is introduced.
+
+---
+
+## 25. Recovery and idempotency
+
+Stage 12 uses:
+
+```text
+at-least-once reviewer execution
++
+at-most-one committed verdict
+```
+
+for one logical fleet review.
+
+### REVIEWING with no committed verdict
+
+Recovery reconstructs the exact `FleetReviewContext` from durable state and may invoke the reviewer again.
+
+No previous provider conversation is required.
+
+### Reviewer response existed only in memory
+
+If the process crashes after model response but before verdict persistence, the response has no durable authority.
+
+Recovery may invoke the reviewer again.
+
+A different probabilistic result is acceptable because no earlier verdict was committed.
+
+### Verdict already committed
+
+Recovery reuses the committed verdict.
+
+The reviewer must not be reinvoked merely because later lifecycle routing was interrupted.
+
+### NEEDS_WORK committed but routing incomplete
+
+The fleet remains or is restored to:
+
+```text
+REPAIRING
+```
+
+until affected target phases and finding projections are durably established.
+
+### Corrupt state
+
+Impossible states such as:
+
+```text
+FleetReviewVerdict bound to a non-PASS FleetValidationReport
+
+PASS FleetReviewVerdict with findings
+
+NEEDS_WORK without findings
+
+REVIEWING with current accepted refs different
+from the verdict's Stage 11 report
+
+REPAIRING with missing committed fleet-review verdict
+
+FLEET_REVIEW refs that do not resolve
+```
+
+are runtime/persistence integrity failures.
+
+They are not converted into new worker findings.
+
+---
+
+## 26. Usage and budgets
+
+Stage 12 uses the existing fleet `ExecutionUsage` and `ExecutionBudget`.
+
+Every actual fleet-review provider invocation attempt increments:
+
+```text
+FleetRunState.usage.model_calls += 1
+```
+
+Provider-reported usage increments:
+
+```text
+FleetRunState.usage.input_tokens
+FleetRunState.usage.output_tokens
+```
+
+Reviewer retries consume additional model calls and tokens.
+
+Stage 12 does not increment:
+
+```text
+cycles
+repair_cycles
+tool_calls
+```
+
+because:
+
+* no worker cycle begins;
+* repair-cycle accounting occurs only when a reopened worker execution begins;
+* the fleet reviewer has no tools.
+
+### No target usage charge
+
+Fleet review is not the execution of any one target.
+
+Its model and token usage is therefore charged to:
+
+```text
+FleetRunState.usage
+```
+
+only.
+
+Stage 12 does not arbitrarily attribute fleet-review usage to one target or duplicate it across all targets.
+
+### Budget
+
+Before each reviewer invocation, the existing fleet hard model/token budget is checked.
+
+Stage 12 introduces no:
+
+```text
+fleet-review budget
+reconciliation budget
+review token pool
+```
+
+If the existing fleet hard budget cannot permit the required full-corpus review, normal fleet-level exhaustion/runtime semantics apply.
+
+No semantic `FleetReviewVerdict` is produced.
+
+---
+
+## 27. Concurrency
+
+Stage 12 introduces no scheduling or concurrency contract.
+
+It begins only when every activated target is:
+
+```text
+ACCEPTED
+```
+
+Accepted targets hold no target execution slot.
+
+While the fleet is:
+
+```text
+REVIEWING
+REPAIRING
+```
+
+ordinary target scheduling is already prohibited by the existing fleet-phase rules.
+
+No:
+
+```text
+fleet-review queue
+review semaphore
+review slot
+review lease
+distributed lock
+```
+
+is introduced.
+
+Generic provider-level concurrency/rate limiting may be reused where already available without becoming fleet lifecycle authority.
+
+---
+
+## 28. Stage 13 handoff
+
+A successful Stage 12 boundary is:
+
+```text
+FleetRunState.phase = REVIEWING
+
+all activated targets = ACCEPTED
+
+FleetValidationReport V
+    verdict = PASS
+    accepted_target_result_refs
+        = exact current accepted fleet
+
+FleetReviewVerdict R
+    verdict = PASS
+    fleet_validation_report_ref = V
+
+current FLEET_VALIDATION findings = []
+current FLEET_REVIEW findings = []
+```
+
+This is the durable proof that:
+
+> The exact current fleet passed both deterministic fleet composition and independent fleet semantic reconciliation.
+
+Stage 13 must consume these explicit durable bindings.
+
+It must not infer fleet success from:
+
+```text
+trace ordering
+reviewer conversation
+timestamps
+ambient artifacts
+current filesystem layout
+```
+
+---
+
+## 29. Locked invariants
+
+1. Stage 12 begins only from `FleetRunState.phase = REVIEWING`.
+2. Stage 12 requires a valid Stage 11 `FleetValidationReport.PASS`.
+3. The Stage 11 report's accepted-result refs must equal the fleet's exact current accepted-result refs.
+4. Any changed accepted-result ref requires Stage 11 again before Stage 12.
+5. Stage 12 never independently chooses or reconstructs a different fleet candidate.
+6. Stage 12 reviews immutable accepted artifact versions, not mutable workspaces.
+7. Runtime/provenance corruption never becomes semantic reviewer feedback.
+8. The fleet reviewer always runs from a fresh compiled context.
+9. V0 uses one full-corpus reviewer invocation.
+10. The fleet reviewer is read-only.
+11. The fleet reviewer is tool-less.
+12. The fleet reviewer receives no `RepositoryNavigator`.
+13. The complete accepted corpus is mandatory reviewer context.
+14. Stage 12 never silently omit targets or artifacts to fit context.
+15. Context-capacity failure is a runtime/configuration failure, not `NEEDS_WORK`.
+16. Repository rediscovery and source-grounding verification are outside Stage 12.
+17. `MemoryTargetCatalog` and `TargetDefinition` remain semantic ownership authorities.
+18. The fleet-review rubric cannot invent new targets, obligations, or ownership rules.
+19. Stage 12 reuses the existing reviewer verdict vocabulary: `PASS` / `NEEDS_WORK`.
+20. PASS contains zero `FleetReviewFinding` records.
+21. NEEDS_WORK contains at least one actionable `FleetReviewFinding`.
+22. All persisted fleet-review findings are blocking.
+23. Reviewer-model output does not control authoritative finding IDs.
+24. Findings identify the smallest actionable set of affected targets.
+25. Merely mentioning a target does not automatically reopen it.
+26. Affected targets transition `ACCEPTED → REPAIR`.
+27. Unaffected targets remain `ACCEPTED`.
+28. `REPAIRING` is the existing durable fleet-level reopening boundary.
+29. Stage 12 completes `REPAIRING → RUNNING` only after repair routing is durably established.
+30. Reopened targets use the ordinary Stage 2–10 lifecycle.
+31. Fleet repair never bypasses Stage 7 or Stage 8.
+32. Historical `AcceptedTargetResult` objects remain immutable.
+33. Renewed local acceptance does not itself clear a fleet-review finding.
+34. A later Stage 12 run replaces the current `FLEET_REVIEW` projection.
+35. Stage 12 clears or replaces only `FLEET_REVIEW` findings.
+36. Historical fleet-review verdicts and findings are immutable.
+37. After fleet repair, Stage 11 runs again before Stage 12.
+38. V0 does not implement incremental reconciliation.
+39. Previous fleet-review reasoning/findings are excluded from fresh reviewer context by default.
+40. One Stage 11 PASS report has at most one committed `FleetReviewVerdict`.
+41. Provider retries do not create separate semantic review rounds.
+42. Provider conversation state is never recovery authority.
+43. Stage 12 reuses Stage 5 persistence/recovery semantics.
+44. A crash before verdict persistence may cause reviewer re-execution.
+45. A crash after verdict persistence must reuse the committed verdict.
+46. Fleet reviewer model/token usage is charged only at fleet scope.
+47. Fleet review does not increment worker-cycle, repair-cycle, or tool-call counters.
+48. No dedicated Stage 12 budget is introduced.
+49. Stage 12 PASS leaves the fleet in `REVIEWING`.
+50. Stage 13 exclusively owns final `REVIEWING → ACCEPTED`.
+
+---
+
+## 30. New Stage 12 surface
+
+Stage 12 adds only:
+
+### Durable contracts
+
+```text
+FleetReviewVerdict
+FleetReviewFinding
+```
+
+### Transient contract
+
+```text
+FleetReviewContext
+```
+
+### Runtime interface
+
+Conceptually:
+
+```text
+reconcile_fleet(fleet_run_id)
+    → FleetReviewVerdict
+```
+
+### Lifecycle behavior
+
+```text
+Stage 11 PASS:
+    fleet already REVIEWING
+
+PASS:
+    remain REVIEWING
+
+NEEDS_WORK:
+    REVIEWING → REPAIRING
+    affected targets:
+        ACCEPTED → REPAIR
+    REPAIRING → RUNNING
+```
+
+Existing contracts are reused directly:
+
+```text
+MemoryFleetSpec
+MemoryTargetCatalog
+TargetDefinition
+
+FleetRunState
+
+TargetTaskSpec
+TargetTaskState
+
+AcceptedTargetResult
+CandidateArtifactRef
+CompletionItemState
+
+FleetValidationReport
+
+ExecutionBudget
+ExecutionUsage
+
+FindingRef
+FindingOrigin
+
+TaskEvent
+Stage 5 persistence/recovery machinery
+```
+
+Stage 12 does **not** introduce:
+
+```text
+FleetCandidate
+FleetReviewState
+FleetReviewAttempt
+FleetReviewSession
+FleetReviewCheckpoint
+FleetReviewBudget
+FleetReviewUsage
+fleet repair agent
+fleet repair plan
+review tool surface
+artifact retrieval loop
+repository-navigation access
+multi-pass reviewer
+sub-reviewer hierarchy
+incremental reconciler
+new persistence protocol
+```
+
+---
+
+# Stage 13 — Fleet Acceptance
+
+## 1. Responsibility
+
+Stage 13 is the deterministic **final memory-fleet acceptance commit boundary**.
+
+Its lifecycle boundary is:
+
+```text
+Stage 12
+FleetRunState.phase = REVIEWING
++
+all activated targets = ACCEPTED
++
+FleetValidationReport = PASS
++
+FleetReviewVerdict = PASS
+        ↓
+Stage 13
+verify final fleet provenance
+freeze exact accepted fleet
+persist AcceptedMemoryFleetResult
+REVIEWING → ACCEPTED
+        ↓
+Repository Brain publication layer
+```
+
+Stage 13 owns:
+
+* validating final fleet-acceptance preconditions;
+* proving that Stage 11 and Stage 12 apply to the exact same current accepted fleet;
+* creating the immutable `AcceptedMemoryFleetResult`;
+* persisting that result through the existing Stage 5 persistence boundary;
+* setting `FleetRunState.accepted_result_ref`;
+* performing `REVIEWING → ACCEPTED`;
+* preserving final acceptance idempotency and crash recovery;
+* producing the final memory-harness handoff consumed by Repository Brain publication.
+
+Stage 13 does **not** own:
+
+* repository exploration;
+* artifact generation or mutation;
+* evidence mutation;
+* completion-state mutation;
+* target validation;
+* target review;
+* target acceptance;
+* fleet hard validation;
+* fleet reconciliation;
+* finding generation;
+* finding resolution;
+* repair;
+* Repository Brain assembly;
+* Repository Brain validation;
+* Repository Brain snapshot identity;
+* Repository Brain atomic publication;
+* retrieval indexing or consumer exposure.
+
+Stage 13 invokes no LLM.
+
+It performs no new semantic judgment.
+
+Its purpose is:
+
+> **Freeze the exact memory fleet that has already passed both fleet-level gates and make that immutable provenance available to the publication layer.**
+
+---
+
+## 2. Existing authorities consumed
+
+Stage 13 consumes:
+
+```text
+MemoryFleetSpec
+FleetRunState
+
+TargetTaskSpec
+TargetTaskState
+
+AcceptedTargetResult
+
+FleetValidationReport
+FleetReviewVerdict
+
+FindingRef
+FindingOrigin
+
+SourceBinding
+TaskEvent
+
+Stage 5 persistence / recovery machinery
+```
+
+Stage 13 does not replace these authorities.
+
+`FleetRunState.phase` remains the fleet lifecycle authority.
+
+`TargetTaskState.last_accepted_result_ref` remains the current locally accepted-target selector.
+
+`FleetValidationReport` remains the Stage 11 evaluation authority.
+
+`FleetReviewVerdict` remains the Stage 12 evaluation authority.
+
+---
+
+## 3. Fleet acceptance meaning
+
+Fleet acceptance means:
+
+> The exact ordered set of locally accepted target results identified by the final fleet result passed Stage 11 deterministic fleet validation and Stage 12 semantic fleet reconciliation under one immutable fleet/source/catalog binding.
+
+Fleet acceptance does not mean:
+
+```text
+Repository Brain snapshot has been assembled
+
+all deterministic/enrichment publication components
+have been revalidated for publication
+
+Repository Brain manifest exists
+
+publication checksums have been calculated
+
+publication is atomic
+
+snapshot is visible to consumers
+
+retrieval indexes exist
+```
+
+Those remain publication-layer responsibilities.
+
+The distinction is:
+
+```text
+MEMORY FLEET ACCEPTANCE
+    final accepted evidence-backed knowledge result
+
+REPOSITORY BRAIN PUBLICATION
+    assemble and atomically publish the complete
+    cross-layer Repository Brain snapshot
+```
+
+---
+
+## 4. Stage 13 admission
+
+`accept_fleet(fleet_run_id)` may succeed only when:
+
+```text
+FleetRunState.phase == REVIEWING
+```
+
+and every activated target is:
+
+```text
+TargetTaskState.phase == ACCEPTED
+```
+
+with a resolvable:
+
+```text
+last_accepted_result_ref
+```
+
+The runtime resolves the current ordered accepted fleet using:
+
+```text
+MemoryFleetSpec.target_ids
+        ↓
+TargetTaskState.last_accepted_result_ref
+        ↓
+AcceptedTargetResult[]
+```
+
+Stage 13 then requires a valid:
+
+```text
+FleetValidationReport V
+    verdict = PASS
+```
+
+such that:
+
+```text
+V.accepted_target_result_refs
+    == exact current ordered accepted fleet
+```
+
+and a valid:
+
+```text
+FleetReviewVerdict R
+    verdict = PASS
+```
+
+such that:
+
+```text
+R.fleet_validation_report_ref == V
+```
+
+The resulting provenance chain must therefore be:
+
+```text
+current AcceptedTargetResult[]
+        =
+FleetValidationReport.PASS subject
+        =
+FleetReviewVerdict.PASS subject
+```
+
+---
+
+## 5. Exact-fleet acceptance invariant
+
+The central Stage 13 rule is:
+
+> **The fleet accepted by Stage 13 must be exactly the fleet that passed both Stage 11 and Stage 12.**
+
+Conceptually:
+
+```text
+fleet hard-validated
+    =
+fleet reconciled
+    =
+fleet accepted
+```
+
+If the current ordered accepted-result set differs from the Stage 11 PASS report, Stage 13 must not accept it.
+
+Examples:
+
+```text
+[R1, A1, T1] validated and reviewed
+```
+
+does not authorize acceptance of:
+
+```text
+[R1, A2, T1]
+```
+
+even when:
+
+```text
+A1 and A2 belong to the same architecture target task
+```
+
+Stage 13 does not infer equivalence from:
+
+```text
+same target IDs
+same artifact paths
+similar content
+timestamps
+similar digests
+ambient workspace contents
+```
+
+Any changed accepted result requires:
+
+```text
+Stage 11
+    ↓
+Stage 12
+```
+
+again before Stage 13.
+
+---
+
+## 6. Acceptance integrity versus repair
+
+Stage 13 generates no findings.
+
+If final acceptance provenance is inconsistent or corrupt, the operation fails explicitly.
+
+Examples:
+
+```text
+missing FleetValidationReport
+
+missing FleetReviewVerdict
+
+FleetReviewVerdict refers to another validation report
+
+current accepted-result refs differ from Stage 11 report
+
+accepted result no longer resolves
+
+accepted artifact historical version is missing
+
+source binding mismatch
+
+target catalog identity mismatch
+
+PASS verdict unexpectedly contains findings
+
+unresolved current fleet-level blocking finding exists
+```
+
+These are acceptance/runtime integrity failures.
+
+Stage 13 must not:
+
+```text
+create FleetReviewFinding
+reopen workers
+guess intended provenance
+silently rerun Stage 11
+silently rerun Stage 12
+accept approximately equivalent content
+```
+
+If semantic repair is required, it must originate from the appropriate evaluation stage rather than final acceptance.
+
+---
+
+## 7. Findings precondition
+
+Final acceptance requires no current fleet-level blocker.
+
+At minimum:
+
+```text
+current FLEET_VALIDATION projection = []
+current FLEET_REVIEW projection = []
+```
+
+The accepted-target local lifecycle must also remain valid.
+
+Stage 13 verifies this invariant but does not clear or resolve findings.
+
+Historical findings from previous rounds remain immutable and may continue to exist as history.
+
+They do not block acceptance when they are no longer part of the current unresolved projection.
+
+---
+
+## 8. `AcceptedMemoryFleetResult`
+
+Stage 13 introduces one new durable contract:
+
+```text
+AcceptedMemoryFleetResult
+```
+
+No separate:
+
+```text
+FleetAcceptanceReport
+FleetAcceptanceVerdict
+FleetAcceptanceState
+FleetAcceptanceAttempt
+FleetAcceptanceCheckpoint
+FleetAcceptanceManifest
+```
+
+is introduced.
+
+### Semantic definition
+
+`AcceptedMemoryFleetResult` is the immutable identity of the **exact final memory fleet that successfully passed both fleet-level gates**.
+
+It answers:
+
+> Which exact locally accepted target results make up the accepted memory fleet, against which source and target catalog, and through which fleet validation and reconciliation results was that fleet accepted?
+
+It is the final durable product of the memory-agent harness.
+
+---
+
+## 9. `AcceptedMemoryFleetResult` contract
+
+Conceptually:
+
+```python
+class AcceptedMemoryFleetResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: int = 1
+
+    accepted_memory_fleet_result_id: str
+    fleet_run_id: str
+
+    source: SourceBinding
+
+    target_catalog_id: str
+    target_catalog_version: str
+
+    accepted_target_result_refs: list[str]
+
+    fleet_validation_report_ref: str
+    fleet_review_verdict_ref: str
+```
+
+The exact Pydantic location and ID encoding are implementation details.
+
+---
+
+## 10. Source provenance
+
+The final result copies:
+
+```text
+SourceBinding
+```
+
+from the immutable `MemoryFleetSpec`.
+
+Invariant:
+
+```text
+AcceptedMemoryFleetResult.source
+    == MemoryFleetSpec.source
+    == every AcceptedTargetResult.source
+```
+
+The copy is intentional.
+
+The final publication handoff should be independently sufficient to establish:
+
+```text
+repository identity
+repository revision
+graph snapshot
+optional enrichment overlay
+```
+
+without reconstructing critical provenance from mutable runtime state.
+
+Stage 13 never infers source identity from the current filesystem or repository checkout.
+
+---
+
+## 11. Target catalog provenance
+
+The result also copies:
+
+```text
+target_catalog_id
+target_catalog_version
+```
+
+from `MemoryFleetSpec`.
+
+These values define the semantic target taxonomy and ownership rules under which fleet reconciliation succeeded.
+
+Invariant:
+
+```text
+AcceptedMemoryFleetResult.target_catalog_id
+    == MemoryFleetSpec.target_catalog_id
+
+AcceptedMemoryFleetResult.target_catalog_version
+    == MemoryFleetSpec.target_catalog_version
+```
+
+Stage 13 does not duplicate the complete target definitions inside the final result.
+
+The catalog/version remains the static semantic authority.
+
+---
+
+## 12. Accepted target result set
+
+`accepted_target_result_refs` freezes the exact final accepted fleet.
+
+Ordering follows:
+
+```text
+MemoryFleetSpec.target_ids
+```
+
+For each activated target there is exactly one accepted-result reference.
+
+Each referenced result must:
+
+```text
+exist
+
+belong to the same fleet
+
+belong to the expected target task / target identity
+
+match the fleet SourceBinding
+
+match the target contract version bound by its TargetTaskSpec
+
+remain fully resolvable
+```
+
+The final result references `AcceptedTargetResult` rather than duplicating its contents.
+
+Therefore Stage 13 does not copy:
+
+```text
+CandidateArtifactRef[]
+CompletionItemState[]
+EvidenceReference IDs
+local TargetValidationReport
+local TargetReviewVerdict
+artifact contents
+```
+
+into the fleet result.
+
+Those remain available through the immutable accepted-target provenance graph.
+
+---
+
+## 13. Fleet evaluation provenance
+
+The final result references:
+
+```text
+fleet_validation_report_ref
+fleet_review_verdict_ref
+```
+
+rather than embedding their contents.
+
+The referenced chain must establish:
+
+```text
+FleetValidationReport
+    verdict = PASS
+    subject = accepted_target_result_refs
+
+FleetReviewVerdict
+    verdict = PASS
+    fleet_validation_report_ref
+        = that exact FleetValidationReport
+```
+
+Previous fleet validation reports, fleet review verdicts, failed rounds and repair findings remain immutable historical provenance.
+
+Stage 13 does not rewrite or supersede them in place.
+
+---
+
+## 14. Why the final result remains compositional
+
+`AcceptedMemoryFleetResult` intentionally does not duplicate:
+
+```text
+artifact inventories
+artifact digest maps
+completion-state snapshots
+evidence metadata
+finding histories
+review summaries
+trace history
+working state
+```
+
+Those objects already have authoritative immutable locations.
+
+The final result exists to freeze **composition and provenance**, not to create another memory-product storage authority.
+
+The durable chain is:
+
+```text
+AcceptedMemoryFleetResult
+        ↓
+AcceptedTargetResult[]
+        ↓
+CandidateArtifactRef[]
+        ↓
+immutable accepted artifact versions
+```
+
+and:
+
+```text
+AcceptedMemoryFleetResult
+        ↓
+FleetValidationReport.PASS
+        ↓
+FleetReviewVerdict.PASS
+```
+
+This gives downstream publication everything needed to identify the exact accepted memory product without duplicating mutable state.
+
+---
+
+## 15. Runtime interface
+
+The primary Stage 13 interface is conceptually:
+
+```text
+accept_fleet(fleet_run_id)
+    → AcceptedMemoryFleetResult
+```
+
+The runtime resolves authoritative inputs internally.
+
+The caller does not provide arbitrary:
+
+```text
+accepted target refs
+artifact refs
+source binding
+catalog version
+FleetValidationReport
+FleetReviewVerdict
+finding claims
+```
+
+as acceptance assertions.
+
+The normal operation is:
+
+```text
+load MemoryFleetSpec
+        ↓
+load FleetRunState
+        ↓
+verify REVIEWING
+        ↓
+resolve exact current AcceptedTargetResult[]
+        ↓
+resolve applicable Stage 11 PASS
+        ↓
+resolve applicable Stage 12 PASS
+        ↓
+verify exact-fleet provenance
+        ↓
+verify no current blocking fleet findings
+        ↓
+construct AcceptedMemoryFleetResult
+        ↓
+persist immutable result
+        ↓
+update FleetRunState
+        ↓
+append acceptance / lifecycle trace
+        ↓
+return AcceptedMemoryFleetResult
+```
+
+No model is invoked.
+
+---
+
+## 16. Lifecycle mutation
+
+On successful first acceptance:
+
+```text
+FleetRunState.phase
+    REVIEWING → ACCEPTED
+```
+
+Stage 13 exclusively owns this transition.
+
+The runtime sets:
+
+```text
+FleetRunState.accepted_result_ref
+    = accepted_memory_fleet_result_id
+```
+
+Stage 13 does not create a copied per-target status map.
+
+Individual target lifecycle remains authoritative through each:
+
+```text
+TargetTaskState.phase
+```
+
+All activated targets remain:
+
+```text
+ACCEPTED
+```
+
+---
+
+## 17. Persistence commit
+
+Stage 13 reuses Stage 5 persistence and recovery semantics.
+
+The logical acceptance commit is:
+
+```text
+1. persist complete immutable AcceptedMemoryFleetResult
+
+2. persist FleetRunState update:
+       phase = ACCEPTED
+       accepted_result_ref = result ID
+
+3. append corresponding acceptance / lifecycle trace
+```
+
+The implementation must preserve:
+
+```text
+FleetRunState.phase == ACCEPTED
+    ⇒
+accepted_result_ref resolves to
+a complete valid AcceptedMemoryFleetResult
+```
+
+The runtime must never expose durable state equivalent to:
+
+```text
+phase = ACCEPTED
+accepted_result_ref = null
+```
+
+No second acceptance persistence protocol is introduced.
+
+---
+
+## 18. Idempotency
+
+Fleet acceptance is idempotent for the same exact successful provenance chain.
+
+Required semantic behavior:
+
+```text
+same fleet_run_id
++
+same exact accepted_target_result_refs
++
+same FleetValidationReport.PASS
++
+same FleetReviewVerdict.PASS
+        ↓
+same AcceptedMemoryFleetResult
+```
+
+The exact ID/hash encoding is implementation-private.
+
+Repeated acceptance must not create semantically duplicate final results because:
+
+```text
+caller retried
+process retried
+recovery reran acceptance
+same operation was invoked twice
+```
+
+If:
+
+```text
+FleetRunState.phase = ACCEPTED
+accepted_result_ref = X
+```
+
+and `X` is valid for the same acceptance provenance, another:
+
+```text
+accept_fleet()
+```
+
+returns `X` or its equivalent loaded result.
+
+---
+
+## 19. Crash recovery
+
+### Crash before result persistence
+
+Durable state remains:
+
+```text
+FleetRunState.phase = REVIEWING
+```
+
+with Stage 11 PASS and Stage 12 PASS already persisted.
+
+Recovery may rerun Stage 13 acceptance.
+
+Neither fleet validation nor fleet review needs to rerun solely because final acceptance itself was interrupted.
+
+### Crash after result persistence but before fleet-state update
+
+Recovery detects the already persisted valid result for the exact successful chain and completes:
+
+```text
+REVIEWING → ACCEPTED
+```
+
+without producing another semantic fleet result.
+
+### Crash after fleet-state update
+
+Recovery sees:
+
+```text
+FleetRunState.phase = ACCEPTED
+accepted_result_ref = X
+```
+
+and validates that `X` resolves correctly.
+
+No evaluation or target execution is repeated.
+
+### Invalid partial state
+
+Impossible combinations such as:
+
+```text
+ACCEPTED with no accepted_result_ref
+
+accepted result belongs to another fleet
+
+accepted result references a different source
+
+accepted result target set differs from its Stage 11 report
+
+accepted result references missing AcceptedTargetResult objects
+
+fleet-review verdict does not bind to the recorded validation report
+```
+
+are runtime/persistence corruption.
+
+They are not converted into target repair.
+
+---
+
+## 20. Usage and budgets
+
+Stage 13 performs deterministic runtime work only.
+
+It consumes:
+
+```text
+0 worker cycles
+0 repair cycles
+0 model calls
+0 tool calls
+0 input tokens
+0 output tokens
+```
+
+Stage 13 does not mutate:
+
+```text
+ExecutionUsage
+```
+
+and introduces no acceptance-specific budget.
+
+A fleet whose model execution budget is fully consumed may still complete Stage 13 if it already has valid Stage 11 and Stage 12 PASS provenance.
+
+---
+
+## 21. Concurrency and scheduling
+
+Stage 13 introduces no scheduler or concurrency mechanism.
+
+It begins while:
+
+```text
+FleetRunState.phase = REVIEWING
+```
+
+where ordinary target scheduling is already prohibited.
+
+All activated targets are already:
+
+```text
+ACCEPTED
+```
+
+and hold no execution slot.
+
+No:
+
+```text
+acceptance queue
+acceptance worker slot
+acceptance lease
+lock service
+```
+
+is needed.
+
+Successful:
+
+```text
+REVIEWING → ACCEPTED
+```
+
+makes the memory fleet terminal for this run.
+
+---
+
+## 22. Historical target and fleet provenance
+
+Final fleet acceptance does not delete, rewrite or compact historical provenance.
+
+The run retains:
+
+```text
+historical TargetFinalizationRequest objects
+TaskCheckpoint history
+TargetValidationReport history
+TargetReviewVerdict history
+AcceptedTargetResult history
+
+FleetValidationReport history
+FleetValidationFinding history
+
+FleetReviewVerdict history
+FleetReviewFinding history
+```
+
+The final result merely identifies which immutable accepted-target and fleet-evaluation chain became the successful final memory-fleet result.
+
+Historical rejected or superseded candidates do not become part of the final accepted fleet unless explicitly referenced by the final result.
+
+---
+
+## 23. Final memory-harness boundary
+
+After Stage 13 succeeds:
+
+```text
+FleetRunState.phase = ACCEPTED
++
+FleetRunState.accepted_result_ref
+    → AcceptedMemoryFleetResult
+```
+
+The memory harness is complete.
+
+The final output chain is:
+
+```text
+AcceptedMemoryFleetResult
+        ↓
+exact AcceptedTargetResult[]
+        ↓
+exact immutable accepted knowledge artifacts
+```
+
+with:
+
+```text
+FleetValidationReport.PASS
++
+FleetReviewVerdict.PASS
+```
+
+providing the final fleet evaluation provenance.
+
+---
+
+## 24. Repository Brain publication boundary
+
+`AcceptedMemoryFleetResult` is consumed by the later Repository Brain publication layer.
+
+Stage 13 does **not**:
+
+```text
+assemble deterministic graph artifacts
+
+assemble enrichment artifacts
+
+copy accepted Markdown into a Repository Brain snapshot
+
+construct the Repository Brain manifest
+
+compute the Repository Brain snapshot identity
+
+validate publication-level checksums
+
+validate cross-layer publication consistency
+
+build retrieval indexes
+
+publish atomically
+
+make the snapshot visible to consumers
+```
+
+Those remain publication-layer responsibilities.
+
+The publication layer may dereference:
+
+```text
+AcceptedMemoryFleetResult
+    → AcceptedTargetResult[]
+    → exact accepted artifact versions
+```
+
+as its memory-layer input.
+
+The memory harness grants no direct consumer-facing publication authority.
+
+---
+
+## 25. New run boundary
+
+A successfully accepted memory fleet is historical immutable provenance for that fleet run.
+
+Stage 13 does not reopen:
+
+```text
+FleetRunState.phase = ACCEPTED
+```
+
+for ordinary future repository changes.
+
+A new repository revision, new graph/enrichment binding, changed target catalog, or intentionally new memory-generation execution creates a new:
+
+```text
+MemoryFleetSpec
++
+fleet_run_id
+```
+
+according to the existing upstream binding rules.
+
+An accepted historical fleet result is not silently mutated into a new source state.
+
+---
+
+## 26. Locked invariants
+
+1. Stage 13 is deterministic and invokes no model.
+2. Stage 13 begins only from `FleetRunState.phase = REVIEWING`.
+3. Every activated target must still be locally `ACCEPTED`.
+4. Every current `last_accepted_result_ref` must resolve.
+5. Stage 13 resolves the exact current fleet in `MemoryFleetSpec.target_ids` order.
+6. Stage 13 requires `FleetValidationReport.PASS`.
+7. The Stage 11 PASS subject must equal the exact current accepted fleet.
+8. Stage 13 requires `FleetReviewVerdict.PASS`.
+9. The fleet-review verdict must explicitly reference the applicable Stage 11 PASS report.
+10. The fleet hard-validated, reconciled and accepted target sets must be identical.
+11. Any changed accepted-result ref requires Stage 11 and Stage 12 again.
+12. Stage 13 performs no new semantic evaluation.
+13. Stage 13 performs no new fleet composition evaluation beyond acceptance-integrity checks.
+14. Acceptance-integrity corruption fails explicitly.
+15. Acceptance corruption never becomes semantic repair feedback.
+16. No current `FLEET_VALIDATION` or `FLEET_REVIEW` finding may block acceptance.
+17. Historical resolved findings do not block acceptance.
+18. `AcceptedMemoryFleetResult` is immutable.
+19. `AcceptedMemoryFleetResult.source` equals `MemoryFleetSpec.source`.
+20. Target catalog identity/version are copied from `MemoryFleetSpec`.
+21. `accepted_target_result_refs` freeze the exact final fleet.
+22. Accepted-result ordering follows `MemoryFleetSpec.target_ids`.
+23. The result references existing accepted target results instead of duplicating their artifact/evidence/completion contents.
+24. The result references the successful fleet-validation report instead of embedding it.
+25. The result references the successful fleet-review verdict instead of embedding it.
+26. No second accepted-artifact storage authority is introduced.
+27. No fleet acceptance report/verdict/state/checkpoint/manifest is introduced.
+28. Successful Stage 13 sets `FleetRunState.phase = ACCEPTED`.
+29. Successful Stage 13 sets `FleetRunState.accepted_result_ref`.
+30. `phase == ACCEPTED` requires a resolvable valid `AcceptedMemoryFleetResult`.
+31. Fleet acceptance uses the existing Stage 5 persistence/recovery machinery.
+32. Acceptance is idempotent for the same exact successful fleet provenance chain.
+33. Duplicate acceptance execution must not create semantically duplicate results.
+34. Recovery may complete interrupted Stage 13 acceptance without rerunning Stage 11 or Stage 12 when their durable PASS provenance remains valid.
+35. Stage 13 consumes no worker/model/tool/token/repair budget.
+36. `AcceptedMemoryFleetResult` is the final output contract of the memory-agent harness.
+37. Stage 13 does not publish the Repository Brain.
+38. Repository Brain assembly and atomic publication remain downstream authority.
+39. An accepted memory fleet is not reopened in place for a different repository/source binding.
+40. Simplicity remains preferred over additional fleet-finalization machinery.
+
+---
+
+## 27. New Stage 13 surface
+
+Stage 13 adds only:
+
+### Durable contract
+
+```text
+AcceptedMemoryFleetResult
+```
+
+### Runtime interface
+
+```text
+accept_fleet(fleet_run_id)
+    → AcceptedMemoryFleetResult
+```
+
+### Lifecycle behavior
+
+```text
+REVIEWING → ACCEPTED
+
+FleetRunState.accepted_result_ref
+    → AcceptedMemoryFleetResult
+```
+
+Existing contracts are reused directly:
+
+```text
+MemoryFleetSpec
+FleetRunState
+
+TargetTaskSpec
+TargetTaskState
+
+SourceBinding
+AcceptedTargetResult
+
+FleetValidationReport
+FleetReviewVerdict
+
+FindingRef
+FindingOrigin
+
+TaskEvent
+Stage 5 persistence/recovery machinery
+```
+
+Stage 13 does **not** introduce:
+
+```text
+FleetAcceptanceState
+FleetAcceptanceReport
+FleetAcceptanceVerdict
+FleetAcceptanceAttempt
+FleetAcceptanceCheckpoint
+FleetAcceptanceManifest
+accepted-artifact duplicate store
+accepted-target duplicate store
+fleet publication manifest
+Repository Brain snapshot
+new execution budget
+new usage contract
+new scheduler state
+new persistence protocol
+```
+
+---
+
+# Final Memory Agent Fleet Harness boundary
+
+The completed V0 harness path is:
+
+```text
+target worker execution
+        ↓
+Stage 7 — Target Hard Validation
+        ↓
+Stage 8 — Target Review
+        ↓
+Stage 9 — Repair when required
+        ↓
+Stage 10 — Target Acceptance
+        ↓
+all activated targets locally accepted
+        ↓
+Stage 11 — Fleet Hard Validation
+        ↓
+Stage 12 — Fleet Reconciliation
+        ↓
+Stage 13 — Fleet Acceptance
+        ↓
+AcceptedMemoryFleetResult
+        ↓
+Repository Brain publication layer
+```
+
+The final authority split is:
+
+```text
+Stage 10
+    freezes one exact locally successful target
+
+Stage 11
+    proves deterministic composition of the
+    exact accepted target set
+
+Stage 12
+    judges semantic coherence of that exact
+    generated memory corpus
+
+Stage 13
+    performs no new judgment;
+    it freezes the successful fleet provenance
+    into the final memory-harness result
+
+Repository Brain publication
+    owns later cross-layer assembly,
+    validation and atomic publication
+```
+
+No stage after a fleet-level rejection bypasses the ordinary target-local lifecycle.
+
+The central final invariant is:
+
+```text
+exact locally accepted targets
+        =
+exact Stage 11 validated fleet
+        =
+exact Stage 12 reconciled fleet
+        =
+exact Stage 13 accepted memory fleet
+```

@@ -135,6 +135,8 @@ class RepairFinding(BaseModel):
     content: str = Field(min_length=1)
     affected_scope: str | None = Field(default=None, min_length=1)
     affected_artifact_id: str | None = Field(default=None, min_length=1)
+    affected_artifact_refs: tuple[str, ...] = ()
+    affected_obligation_ids: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
 
 

@@ -1,5 +1,6 @@
 """Typed contracts owned by Bridger."""
 
+from models.acceptance import AcceptedTargetResult
 from models.enrichment import (
     CommunityEvidence,
     CommunityName,
@@ -24,6 +25,16 @@ from models.files import (
     SourceReadRequest,
     SourceReadResult,
 )
+from models.fleet_acceptance import AcceptedMemoryFleetResult
+from models.fleet_review import (
+    FleetReviewArtifact,
+    FleetReviewContext,
+    FleetReviewFinding,
+    FleetReviewFindingDraft,
+    FleetReviewModelResult,
+    FleetReviewVerdict,
+)
+from models.fleet_validation import FleetValidationFinding, FleetValidationReport
 from models.graph import (
     ArtifactReference,
     GraphBuildResult,
@@ -92,7 +103,6 @@ from models.review import (
     ReviewerInstructions,
     ReviewFinding,
     ReviewFindingDraft,
-    ReviewFindingSeverity,
     ReviewVerdict,
     TargetReviewContext,
     TargetReviewModelResult,
@@ -123,6 +133,8 @@ from models.worker_cycle import (
 
 __all__ = [
     "BOUNDED_READ_MAX_BYTES",
+    "AcceptedTargetResult",
+    "AcceptedMemoryFleetResult",
     "ActivationMode",
     "ArtifactReference",
     "CandidateArtifactRef",
@@ -151,6 +163,14 @@ __all__ = [
     "FileEvidenceLocator",
     "FindingOrigin",
     "FindingRef",
+    "FleetValidationFinding",
+    "FleetValidationReport",
+    "FleetReviewArtifact",
+    "FleetReviewContext",
+    "FleetReviewFinding",
+    "FleetReviewFindingDraft",
+    "FleetReviewModelResult",
+    "FleetReviewVerdict",
     "FleetPhase",
     "FleetRunState",
     "GraphConstructionConfig",
@@ -184,7 +204,6 @@ __all__ = [
     "ReviewArtifact",
     "ReviewFinding",
     "ReviewFindingDraft",
-    "ReviewFindingSeverity",
     "ReviewerInstructions",
     "ReviewVerdict",
     "RuntimeErrorRecord",

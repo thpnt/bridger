@@ -1,16 +1,23 @@
-"""Bridger memory-agent harness contracts and Stage 0-8 interfaces."""
+"""Bridger memory-agent harness contracts and Stage 0-13 interfaces."""
 
+from memory.acceptance import accept_target, resolve_accepted_target_result
 from memory.context_window import ContextWindowManager
 from memory.durability import FleetRunLock, FleetRuntimeStore, RuntimePaths
 from memory.errors import (
     ContextWindowConfigurationError,
     FinalizationRequestError,
+    FleetAcceptanceError,
     FleetInitializationError,
+    FleetReviewBudgetError,
+    FleetReviewError,
+    FleetReviewInvocationError,
     FleetSchedulingError,
+    FleetValidationError,
     InvalidTargetArtifacts,
     MemoryHarnessError,
     MemoryRunBindingError,
     PersistenceRecoveryError,
+    TargetAcceptanceError,
     TargetActivationError,
     TargetReviewBudgetError,
     TargetReviewError,
@@ -23,6 +30,22 @@ from memory.errors import (
 from memory.finalization import (
     handle_finalization_request,
     resolve_finalization_request,
+)
+from memory.fleet_acceptance import (
+    accept_fleet,
+    resolve_accepted_memory_fleet_result,
+)
+from memory.fleet_review import (
+    compile_fleet_review_context,
+    reconcile_fleet,
+    resolve_fleet_review_finding,
+    resolve_fleet_review_verdict,
+    resume_fleet_review_routing,
+)
+from memory.fleet_validation import (
+    resolve_fleet_validation_finding,
+    resolve_fleet_validation_report,
+    validate_fleet,
 )
 from memory.hydration import (
     CandidateArtifactRecord,
@@ -89,6 +112,11 @@ __all__ = [
     "FindingRecord",
     "FleetInitializationError",
     "FleetSchedulingError",
+    "FleetValidationError",
+    "FleetAcceptanceError",
+    "FleetReviewBudgetError",
+    "FleetReviewError",
+    "FleetReviewInvocationError",
     "FinalizationRequestError",
     "FleetExecutionCoordinator",
     "FleetRunLock",
@@ -100,6 +128,7 @@ __all__ = [
     "PersistenceRecoveryError",
     "OpenQuestionRecord",
     "TargetActivationError",
+    "TargetAcceptanceError",
     "TargetReviewBudgetError",
     "TargetReviewError",
     "TargetReviewInvocationError",
@@ -120,6 +149,9 @@ __all__ = [
     "RecoveredFleet",
     "RuntimePaths",
     "bind_memory_run",
+    "accept_target",
+    "accept_fleet",
+    "compile_fleet_review_context",
     "compile_worker_context",
     "compile_target_review_context",
     "create_checkpoint",
@@ -128,7 +160,13 @@ __all__ = [
     "initialize_persistence",
     "load_target_artifacts",
     "resolve_target_activation",
+    "resolve_accepted_target_result",
+    "resolve_accepted_memory_fleet_result",
     "resolve_finalization_request",
+    "resolve_fleet_validation_finding",
+    "resolve_fleet_validation_report",
+    "resolve_fleet_review_finding",
+    "resolve_fleet_review_verdict",
     "resolve_review_finding",
     "resolve_review_verdict",
     "resolve_validation_finding",
@@ -141,8 +179,11 @@ __all__ = [
     "run_provider_with_retry",
     "run_worker_cycle",
     "review_target",
+    "reconcile_fleet",
+    "resume_fleet_review_routing",
     "schedule_runnable_targets",
     "serialize_worker_context",
     "validate_checkpoint",
+    "validate_fleet",
     "validate_target_candidate",
 ]

@@ -29,6 +29,7 @@ from memory.targets import _resolve_catalog_definitions
 from models.memory import (
     ExecutionUsage,
     FindingOrigin,
+    FleetPhase,
     FleetRunState,
     MemoryFleetSpec,
     MemoryTargetCatalog,
@@ -530,7 +531,14 @@ def recover_fleet(
             evidence_by_target[target_spec.target_task_id] = evidence
             questions_by_target[target_spec.target_task_id] = questions
             _validate_data_refs(target_spec, target_state, evidence, questions)
-            _validate_checkpoints_and_artifacts(store, target_spec, target_state)
+            _validate_checkpoints_and_artifacts(
+                store,
+                target_spec,
+                target_state,
+                completion_state,
+            )
+            _validate_evaluation_finding_refs(store, target_spec, target_state)
+            _validate_accepted_result_ref(store, target_spec, target_state)
             _validate_completion_definition(
                 completion_state,
                 definitions_by_target[target_spec.target_id],
@@ -539,6 +547,102 @@ def recover_fleet(
             completion_states[target_spec.target_task_id] = completion_state
 
         _validate_fleet_state(fleet_spec, fleet_state, target_specs, target_states)
+        _validate_fleet_finding_refs(store, fleet_state)
+        if fleet_state.phase in {
+            FleetPhase.VALIDATING,
+            FleetPhase.REPAIRING,
+            FleetPhase.REVIEWING,
+        }:
+            from memory.fleet_validation import validate_fleet
+
+            fleet_review_repair = fleet_state.phase is FleetPhase.REPAIRING and any(
+                reference.origin is FindingOrigin.FLEET_REVIEW
+                for reference in fleet_state.open_finding_refs
+            )
+            if fleet_review_repair:
+                from memory.fleet_review import resume_fleet_review_routing
+
+                resume_fleet_review_routing(store, fleet_state)
+            else:
+                validate_fleet(store, fleet_state)
+            for target_task_id, target_spec in target_specs.items():
+                target_state = TargetTaskState.model_validate_json(
+                    store.paths.target_state(target_spec).read_bytes()
+                )
+                _validate_target_state(
+                    target_spec,
+                    target_state,
+                    completion_states[target_task_id],
+                )
+                _validate_evaluation_finding_refs(
+                    store,
+                    target_spec,
+                    target_state,
+                )
+                target_states[target_task_id] = target_state
+            _validate_fleet_state(
+                fleet_spec,
+                fleet_state,
+                target_specs,
+                target_states,
+            )
+            _validate_fleet_finding_refs(store, fleet_state)
+            if fleet_state.phase is FleetPhase.REVIEWING:
+                from memory.fleet_review import resolve_fleet_review_verdict
+                from memory.fleet_validation import (
+                    resolve_fleet_validation_report,
+                )
+                from models.review import ReviewVerdict
+
+                accepted_refs = [
+                    target_states[task_id].last_accepted_result_ref
+                    for task_id in fleet_state.target_task_ids
+                ]
+                if any(reference is None for reference in accepted_refs):
+                    raise ValueError("REVIEWING fleet has an incomplete accepted set")
+                fleet_report = resolve_fleet_validation_report(
+                    store,
+                    [reference for reference in accepted_refs if reference is not None],
+                )
+                if fleet_report is None:
+                    raise ValueError("REVIEWING fleet lacks its Stage 11 PASS")
+                review = resolve_fleet_review_verdict(
+                    store,
+                    fleet_report.fleet_validation_report_id,
+                )
+                if review is not None and (
+                    review.verdict is not ReviewVerdict.PASS
+                    or any(
+                        reference.origin is FindingOrigin.FLEET_REVIEW
+                        for reference in fleet_state.open_finding_refs
+                    )
+                ):
+                    raise ValueError(
+                        "REVIEWING fleet has an incoherent Stage 12 result"
+                    )
+        if fleet_state.phase is FleetPhase.ACCEPTED:
+            from memory.fleet_acceptance import (
+                resolve_accepted_memory_fleet_result,
+            )
+
+            if fleet_state.accepted_result_ref is None:
+                raise ValueError("ACCEPTED fleet has no accepted result")
+            accepted_fleet = resolve_accepted_memory_fleet_result(
+                store,
+                fleet_state.accepted_result_ref,
+            )
+            if (
+                any(
+                    target_states[task_id].phase is not TargetPhase.ACCEPTED
+                    for task_id in fleet_state.target_task_ids
+                )
+                or [
+                    target_states[task_id].last_accepted_result_ref
+                    for task_id in fleet_state.target_task_ids
+                ]
+                != accepted_fleet.accepted_target_result_refs
+            ):
+                raise ValueError("ACCEPTED fleet no longer matches its final result")
         _validate_error_references(store, fleet_state, target_states)
         unresolved = store.reconcile_provider_reservations()
         _validate_reservation_capacity(
@@ -852,6 +956,7 @@ def _validate_checkpoints_and_artifacts(
     store: FleetRuntimeStore,
     target_spec: TargetTaskSpec,
     target_state: TargetTaskState,
+    completion_state: TargetCompletionState,
 ) -> None:
     checkpoints: dict[str, TaskCheckpoint] = {}
     checkpoint_root = store.paths.target_root(target_spec) / "checkpoints"
@@ -873,10 +978,43 @@ def _validate_checkpoints_and_artifacts(
             item.checkpoint_sequence for item in checkpoints.values()
         ):
             raise ValueError("last_checkpoint_ref is not the latest checkpoint")
-        _restore_exact_checkpoint_artifacts(
-            store, target_spec, target_state, checkpoint
-        )
+        if _is_pre_worker_repair(target_state):
+            _validate_pre_worker_repair_candidate(
+                target_state,
+                completion_state,
+                checkpoint,
+            )
+        else:
+            _restore_exact_checkpoint_artifacts(
+                store, target_spec, target_state, checkpoint
+            )
     _validate_current_artifact_inventory(target_spec, target_state)
+
+
+def _is_pre_worker_repair(target_state: TargetTaskState) -> bool:
+    return bool(target_state.open_finding_refs) and target_state.phase in {
+        TargetPhase.REPAIR,
+        TargetPhase.SCHEDULED,
+        TargetPhase.HYDRATING,
+    }
+
+
+def _validate_pre_worker_repair_candidate(
+    target_state: TargetTaskState,
+    completion_state: TargetCompletionState,
+    checkpoint: TaskCheckpoint,
+) -> None:
+    checkpoint_state = checkpoint.task_state
+    if (
+        target_state.artifact_refs != checkpoint_state.artifact_refs
+        or target_state.evidence_refs != checkpoint_state.evidence_refs
+        or target_state.open_question_refs != checkpoint_state.open_question_refs
+        or target_state.working_summary != checkpoint_state.working_summary
+        or completion_state != checkpoint.completion_state
+    ):
+        raise ValueError(
+            "pre-worker repair candidate does not match its selected checkpoint"
+        )
 
 
 def _restore_exact_checkpoint_artifacts(
@@ -947,6 +1085,84 @@ def _validate_completion_definition(
         raise ValueError("completion obligations do not match target definition")
 
 
+def _validate_evaluation_finding_refs(
+    store: FleetRuntimeStore,
+    target_spec: TargetTaskSpec,
+    target_state: TargetTaskState,
+) -> None:
+    from memory.fleet_validation import resolve_fleet_validation_finding
+    from memory.review import resolve_review_finding
+    from memory.validation import resolve_validation_finding
+
+    finding_ids = [reference.finding_id for reference in target_state.open_finding_refs]
+    if len(finding_ids) != len(set(finding_ids)):
+        raise ValueError("duplicate target finding references")
+    for reference in target_state.open_finding_refs:
+        if reference.origin is FindingOrigin.HARD_VALIDATION:
+            resolve_validation_finding(
+                store,
+                target_spec,
+                reference.finding_id,
+            )
+        elif reference.origin is FindingOrigin.TARGET_REVIEW:
+            resolve_review_finding(
+                store,
+                target_spec,
+                reference.finding_id,
+            )
+        elif reference.origin is FindingOrigin.FLEET_VALIDATION:
+            finding = resolve_fleet_validation_finding(
+                store,
+                reference.finding_id,
+            )
+            if target_spec.target_task_id not in finding.affected_target_task_ids:
+                raise ValueError("fleet finding is routed to an unaffected target")
+        elif reference.origin is FindingOrigin.FLEET_REVIEW:
+            from memory.fleet_review import resolve_fleet_review_finding
+
+            review_finding = resolve_fleet_review_finding(
+                store,
+                reference.finding_id,
+            )
+            if (
+                target_spec.target_task_id
+                not in review_finding.affected_target_task_ids
+            ):
+                raise ValueError(
+                    "fleet review finding is routed to an unaffected target"
+                )
+
+
+def _validate_accepted_result_ref(
+    store: FleetRuntimeStore,
+    target_spec: TargetTaskSpec,
+    target_state: TargetTaskState,
+) -> None:
+    result_id = target_state.last_accepted_result_ref
+    if result_id is None:
+        if target_state.phase is TargetPhase.ACCEPTED:
+            raise ValueError("ACCEPTED target has no accepted result")
+        return
+    from memory.acceptance import resolve_accepted_target_result
+
+    result = resolve_accepted_target_result(store, target_spec, result_id)
+    if (
+        target_state.phase is TargetPhase.ACCEPTED
+        and target_state.pending_finalization_request_ref is not None
+    ):
+        raise ValueError("ACCEPTED target still has a pending finalization request")
+    if target_state.phase is TargetPhase.ACCEPTED:
+        completion_state = TargetCompletionState.model_validate_json(
+            store.paths.completion_state(target_spec).read_bytes()
+        )
+        if (
+            target_state.artifact_refs != result.artifact_refs
+            or target_state.evidence_refs != result.evidence_refs
+            or completion_state.items != result.completion_items
+        ):
+            raise ValueError("ACCEPTED target no longer matches its accepted result")
+
+
 def _validate_fleet_state(
     fleet_spec: MemoryFleetSpec,
     fleet_state: FleetRunState,
@@ -967,8 +1183,36 @@ def _validate_fleet_state(
                 field_name,
                 getattr(summed, field_name) + getattr(target_state.usage, field_name),
             )
-    if summed != fleet_state.usage:
-        raise ValueError("target and fleet usage authorities have drifted")
+    exact_fields = {"cycles", "tool_calls", "repair_cycles"}
+    for field_name in ExecutionUsage.model_fields:
+        fleet_amount = getattr(fleet_state.usage, field_name)
+        target_amount = getattr(summed, field_name)
+        if (
+            field_name in exact_fields
+            and fleet_amount != target_amount
+            or field_name not in exact_fields
+            and fleet_amount < target_amount
+        ):
+            raise ValueError("target and fleet usage authorities have drifted")
+
+
+def _validate_fleet_finding_refs(
+    store: FleetRuntimeStore,
+    fleet_state: FleetRunState,
+) -> None:
+    from memory.fleet_review import resolve_fleet_review_finding
+    from memory.fleet_validation import resolve_fleet_validation_finding
+
+    finding_ids = [reference.finding_id for reference in fleet_state.open_finding_refs]
+    if len(finding_ids) != len(set(finding_ids)):
+        raise ValueError("duplicate fleet finding references")
+    for reference in fleet_state.open_finding_refs:
+        if reference.origin is FindingOrigin.FLEET_VALIDATION:
+            resolve_fleet_validation_finding(store, reference.finding_id)
+        elif reference.origin is FindingOrigin.FLEET_REVIEW:
+            resolve_fleet_review_finding(store, reference.finding_id)
+        else:
+            raise ValueError("fleet state contains a target-level finding")
 
 
 def _validate_reservation_capacity(
@@ -979,7 +1223,10 @@ def _validate_reservation_capacity(
     store: FleetRuntimeStore,
 ) -> None:
     reservations = store.provider_reservations()
-    if any(item.target_task_id not in target_specs for item in reservations):
+    if any(
+        item.target_task_id is not None and item.target_task_id not in target_specs
+        for item in reservations
+    ):
         raise ValueError("provider reservation belongs to an unknown target")
     fleet_input = sum(item.input_token_reservation for item in reservations)
     fleet_output = sum(item.output_token_reservation for item in reservations)

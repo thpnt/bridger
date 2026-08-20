@@ -49,6 +49,12 @@ _VALIDATION_REPORTS_DIRECTORY = "validation-reports"
 _VALIDATION_FINDINGS_DIRECTORY = "validation-findings"
 _REVIEW_VERDICTS_DIRECTORY = "review-verdicts"
 _REVIEW_FINDINGS_DIRECTORY = "review-findings"
+_ACCEPTED_TARGET_RESULTS_DIRECTORY = "accepted-target-results"
+_FLEET_VALIDATION_REPORTS_DIRECTORY = "fleet-validation-reports"
+_FLEET_VALIDATION_FINDINGS_DIRECTORY = "fleet-validation-findings"
+_FLEET_REVIEW_VERDICTS_DIRECTORY = "fleet-review-verdicts"
+_FLEET_REVIEW_FINDINGS_DIRECTORY = "fleet-review-findings"
+_ACCEPTED_MEMORY_FLEET_RESULTS_DIRECTORY = "accepted-memory-fleet-results"
 _EVIDENCE_DIRECTORY = "evidence"
 _QUESTIONS_DIRECTORY = "questions"
 
@@ -119,6 +125,66 @@ _EVENT_REQUIRED_KEYS: dict[str, frozenset[str]] = {
             "to_phase",
         }
     ),
+    "target_accepted": frozenset(
+        {
+            "accepted_target_result_id",
+            "finalization_request_id",
+            "validation_report_id",
+            "review_verdict_id",
+            "from_phase",
+            "to_phase",
+        }
+    ),
+    "fleet_validation_started": frozenset(
+        {
+            "accepted_target_result_refs",
+            "from_phase",
+            "to_phase",
+        }
+    ),
+    "fleet_validation_completed": frozenset(
+        {
+            "fleet_validation_report_id",
+            "accepted_target_result_refs",
+            "verdict",
+            "from_phase",
+            "to_phase",
+        }
+    ),
+    "fleet_repair_routed": frozenset(
+        {
+            "fleet_validation_report_id",
+            "affected_target_task_ids",
+            "from_phase",
+            "to_phase",
+        }
+    ),
+    "fleet_review_completed": frozenset(
+        {
+            "fleet_review_id",
+            "fleet_validation_report_ref",
+            "verdict",
+            "from_phase",
+            "to_phase",
+        }
+    ),
+    "fleet_review_repair_routed": frozenset(
+        {
+            "fleet_review_id",
+            "affected_target_task_ids",
+            "from_phase",
+            "to_phase",
+        }
+    ),
+    "fleet_accepted": frozenset(
+        {
+            "accepted_memory_fleet_result_id",
+            "fleet_validation_report_ref",
+            "fleet_review_verdict_ref",
+            "from_phase",
+            "to_phase",
+        }
+    ),
     "checkpoint_created": frozenset({"checkpoint_id"}),
     "retry_scheduled": frozenset({"attempt", "delay_seconds"}),
     "execution_interrupted": frozenset({"reason"}),
@@ -161,7 +227,7 @@ class _ProviderReservation(BaseModel):
 
     schema_version: Literal[1] = 1
     attempt_id: str
-    target_task_id: str
+    target_task_id: str | None = None
     input_token_reservation: int = Field(ge=0)
     output_token_reservation: int = Field(ge=0)
     state: str = Field(pattern=r"^(prepared|invoked)$")
@@ -296,6 +362,55 @@ class RuntimePaths:
             self.target_root(target_spec)
             / _REVIEW_FINDINGS_DIRECTORY
             / f"{finding_id}.json"
+        )
+
+    def accepted_target_result(
+        self,
+        target_spec: TargetTaskSpec,
+        accepted_target_result_id: str,
+    ) -> Path:
+        """Resolve one immutable locally accepted target result."""
+        require_path_segment(
+            accepted_target_result_id,
+            "accepted_target_result_id",
+        )
+        return (
+            self.target_root(target_spec)
+            / _ACCEPTED_TARGET_RESULTS_DIRECTORY
+            / f"{accepted_target_result_id}.json"
+        )
+
+    def fleet_validation_report(self, report_id: str) -> Path:
+        """Resolve one immutable fleet-validation report record."""
+        require_path_segment(report_id, "fleet_validation_report_id")
+        return self.run_root / _FLEET_VALIDATION_REPORTS_DIRECTORY / f"{report_id}.json"
+
+    def fleet_validation_finding(self, finding_id: str) -> Path:
+        """Resolve one immutable fleet-validation finding record."""
+        require_path_segment(finding_id, "finding_id")
+        return (
+            self.run_root / _FLEET_VALIDATION_FINDINGS_DIRECTORY / f"{finding_id}.json"
+        )
+
+    def fleet_review_verdict(self, fleet_review_id: str) -> Path:
+        """Resolve one immutable fleet-review verdict record."""
+        require_path_segment(fleet_review_id, "fleet_review_id")
+        return (
+            self.run_root / _FLEET_REVIEW_VERDICTS_DIRECTORY / f"{fleet_review_id}.json"
+        )
+
+    def fleet_review_finding(self, finding_id: str) -> Path:
+        """Resolve one immutable fleet-review finding record."""
+        require_path_segment(finding_id, "finding_id")
+        return self.run_root / _FLEET_REVIEW_FINDINGS_DIRECTORY / f"{finding_id}.json"
+
+    def accepted_memory_fleet_result(self, result_id: str) -> Path:
+        """Resolve one immutable accepted memory-fleet result."""
+        require_path_segment(result_id, "accepted_memory_fleet_result_id")
+        return (
+            self.run_root
+            / _ACCEPTED_MEMORY_FLEET_RESULTS_DIRECTORY
+            / f"{result_id}.json"
         )
 
 
@@ -679,6 +794,58 @@ class FleetRuntimeStore:
                 phase=phase,
             )
 
+    def apply_fleet_usage_delta(
+        self,
+        fleet_state: FleetRunState,
+        delta: Mapping[str, int],
+        *,
+        event_type: str = "usage_delta",
+        deletions: Iterable[Path] = (),
+        payload: Mapping[str, object] | None = None,
+        operation_id: str | None = None,
+    ) -> str:
+        """Durably charge fleet-only work without attributing it to a target."""
+        with self.state_locks():
+            if fleet_state.fleet_run_id != self.fleet_spec.fleet_run_id:
+                raise ValueError("fleet state belongs to another fleet")
+            normalized = {name: 0 for name in _USAGE_FIELDS}
+            for field_name, amount in delta.items():
+                if (
+                    field_name not in normalized
+                    or isinstance(amount, bool)
+                    or amount < 0
+                ):
+                    raise ValueError("usage deltas must be known non-negative integers")
+                normalized[field_name] = amount
+            after_fleet = fleet_state.model_copy(deep=True)
+            for field_name, amount in normalized.items():
+                setattr(
+                    after_fleet.usage,
+                    field_name,
+                    getattr(after_fleet.usage, field_name) + amount,
+                )
+            self._require_within_budget(
+                self.fleet_spec.fleet_budget,
+                after_fleet.usage,
+                "fleet",
+            )
+            resolved_operation_id = operation_id or f"operation-{uuid4().hex}"
+            event_payload = dict(payload or {})
+            event_payload["usage_delta"] = {
+                field_name: amount
+                for field_name, amount in normalized.items()
+                if amount
+            }
+            self.commit_operation(
+                operation_id=resolved_operation_id,
+                writes={self.paths.fleet_state: _model_bytes(after_fleet)},
+                deletions=deletions,
+                event_type=event_type,
+                payload=event_payload,
+            )
+            _replace_model(fleet_state, after_fleet)
+            return resolved_operation_id
+
     def _apply_usage_delta_locked(
         self,
         fleet_state: FleetRunState,
@@ -793,6 +960,51 @@ class FleetRuntimeStore:
             )
             return attempt_id
 
+    def prepare_fleet_provider_attempt(
+        self,
+        fleet_state: FleetRunState,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> str:
+        """Charge and reserve one fleet-only provider invocation."""
+        with self.state_locks():
+            self._require_fleet_provider_capacity(
+                fleet_state,
+                input_tokens,
+                output_tokens,
+            )
+            attempt_id = f"attempt-{uuid4().hex}"
+            reservation = _ProviderReservation(
+                attempt_id=attempt_id,
+                input_token_reservation=input_tokens,
+                output_token_reservation=output_tokens,
+                state="prepared",
+            )
+            after_fleet = fleet_state.model_copy(deep=True)
+            after_fleet.usage.model_calls += 1
+            self._require_within_budget(
+                self.fleet_spec.fleet_budget,
+                after_fleet.usage,
+                "fleet",
+            )
+            self.commit_operation(
+                operation_id=f"operation-{uuid4().hex}",
+                writes={
+                    self.paths.fleet_state: _model_bytes(after_fleet),
+                    self.provider_reservation_path(attempt_id): _model_bytes(
+                        reservation
+                    ),
+                },
+                event_type="usage_delta",
+                payload={
+                    "attempt_id": attempt_id,
+                    "usage_delta": {"model_calls": 1},
+                },
+            )
+            _replace_model(fleet_state, after_fleet)
+            return attempt_id
+
     def mark_provider_invoked(self, attempt_id: str) -> None:
         """Cross the durable provider invocation boundary."""
         reservation = self.load_provider_reservation(attempt_id)
@@ -825,6 +1037,31 @@ class FleetRuntimeStore:
             fleet_state,
             target_spec,
             target_state,
+            {"input_tokens": input_tokens, "output_tokens": output_tokens},
+            event_type=(
+                "model_attempt_failed" if failed else "model_attempt_completed"
+            ),
+            deletions=[reservation_path],
+            payload={"attempt_id": reservation.attempt_id},
+            operation_id=f"settle-{attempt_id}",
+        )
+
+    def settle_fleet_provider_attempt(
+        self,
+        fleet_state: FleetRunState,
+        attempt_id: str,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        failed: bool = False,
+    ) -> None:
+        """Charge tokens and settle one fleet-only provider reservation."""
+        reservation_path = self.provider_reservation_path(attempt_id)
+        reservation = self.load_provider_reservation(attempt_id)
+        if reservation.target_task_id is not None:
+            raise ValueError("fleet provider reservation belongs to a target")
+        self.apply_fleet_usage_delta(
+            fleet_state,
             {"input_tokens": input_tokens, "output_tokens": output_tokens},
             event_type=(
                 "model_attempt_failed" if failed else "model_attempt_completed"
@@ -1100,6 +1337,33 @@ class FleetRuntimeStore:
                 output_tokens,
                 "target output",
             ),
+            (
+                self.fleet_spec.fleet_budget.max_input_tokens,
+                fleet_state.usage.input_tokens,
+                sum(item.input_token_reservation for item in reservations),
+                input_tokens,
+                "fleet input",
+            ),
+            (
+                self.fleet_spec.fleet_budget.max_output_tokens,
+                fleet_state.usage.output_tokens,
+                sum(item.output_token_reservation for item in reservations),
+                output_tokens,
+                "fleet output",
+            ),
+        )
+        for limit, usage, held, requested, label in checks:
+            if limit is not None and usage + held + requested > limit:
+                raise ValueError(f"{label} token budget cannot reserve provider call")
+
+    def _require_fleet_provider_capacity(
+        self,
+        fleet_state: FleetRunState,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        reservations = self.provider_reservations()
+        checks = (
             (
                 self.fleet_spec.fleet_budget.max_input_tokens,
                 fleet_state.usage.input_tokens,

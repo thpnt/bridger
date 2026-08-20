@@ -46,7 +46,6 @@ from models.review import (
     ReviewerInstructions,
     ReviewFinding,
     ReviewFindingDraft,
-    ReviewFindingSeverity,
     ReviewVerdict,
     TargetReviewContext,
     TargetReviewModelResult,
@@ -93,15 +92,14 @@ def compile_target_review_context(
         ):
             raise ValueError("target review requires the exact Stage 7 PASS report")
         artifacts = _load_checkpoint_artifacts(store, target_spec, checkpoint)
-        previous_findings = [
-            resolve_review_finding(store, target_spec, reference.finding_id)
-            for reference in target_state.open_finding_refs
-            if reference.origin is FindingOrigin.TARGET_REVIEW
-        ]
         return TargetReviewContext(
             target_task_id=target_spec.target_task_id,
+            target_id=target_spec.target_id,
+            target_contract_version=target_spec.target_contract_version,
             finalization_request_id=request.finalization_request_id,
             candidate_checkpoint_ref=checkpoint.checkpoint_id,
+            validation_report_ref=report.validation_report_id,
+            source_binding=target_spec.source,
             reviewer_profile_id=reviewer_profile.profile_id,
             shared_reviewer_instructions=reviewer_instructions.shared,
             target_reviewer_rubric=reviewer_instructions.target_specific,
@@ -111,7 +109,6 @@ def compile_target_review_context(
             open_questions=checkpoint.open_questions,
             candidate_artifacts=artifacts,
             hard_validation_report=report,
-            previous_review_findings=previous_findings,
         )
     except TargetReviewError:
         raise
@@ -315,24 +312,14 @@ def resolve_review_verdict(
             or request.target_task_id != target_spec.target_task_id
         ):
             raise ValueError("review verdict identities do not match")
-        blocking = [
+        findings = [
             resolve_review_finding(store, target_spec, reference.finding_id)
-            for reference in verdict.blocking_finding_refs
-        ]
-        non_blocking = [
-            resolve_review_finding(store, target_spec, reference.finding_id)
-            for reference in verdict.non_blocking_finding_refs
+            for reference in verdict.finding_refs
         ]
         if any(
             finding.review_verdict_id != verdict.review_verdict_id
             or finding.target_task_id != verdict.target_task_id
-            or finding.severity is not ReviewFindingSeverity.BLOCKING
-            for finding in blocking
-        ) or any(
-            finding.review_verdict_id != verdict.review_verdict_id
-            or finding.target_task_id != verdict.target_task_id
-            or finding.severity is not ReviewFindingSeverity.NON_BLOCKING
-            for finding in non_blocking
+            for finding in findings
         ):
             raise ValueError("review finding identities do not match")
         return verdict
@@ -625,22 +612,14 @@ def _complete_review(
                 artifact.reference.artifact_id
                 for artifact in context.candidate_artifacts
             }
-            blocking = _materialize_findings(
+            findings = _materialize_findings(
                 verdict_id,
                 target_spec,
-                result.blocking_findings,
-                ReviewFindingSeverity.BLOCKING,
+                context.target_definition,
+                result.findings,
                 artifact_ids,
             )
-            non_blocking = _materialize_findings(
-                verdict_id,
-                target_spec,
-                result.non_blocking_findings,
-                ReviewFindingSeverity.NON_BLOCKING,
-                artifact_ids,
-            )
-            blocking_refs = [_finding_ref(finding) for finding in blocking]
-            non_blocking_refs = [_finding_ref(finding) for finding in non_blocking]
+            finding_refs = [_finding_ref(finding) for finding in findings]
             verdict = TargetReviewVerdict(
                 review_verdict_id=verdict_id,
                 fleet_run_id=store.fleet_spec.fleet_run_id,
@@ -658,9 +637,7 @@ def _complete_review(
                 ),
                 verdict=result.outcome,
                 summary=result.summary,
-                blocking_finding_refs=blocking_refs,
-                non_blocking_finding_refs=non_blocking_refs,
-                repair_priorities=result.repair_priorities,
+                finding_refs=finding_refs,
                 created_at=datetime.now(UTC),
             )
             preserved = [
@@ -677,7 +654,7 @@ def _complete_review(
                 deep=True,
                 update={
                     "phase": next_phase,
-                    "open_finding_refs": [*preserved, *blocking_refs],
+                    "open_finding_refs": [*preserved, *finding_refs],
                     "pending_finalization_request_ref": (
                         None
                         if verdict.verdict is ReviewVerdict.NEEDS_WORK
@@ -685,7 +662,6 @@ def _complete_review(
                     ),
                 },
             )
-            findings = [*blocking, *non_blocking]
             writes = {
                 store.paths.review_finding(target_spec, finding.finding_id): (
                     _model_bytes(finding)
@@ -724,29 +700,37 @@ def _complete_review(
 def _materialize_findings(
     verdict_id: str,
     target_spec: TargetTaskSpec,
+    target_definition: TargetDefinition,
     drafts: Sequence[ReviewFindingDraft],
-    severity: ReviewFindingSeverity,
     artifact_ids: set[str],
 ) -> list[ReviewFinding]:
     findings: list[ReviewFinding] = []
+    obligation_ids = {
+        obligation.obligation_id
+        for obligation in target_definition.completion_obligations
+    }
     for index, draft in enumerate(drafts):
-        if (
-            draft.affected_artifact_id is not None
-            and draft.affected_artifact_id not in artifact_ids
+        if any(
+            artifact_id not in artifact_ids
+            for artifact_id in draft.affected_artifact_refs
         ):
             raise ValueError("review finding names an unknown candidate artifact")
-        finding_id = _finding_id(verdict_id, severity, index, draft)
+        if any(
+            obligation_id not in obligation_ids
+            for obligation_id in draft.affected_obligation_ids
+        ):
+            raise ValueError("review finding names an unknown target obligation")
+        finding_id = _finding_id(verdict_id, index, draft)
         findings.append(
             ReviewFinding(
                 finding_id=finding_id,
                 review_verdict_id=verdict_id,
                 target_task_id=target_spec.target_task_id,
-                severity=severity,
-                rubric_dimension=draft.rubric_dimension,
-                affected_scope=draft.affected_scope,
-                affected_artifact_id=draft.affected_artifact_id,
+                criterion_id=draft.criterion_id,
+                affected_artifact_refs=draft.affected_artifact_refs,
+                affected_obligation_ids=draft.affected_obligation_ids,
                 message=draft.message,
-                repair_instruction=draft.repair_instruction,
+                required_outcome=draft.required_outcome,
             )
         )
     return findings
@@ -800,14 +784,12 @@ def _review_verdict_id(finalization_request_id: str) -> str:
 
 def _finding_id(
     verdict_id: str,
-    severity: ReviewFindingSeverity,
     index: int,
     draft: ReviewFindingDraft,
 ) -> str:
     identity = orjson.dumps(
         {
             "verdict_id": verdict_id,
-            "severity": severity.value,
             "index": index,
             "draft": draft.model_dump(mode="json"),
         },

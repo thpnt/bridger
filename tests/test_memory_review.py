@@ -31,7 +31,6 @@ from models.memory import FindingOrigin, TargetPhase, TargetTaskState
 from models.review import (
     ReviewerInstructions,
     ReviewFindingDraft,
-    ReviewFindingSeverity,
     ReviewVerdict,
     TargetReviewModelResult,
 )
@@ -77,23 +76,18 @@ def test_needs_work_persists_runtime_findings_and_routes_to_repair(
     result = TargetReviewModelResult(
         outcome=ReviewVerdict.NEEDS_WORK,
         summary="The architecture explanation is too shallow.",
-        blocking_findings=[
+        findings=[
             ReviewFindingDraft(
-                rubric_dimension="Runtime composition",
-                affected_scope="Main runtime flow",
-                affected_artifact_id=fixture.target_state.artifact_refs[0].artifact_id,
+                criterion_id="runtime-composition",
+                affected_artifact_refs=[
+                    fixture.target_state.artifact_refs[0].artifact_id
+                ],
                 message="The central runtime path is only named.",
-                repair_instruction="Explain the path from bootstrap to execution.",
+                required_outcome=(
+                    "The artifact explains the path from bootstrap to execution."
+                ),
             )
         ],
-        non_blocking_findings=[
-            ReviewFindingDraft(
-                rubric_dimension="Terminology",
-                message="One component name is inconsistent.",
-                repair_instruction="Use one component name consistently.",
-            )
-        ],
-        repair_priorities=["Explain the central runtime path."],
     )
 
     verdict = _run_review(fixture, _client(result))
@@ -101,23 +95,19 @@ def test_needs_work_persists_runtime_findings_and_routes_to_repair(
     assert verdict.verdict is ReviewVerdict.NEEDS_WORK
     assert fixture.target_state.phase is TargetPhase.REPAIR
     assert fixture.target_state.pending_finalization_request_ref is None
-    assert fixture.target_state.open_finding_refs == verdict.blocking_finding_refs
+    assert fixture.target_state.open_finding_refs == verdict.finding_refs
     assert all(
         reference.origin is FindingOrigin.TARGET_REVIEW
         for reference in fixture.target_state.open_finding_refs
     )
-    blocking = resolve_review_finding(
+    finding = resolve_review_finding(
         fixture.store,
         fixture.target_spec,
-        verdict.blocking_finding_refs[0].finding_id,
+        verdict.finding_refs[0].finding_id,
     )
-    non_blocking = resolve_review_finding(
-        fixture.store,
-        fixture.target_spec,
-        verdict.non_blocking_finding_refs[0].finding_id,
+    assert finding.required_outcome == (
+        "The artifact explains the path from bootstrap to execution."
     )
-    assert blocking.severity is ReviewFindingSeverity.BLOCKING
-    assert non_blocking.severity is ReviewFindingSeverity.NON_BLOCKING
     assert (
         resolve_review_verdict(
             fixture.store,
@@ -295,17 +285,16 @@ def test_multiple_review_rounds_preserve_history_and_replace_open_projection(
     result_a = TargetReviewModelResult(
         outcome=ReviewVerdict.NEEDS_WORK,
         summary="The runtime flow is missing.",
-        blocking_findings=[
+        findings=[
             ReviewFindingDraft(
-                rubric_dimension="Execution paths",
+                criterion_id="execution-paths",
                 message="The central execution path is missing.",
-                repair_instruction="Add the execution path.",
+                required_outcome="The artifact explains the central execution path.",
             )
         ],
-        repair_priorities=["Add the execution path."],
     )
     verdict_a = _run_review(fixture, _client(result_a))
-    historical_finding = verdict_a.blocking_finding_refs[0]
+    historical_finding = verdict_a.finding_refs[0]
 
     _reenter_working(fixture)
     TargetWorkspace(
@@ -358,7 +347,7 @@ def test_multiple_review_rounds_preserve_history_and_replace_open_projection(
         ).message
         == "The central execution path is missing."
     )
-    assert historical_finding.finding_id in (
+    assert historical_finding.finding_id not in (
         client_b.requests[0].messages[1].content or ""
     )
     assert fixture.target_state.usage.model_calls == 2

@@ -285,6 +285,51 @@ class FleetExecutionCoordinator:
                 fleet_state=self._fleet_state,
             )
 
+    async def reserve_fleet_model_call(
+        self,
+        fleet_budget: ExecutionBudget,
+        fleet_state: FleetRunState,
+        *,
+        input_tokens: int,
+        requested_output_tokens: int,
+    ) -> _ModelReservation:
+        """Reserve and charge one fleet-only model invocation."""
+        async with self._lock:
+            usage = fleet_state.usage
+            if usage.model_calls >= fleet_budget.max_model_calls:
+                raise _BudgetStop(_BudgetScope.FLEET)
+            if fleet_budget.max_input_tokens is not None and (
+                usage.input_tokens + self._reserved_input_tokens + input_tokens
+                > fleet_budget.max_input_tokens
+            ):
+                raise _BudgetStop(_BudgetScope.FLEET)
+            fleet_output = _remaining_optional(
+                fleet_budget.max_output_tokens,
+                usage.output_tokens + self._reserved_output_tokens,
+            )
+            if fleet_output is not None:
+                requested_output_tokens = min(requested_output_tokens, fleet_output)
+            if requested_output_tokens < 1:
+                raise _BudgetStop(_BudgetScope.FLEET)
+            attempt_id: str | None = None
+            if self._persistence is None:
+                usage.model_calls += 1
+            else:
+                bound = self._require_bound_fleet_state(usage)
+                attempt_id = self._persistence.prepare_fleet_provider_attempt(
+                    bound,
+                    input_tokens=input_tokens,
+                    output_tokens=requested_output_tokens,
+                )
+            self._reserved_input_tokens += input_tokens
+            self._reserved_output_tokens += requested_output_tokens
+            return _ModelReservation(
+                input_tokens,
+                requested_output_tokens,
+                attempt_id=attempt_id,
+                fleet_state=self._fleet_state,
+            )
+
     async def mark_model_invoked(self, reservation: _ModelReservation) -> None:
         """Persist the provider invocation boundary before network dispatch."""
         if self._persistence is not None and reservation.attempt_id is not None:
@@ -327,6 +372,72 @@ class FleetExecutionCoordinator:
                     input_tokens=usage.input_tokens or 0,
                     output_tokens=usage.output_tokens or 0,
                 )
+
+    async def finish_fleet_model_call(
+        self,
+        reservation: _ModelReservation,
+        fleet_state: FleetRunState,
+        usage: LLMUsage | None,
+    ) -> None:
+        """Settle a fleet-only model invocation and release its allowance."""
+        async with self._lock:
+            if not reservation.active:
+                return
+            reservation.active = False
+            self._reserved_input_tokens -= reservation.input_tokens
+            self._reserved_output_tokens -= reservation.output_tokens
+            if self._persistence is not None and reservation.attempt_id is not None:
+                if reservation.fleet_state is None:
+                    raise RuntimeError("durable fleet reservation lost authority")
+                self._persistence.settle_fleet_provider_attempt(
+                    reservation.fleet_state,
+                    reservation.attempt_id,
+                    input_tokens=(usage.input_tokens or 0) if usage else 0,
+                    output_tokens=(usage.output_tokens or 0) if usage else 0,
+                    failed=usage is None,
+                )
+            elif usage is not None:
+                fleet_state.usage.input_tokens += usage.input_tokens or 0
+                fleet_state.usage.output_tokens += usage.output_tokens or 0
+
+    async def charge_additional_fleet_model_attempts(
+        self,
+        fleet_state: FleetRunState,
+        attempts: int,
+    ) -> None:
+        """Charge fleet-only retries performed inside one logical request."""
+        if attempts < 0:
+            raise ValueError("additional provider attempts cannot be negative")
+        async with self._lock:
+            if (
+                fleet_state.usage.model_calls + attempts
+                > self._fleet_budget().max_model_calls
+            ):
+                raise _BudgetStop(_BudgetScope.FLEET)
+            if self._persistence is None:
+                fleet_state.usage.model_calls += attempts
+            else:
+                self._persistence.apply_fleet_usage_delta(
+                    fleet_state,
+                    {"model_calls": attempts},
+                )
+
+    async def charge_fleet_reported_tokens(
+        self,
+        fleet_state: FleetRunState,
+        usage: LLMUsage,
+    ) -> None:
+        """Charge tokens from a definitive fleet-review retry failure."""
+        delta = {
+            "input_tokens": usage.input_tokens or 0,
+            "output_tokens": usage.output_tokens or 0,
+        }
+        async with self._lock:
+            if self._persistence is None:
+                fleet_state.usage.input_tokens += delta["input_tokens"]
+                fleet_state.usage.output_tokens += delta["output_tokens"]
+            else:
+                self._persistence.apply_fleet_usage_delta(fleet_state, delta)
 
     async def charge_additional_model_attempts(
         self,
@@ -371,7 +482,7 @@ class FleetExecutionCoordinator:
 
     def record_retry(
         self,
-        target_task_id: str,
+        target_task_id: str | None,
         attempt: int,
         delay_seconds: float,
     ) -> None:
@@ -386,7 +497,7 @@ class FleetExecutionCoordinator:
 
     def record_retry_attempt_boundary(
         self,
-        target_task_id: str,
+        target_task_id: str | None,
         logical_attempt_id: str,
         provider_attempt: int,
         *,
@@ -512,6 +623,11 @@ class FleetExecutionCoordinator:
         if self._fleet_state is None or self._fleet_state.usage is not fleet_usage:
             raise ValueError("durable coordinator fleet state is not bound")
         return self._fleet_state
+
+    def _fleet_budget(self) -> ExecutionBudget:
+        if self._persistence is None:
+            raise RuntimeError("fleet retry budget requires persistence")
+        return self._persistence.fleet_spec.fleet_budget
 
     def _target_spec(self, target_task_id: str) -> TargetTaskSpec:
         if self._persistence is None:
