@@ -1,0 +1,19 @@
+schema_version: 1
+target_id: architecture
+target_contract_version: v1
+activation: {mode: always}
+depends_on: []
+canonical_question: How is the running software structurally composed and how does execution move through its major components?
+purpose: Explain composition, responsibilities, and central runtime paths.
+expected_abstraction: Repository-level runtime architecture.
+always_relevant_scope: [Components, composition, control flow, and execution paths.]
+conditional_scope: []
+exclusions: [Detailed domain rules and state-representation ownership.]
+boundary_guidance: [Describe runtime structure without duplicating specialist ownership.]
+investigation_expectations: [Trace central execution paths across component boundaries.]
+evidence_expectations: [Ground architectural claims in implementation evidence.]
+completion_obligations:
+  - obligation_id: runtime-composition
+    description: Resolve major components and the central execution paths between them.
+    applicability: always
+output_quality_expectations: [Prefer explanatory flow over component inventories.]

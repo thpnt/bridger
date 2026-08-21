@@ -1,0 +1,19 @@
+schema_version: 1
+target_id: design
+target_contract_version: v1
+activation: {mode: conditional, rule_id: frontend_stack_present_v1}
+depends_on: []
+canonical_question: What user-facing visual system, interaction model, and UX or design decisions does the implemented product embody?
+purpose: Explain the implemented visual and interaction system when a frontend stack exists.
+expected_abstraction: Repository-level design and UX semantics.
+always_relevant_scope: [Visual language, interaction behavior, accessibility, and design-system semantics.]
+conditional_scope: []
+exclusions: [Frontend software architecture.]
+boundary_guidance: [Own user-facing design rather than implementation architecture.]
+investigation_expectations: [Inspect implemented interface evidence and design-system surfaces.]
+evidence_expectations: [Ground design claims in implemented UI and tests where available.]
+completion_obligations:
+  - obligation_id: user-experience
+    description: Resolve the implemented visual and interaction system.
+    applicability: always
+output_quality_expectations: [Describe implemented UX rather than generic design advice.]

@@ -1,0 +1,19 @@
+schema_version: 1
+target_id: data-and-state
+target_contract_version: v1
+activation: {mode: always}
+depends_on: []
+canonical_question: What state exists, where does truth live, and how is it represented and changed technically?
+purpose: Explain technical state authority, persistence, mutation, and consistency.
+expected_abstraction: Repository-level technical state model.
+always_relevant_scope: [State authority, representation, lifecycle, and persistence.]
+conditional_scope: []
+exclusions: [Product meaning of state transitions.]
+boundary_guidance: [Own technical state details, not domain meaning.]
+investigation_expectations: [Trace state creation, mutation, persistence, and recovery paths.]
+evidence_expectations: [Ground state claims in source and schema evidence.]
+completion_obligations:
+  - obligation_id: state-authority
+    description: Resolve where important state lives and how it changes.
+    applicability: always
+output_quality_expectations: [Make state ownership and lifecycle explicit.]

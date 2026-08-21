@@ -1,0 +1,19 @@
+schema_version: 1
+target_id: conventions
+target_contract_version: v1
+activation: {mode: always}
+depends_on: []
+canonical_question: What recurring engineering rules and implementation patterns should contributors reproduce?
+purpose: Explain established, repeatable engineering conventions.
+expected_abstraction: Repository-level contributor conventions.
+always_relevant_scope: [Recurring patterns, style, and contributor rules.]
+conditional_scope: []
+exclusions: [One-off implementation choices and complete testing strategy.]
+boundary_guidance: [Describe recurring practice rather than isolated code details.]
+investigation_expectations: [Identify conventions evidenced by source and project configuration.]
+evidence_expectations: [Ground conventions in repeated implementation or enforcement.]
+completion_obligations:
+  - obligation_id: engineering-conventions
+    description: Resolve recurring engineering rules contributors should reproduce.
+    applicability: always
+output_quality_expectations: [Distinguish enforced conventions from local coincidences.]

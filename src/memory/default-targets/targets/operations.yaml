@@ -1,0 +1,19 @@
+schema_version: 1
+target_id: operations
+target_contract_version: v1
+activation: {mode: always}
+depends_on: []
+canonical_question: How does source become a configured, deployed, observable, operable runtime or release?
+purpose: Explain build, configuration, delivery, deployment, and operations.
+expected_abstraction: Repository-level operational lifecycle.
+always_relevant_scope: [Build, configuration, release, deployment, and observability.]
+conditional_scope: []
+exclusions: [Internal runtime component design.]
+boundary_guidance: [Own source-to-runtime and operational lifecycle details.]
+investigation_expectations: [Inspect scripts, configuration, and delivery surfaces.]
+evidence_expectations: [Ground operational claims in repository configuration and automation.]
+completion_obligations:
+  - obligation_id: operational-lifecycle
+    description: Resolve how the repository is built, configured, and operated.
+    applicability: always
+output_quality_expectations: [Make required configuration and operational paths explicit.]

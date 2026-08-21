@@ -1,0 +1,19 @@
+schema_version: 1
+target_id: repository
+target_contract_version: v1
+activation: {mode: always}
+depends_on: []
+canonical_question: What is this repository, what are its major areas, and where should someone look next?
+purpose: Provide the Repository Brain orientation layer.
+expected_abstraction: Shallow repository-level orientation.
+always_relevant_scope: [Repository purpose, major areas, and navigation entry points.]
+conditional_scope: []
+exclusions: [Detailed specialist explanations owned by other targets.]
+boundary_guidance: [Keep this target an index rather than a generic wiki.]
+investigation_expectations: [Use deterministic inventory and source evidence to orient future readers.]
+evidence_expectations: [Ground structural claims in the pinned repository revision.]
+completion_obligations:
+  - obligation_id: repository-orientation
+    description: Resolve the repository purpose, major areas, and useful entry points.
+    applicability: always
+output_quality_expectations: [Be concise, navigable, and repository-specific.]
