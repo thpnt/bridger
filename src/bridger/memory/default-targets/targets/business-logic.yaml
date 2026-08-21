@@ -1,0 +1,19 @@
+schema_version: 1
+target_id: business-logic
+target_contract_version: v1
+activation: {mode: always}
+depends_on: []
+canonical_question: What product or domain behavior does the software implement, and what semantic rules must remain true?
+purpose: Explain product meaning, rules, invariants, states, and transitions.
+expected_abstraction: Repository-level domain semantics.
+always_relevant_scope: [Product behavior and semantic rules.]
+conditional_scope: []
+exclusions: [Runtime component mechanics and technical state representation.]
+boundary_guidance: [Own domain meaning rather than implementation mechanics.]
+investigation_expectations: [Trace central product behavior through implementation evidence.]
+evidence_expectations: [Ground behavioral claims in source and relevant tests.]
+completion_obligations:
+  - obligation_id: domain-behavior
+    description: Resolve the repository's product behavior and important semantic rules.
+    applicability: always
+output_quality_expectations: [Explain rules and invariants with concrete repository evidence.]

@@ -1,0 +1,19 @@
+schema_version: 1
+target_id: interfaces-and-integrations
+target_contract_version: v1
+activation: {mode: always}
+depends_on: []
+canonical_question: What capabilities cross system boundaries, through what contracts, and how are those boundaries implemented?
+purpose: Explain external and internal system-boundary contracts.
+expected_abstraction: Repository-level boundary mechanics.
+always_relevant_scope: [Interfaces, integrations, contracts, and adapters.]
+conditional_scope: []
+exclusions: [Detailed product meaning and general runtime composition.]
+boundary_guidance: [Own boundary contracts and mechanics.]
+investigation_expectations: [Trace meaningful boundary crossings and failure behavior.]
+evidence_expectations: [Ground contract claims in source, configuration, and tests.]
+completion_obligations:
+  - obligation_id: boundary-contracts
+    description: Resolve meaningful interfaces and integration contracts.
+    applicability: always
+output_quality_expectations: [Identify contracts, adapters, and important failure semantics.]

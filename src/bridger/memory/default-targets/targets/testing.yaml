@@ -1,0 +1,19 @@
+schema_version: 1
+target_id: testing
+target_contract_version: v1
+activation: {mode: always}
+depends_on: []
+canonical_question: How does the repository establish correctness, and how should a contributor verify a change?
+purpose: Explain verification strategy and practical test surfaces.
+expected_abstraction: Repository-level verification strategy.
+always_relevant_scope: [Test architecture, validation commands, and correctness evidence.]
+conditional_scope: []
+exclusions: [Complete product behavior explained by business logic.]
+boundary_guidance: [Own verification strategy rather than all behavior under test.]
+investigation_expectations: [Inspect test organization and supported validation paths.]
+evidence_expectations: [Ground verification guidance in repository commands and tests.]
+completion_obligations:
+  - obligation_id: verification-strategy
+    description: Resolve how contributors should establish correctness for changes.
+    applicability: always
+output_quality_expectations: [Provide practical, repository-specific verification guidance.]
