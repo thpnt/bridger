@@ -16,7 +16,16 @@ from graph.lifecycle import (
     create_graph_snapshot,
     load_graph_snapshot_structural_state,
 )
-from llm.models import LLMMessage, LLMOperation, LLMRequest, LLMToolCall
+from llm.models import (
+    LLMCompactionRequest,
+    LLMMessage,
+    LLMOperation,
+    LLMPromptCacheConfig,
+    LLMReasoningConfig,
+    LLMRequest,
+    LLMToolCall,
+    LLMToolDefinition,
+)
 from llm.profiles import LLMProfile, RetryPolicy
 from llm.providers.openai import OpenAILLMClient
 from models.enrichment import (
@@ -544,36 +553,287 @@ def test_llm_client_keeps_text_and_structured_output_behavior() -> None:
     assert provider.requests[1]["text"]["format"]["type"] == "json_schema"
 
 
+def test_openai_continuation_exact_instructions_storage_and_compaction_mapping() -> (
+    None
+):
+    provider = _FakeOpenAI(
+        [
+            {
+                "id": "response-b",
+                "status": "completed",
+                "model": "test-model",
+                "output_text": "continued",
+                "output": [],
+            },
+            {
+                "id": "response-c",
+                "status": "completed",
+                "model": "test-model",
+                "output_text": "seeded",
+                "output": [],
+            },
+        ],
+        compaction_outcomes=[
+            {
+                "object": "response.compaction",
+                "output": [
+                    {
+                        "type": "compaction",
+                        "encrypted_content": "opaque-provider-state",
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 200,
+                    "output_tokens": 30,
+                    "total_tokens": 230,
+                },
+            }
+        ],
+    )
+    client = _openai_client(provider)
+    continued_request = LLMRequest(
+        operation=LLMOperation.MEMORY_AGENT_WORKER,
+        messages=[
+            LLMMessage.tool_result_message(
+                tool_call_id="call-a",
+                tool_name="search_repository",
+                result={"matches": []},
+            )
+        ],
+        instructions="exact control context",
+        continuation_ref="response-a",
+        store=True,
+        reasoning=LLMReasoningConfig(effort="xhigh", context="all_turns"),
+    )
+
+    continued = asyncio.run(client.generate(continued_request))
+    compacted = asyncio.run(
+        client.compact(
+            LLMCompactionRequest(
+                operation=LLMOperation.MEMORY_AGENT_WORKER,
+                messages=continued_request.messages,
+                instructions="latest exact control context",
+                continuation_ref=continued.response_id or "",
+            )
+        )
+    )
+    seeded = asyncio.run(
+        client.generate(
+            LLMRequest(
+                operation=LLMOperation.MEMORY_AGENT_WORKER,
+                messages=[LLMMessage.user("exact recent replay")],
+                instructions="post-compaction exact control context",
+                compacted_context=compacted.context,
+                store=True,
+            )
+        )
+    )
+
+    continued_payload = provider.requests[0]
+    assert continued_payload["instructions"] == "exact control context"
+    assert continued_payload["previous_response_id"] == "response-a"
+    assert continued_payload["store"] is True
+    assert continued_payload["reasoning"] == {
+        "effort": "xhigh",
+        "context": "all_turns",
+    }
+    assert [item["type"] for item in continued_payload["input"]] == [
+        "function_call_output"
+    ]
+    assert provider.compaction_requests[0] == {
+        "model": "test-model",
+        "input": continued_payload["input"],
+        "instructions": "latest exact control context",
+        "previous_response_id": "response-b",
+    }
+    assert compacted.context.provider == "openai"
+    assert compacted.usage.input_tokens == 200
+    seeded_payload = provider.requests[1]
+    assert "previous_response_id" not in seeded_payload
+    assert seeded_payload["input"][0]["type"] == "compaction"
+    assert seeded_payload["input"][1] == {
+        "role": "user",
+        "content": "exact recent replay",
+    }
+    assert seeded.response_id == "response-c"
+
+
+def test_openai_explicit_prompt_cache_mapping_and_usage_are_semantic_noops() -> None:
+    provider = _FakeOpenAI(
+        [
+            {
+                "id": "cold",
+                "status": "completed",
+                "model": "test-model",
+                "output_text": "same result",
+                "output": [],
+                "usage": {
+                    "input_tokens": 120,
+                    "output_tokens": 5,
+                    "total_tokens": 125,
+                    "input_tokens_details": {
+                        "cached_tokens": 0,
+                        "cache_write_tokens": 100,
+                    },
+                },
+            },
+            {
+                "id": "hit",
+                "status": "completed",
+                "model": "test-model",
+                "output_text": "same result",
+                "output": [],
+                "usage": {
+                    "input_tokens": 120,
+                    "output_tokens": 5,
+                    "total_tokens": 125,
+                    "input_tokens_details": {
+                        "cached_tokens": 100,
+                        "cache_write_tokens": 0,
+                    },
+                },
+            },
+        ]
+    )
+    client = _openai_client(provider, model="gpt-5.6-test")
+    request = LLMRequest(
+        operation=LLMOperation.MEMORY_AGENT_WORKER,
+        instructions="global-target-cycle-dynamic",
+        prompt_cache=LLMPromptCacheConfig(
+            key="a" * 64,
+            instruction_breakpoints=(6, 13, 19),
+        ),
+        tools=[
+            LLMToolDefinition(
+                name="lookup",
+                description="Look up one value.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "zeta": {"type": "string"},
+                        "alpha": {"type": "string"},
+                    },
+                },
+            )
+        ],
+    )
+
+    cold = asyncio.run(client.generate(request))
+    hit = asyncio.run(client.generate(request))
+
+    assert cold.text == hit.text == "same result"
+    assert cold.usage.cached_input_tokens == 0
+    assert cold.usage.cache_write_tokens == 100
+    assert hit.usage.cached_input_tokens == 100
+    assert hit.usage.cache_write_tokens == 0
+    payload = provider.requests[0]
+    assert "instructions" not in payload
+    assert payload["prompt_cache_key"] == "a" * 64
+    assert payload["prompt_cache_options"] == {"mode": "explicit"}
+    instruction = payload["input"][0]
+    assert instruction["role"] == "developer"
+    assert [part["text"] for part in instruction["content"]] == [
+        "global",
+        "-target",
+        "-cycle",
+        "-dynamic",
+    ]
+    assert all(
+        part["prompt_cache_breakpoint"] == {"mode": "explicit"}
+        for part in instruction["content"][:3]
+    )
+    assert "prompt_cache_breakpoint" not in instruction["content"][3]
+    parameters = payload["tools"][0]["parameters"]
+    assert list(parameters) == sorted(parameters)
+    assert list(parameters["properties"]) == ["alpha", "zeta"]
+
+
+def test_openai_unsupported_model_ignores_cache_intent_without_changing_request() -> (
+    None
+):
+    provider = _FakeOpenAI(
+        [
+            {
+                "id": "uncached",
+                "status": "completed",
+                "model": "test-model",
+                "output_text": "same result",
+                "output": [],
+            }
+        ]
+    )
+    client = _openai_client(provider)
+    request = LLMRequest(
+        operation=LLMOperation.MEMORY_AGENT_WORKER,
+        instructions="exact control context",
+        prompt_cache=LLMPromptCacheConfig(
+            key="b" * 64,
+            instruction_breakpoints=(5,),
+        ),
+    )
+
+    response = asyncio.run(client.generate(request))
+
+    assert response.text == "same result"
+    assert provider.requests[0]["instructions"] == request.instructions
+    assert provider.requests[0]["input"] == []
+    assert "prompt_cache_key" not in provider.requests[0]
+    assert "prompt_cache_options" not in provider.requests[0]
+
+
 class _StructuredAnswer(BaseModel):
     answer: str
 
 
 class _FakeResponses:
-    def __init__(self, outcomes: list[Mapping[str, Any]]) -> None:
+    def __init__(
+        self,
+        outcomes: list[Mapping[str, Any]],
+        compaction_outcomes: list[Mapping[str, Any]],
+    ) -> None:
         self._outcomes = list(outcomes)
+        self._compaction_outcomes = list(compaction_outcomes)
         self.requests: list[dict[str, Any]] = []
+        self.compaction_requests: list[dict[str, Any]] = []
 
     async def create(self, **payload: Any) -> Mapping[str, Any]:
         self.requests.append(payload)
         return self._outcomes.pop(0)
 
+    async def compact(self, **payload: Any) -> Mapping[str, Any]:
+        self.compaction_requests.append(payload)
+        return self._compaction_outcomes.pop(0)
+
 
 class _FakeOpenAI:
-    def __init__(self, outcomes: list[Mapping[str, Any]]) -> None:
-        self.responses = _FakeResponses(outcomes)
+    def __init__(
+        self,
+        outcomes: list[Mapping[str, Any]],
+        *,
+        compaction_outcomes: list[Mapping[str, Any]] | None = None,
+    ) -> None:
+        self.responses = _FakeResponses(outcomes, compaction_outcomes or [])
 
     @property
     def requests(self) -> list[dict[str, Any]]:
         return self.responses.requests
 
+    @property
+    def compaction_requests(self) -> list[dict[str, Any]]:
+        return self.responses.compaction_requests
 
-def _openai_client(provider: _FakeOpenAI) -> OpenAILLMClient:
+
+def _openai_client(
+    provider: _FakeOpenAI,
+    *,
+    model: str = "test-model",
+) -> OpenAILLMClient:
     return OpenAILLMClient(
         openai_client=provider,
         profile=LLMProfile(
             name="test",
             provider="openai",
-            model="test-model",
+            model=model,
             retry_policy=RetryPolicy(max_attempts=1),
         ),
     )

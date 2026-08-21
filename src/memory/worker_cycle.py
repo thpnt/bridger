@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -12,11 +13,17 @@ from pydantic import JsonValue
 from llm.client import LLMClient
 from llm.errors import LLMError
 from llm.models import (
+    LLMCompactedContext,
+    LLMCompactionRequest,
+    LLMCompactionResult,
     LLMMessage,
     LLMOperation,
+    LLMPromptCacheConfig,
+    LLMReasoningConfig,
     LLMRequest,
     LLMResponse,
     LLMToolCall,
+    LLMToolDefinition,
     LLMToolError,
     LLMToolResult,
     LLMUsage,
@@ -24,9 +31,13 @@ from llm.models import (
 from memory.context_window import ContextWindowManager
 from memory.durability import FleetRuntimeStore
 from memory.errors import WorkerCycleInvocationError, WorkerCyclePreflightError
-from memory.hydration import serialize_worker_context
+from memory.hydration import serialize_worker_context_sections
 from memory.provider_recovery import run_provider_with_retry
-from memory.worker_tools import FINALIZATION_TOOL_ID, WorkerToolRuntime
+from memory.worker_tools import (
+    FINALIZATION_TOOL_ID,
+    YIELD_CYCLE_TOOL_ID,
+    WorkerToolRuntime,
+)
 from models.hydration import WorkerContext, WorkerContextMode, WorkerProfile
 from models.memory import (
     ExecutionBudget,
@@ -42,13 +53,16 @@ from models.worker_cycle import EvidenceReference, OpenQuestion
 
 DEFAULT_TOOL_CONTEXT_SOFT_TOKENS = 16_000
 DEFAULT_TOOL_RESULT_MAX_BYTES = 32 * 1024
+DEFAULT_COMPACTION_TRIGGER_RATIO = 0.75
 PROTECTED_TOOL_BATCHES = 3
+_CONTROL_TOOL_IDS = {FINALIZATION_TOOL_ID, YIELD_CYCLE_TOOL_ID}
 
 
 class WorkerCycleOutcome(StrEnum):
     """Small non-persisted Stage 4 handoff result."""
 
     FINALIZATION_REQUESTED = "finalization-requested"
+    CYCLE_YIELDED = "cycle-yielded"
     TARGET_BUDGET_EXHAUSTED = "target-budget-exhausted"
     FLEET_BUDGET_STOP = "fleet-budget-stop"
     EXECUTION_INTERRUPTED = "execution-interrupted"
@@ -75,10 +89,13 @@ class WorkerRuntimeLimits:
 
     tool_context_soft_tokens: int = DEFAULT_TOOL_CONTEXT_SOFT_TOKENS
     tool_result_max_bytes: int = DEFAULT_TOOL_RESULT_MAX_BYTES
+    compaction_trigger_ratio: float = DEFAULT_COMPACTION_TRIGGER_RATIO
 
     def __post_init__(self) -> None:
         if self.tool_context_soft_tokens < 1 or self.tool_result_max_bytes < 1:
             raise ValueError("worker runtime limits must be positive")
+        if not 0 < self.compaction_trigger_ratio < 1:
+            raise ValueError("compaction_trigger_ratio must be between zero and one")
 
 
 @dataclass(slots=True)
@@ -600,6 +617,28 @@ class FleetExecutionCoordinator:
             self._reserved_tool_calls -= reservation.remaining
             reservation.remaining = 0
 
+    async def yield_cycle(
+        self,
+        target_spec: TargetTaskSpec,
+        target_state: TargetTaskState,
+    ) -> None:
+        """End one bounded cycle and return the admitted target to SCHEDULED."""
+        async with self._lock:
+            if target_state.phase is not TargetPhase.WORKING:
+                raise RuntimeError("yield_cycle requires a WORKING target")
+            target_state.phase = TargetPhase.SCHEDULED
+            if self._persistence is not None:
+                self._persistence.persist_target_state(
+                    target_spec,
+                    target_state,
+                    event_type="phase_transition",
+                    payload={
+                        "from_phase": TargetPhase.WORKING.value,
+                        "to_phase": TargetPhase.SCHEDULED.value,
+                        "reason": YIELD_CYCLE_TOOL_ID,
+                    },
+                )
+
     def record_tool_result(
         self,
         target_task_id: str,
@@ -681,6 +720,14 @@ class _RecentToolWorkingSet:
 
     def messages(self) -> list[LLMMessage]:
         return [message for batch in self._batches for message in batch.messages()]
+
+    def protected_messages(self) -> list[LLMMessage]:
+        """Return exact copies of only the protected most-recent tool batches."""
+        return [
+            message
+            for batch in self._batches[-PROTECTED_TOOL_BATCHES:]
+            for message in batch.messages()
+        ]
 
     def evict_one_for_context_pressure(self) -> bool:
         evictable_count = len(self._batches) - PROTECTED_TOOL_BATCHES
@@ -764,7 +811,14 @@ class WorkerRunner:
         self._coordinator = coordinator
         self._last_runtime_error: Exception | None = None
         self._limits = limits or WorkerRuntimeLimits()
-        self._canonical_base = serialize_worker_context(context)
+        self._canonical_sections = serialize_worker_context_sections(context)
+        self._canonical_base = "".join(self._canonical_sections)
+        self._tool_definitions = self._tools.definitions
+        self._prompt_cache_key = _worker_prompt_cache_key(
+            context,
+            target_spec,
+            self._tool_definitions,
+        )
         self._base_completion = {
             item.obligation_id: (
                 item.status,
@@ -783,6 +837,10 @@ class WorkerRunner:
             context_window_manager,
             soft_tokens=self._limits.tool_context_soft_tokens,
         )
+        self._continuation_ref: str | None = None
+        self._compacted_context: LLMCompactedContext | None = None
+        self._pending_messages: list[LLMMessage] = []
+        self._latest_usage = LLMUsage()
 
     @property
     def last_runtime_error(self) -> Exception | None:
@@ -790,6 +848,16 @@ class WorkerRunner:
         return self._last_runtime_error
 
     async def run(self) -> WorkerCycleOutcome:
+        """Execute one cycle and discard every provider-local trajectory on exit."""
+        try:
+            return await self._run_cycle()
+        finally:
+            self._continuation_ref = None
+            self._compacted_context = None
+            self._pending_messages = []
+            self._latest_usage = LLMUsage()
+
+    async def _run_cycle(self) -> WorkerCycleOutcome:
         """Preflight, charge, and execute one multi-turn hydrated worker cycle."""
         try:
             request, input_tokens, output_tokens = self._preflight()
@@ -873,14 +941,31 @@ class WorkerRunner:
                     target_state=self._target_state,
                     target_spec=self._target_spec,
                 )
+            self._latest_usage = response.usage
+            self._continuation_ref = response.response_id
+            if (
+                request.compacted_context is not None
+                and response.response_id is not None
+            ):
+                self._compacted_context = None
 
             calls = response.tool_calls
             if not calls:
                 return WorkerCycleOutcome.EXECUTION_INTERRUPTED
             if self._is_valid_finalization(calls):
                 return WorkerCycleOutcome.FINALIZATION_REQUESTED
+            if self._is_valid_yield(calls):
+                try:
+                    await self._coordinator.yield_cycle(
+                        self._target_spec,
+                        self._target_state,
+                    )
+                except Exception as error:
+                    self._last_runtime_error = error
+                    return WorkerCycleOutcome.EXECUTION_INTERRUPTED
+                return WorkerCycleOutcome.CYCLE_YIELDED
 
-            operational = [call for call in calls if call.name != FINALIZATION_TOOL_ID]
+            operational = [call for call in calls if call.name not in _CONTROL_TOOL_IDS]
             tool_reservation: _ToolReservation | None = None
             if operational:
                 try:
@@ -897,8 +982,8 @@ class WorkerRunner:
             results: list[LLMToolResult] = []
             try:
                 for call in calls:
-                    if call.name == FINALIZATION_TOOL_ID:
-                        results.append(_finalization_protocol_error(call))
+                    if call.name in _CONTROL_TOOL_IDS:
+                        results.append(_control_protocol_error(call, calls))
                         continue
                     if tool_reservation is None:
                         raise RuntimeError("operational call lacks batch reservation")
@@ -929,14 +1014,17 @@ class WorkerRunner:
             if tool_reservation is not None:
                 await self._coordinator.release_tool_batch(tool_reservation)
             self._working_set.add(_ToolBatch(calls=list(calls), results=results))
+            self._pending_messages = [result.as_message() for result in results]
 
             try:
+                await self._compact_if_needed()
                 request, input_tokens, output_tokens = self._next_request()
             except (_BudgetStop, _ContextCapacityStop) as error:
                 if isinstance(error, _BudgetStop):
                     return self._outcome_for_budget_stop(error.scope)
                 return WorkerCycleOutcome.EXECUTION_INTERRUPTED
-            except Exception:
+            except Exception as error:
+                self._last_runtime_error = error
                 return WorkerCycleOutcome.EXECUTION_INTERRUPTED
             try:
                 model_reservation = await self._coordinator.reserve_model_call(
@@ -1041,17 +1129,29 @@ class WorkerRunner:
 
     def _build_request(self, *, initial: bool) -> tuple[LLMRequest, int, int]:
         while True:
-            messages = [LLMMessage.system(self._canonical_base)]
-            if not initial:
-                messages.append(LLMMessage.user(self._execution_overlay()))
-            messages.extend(self._working_set.messages())
+            messages = self._request_messages(initial=initial)
+            instructions = self._exact_control_context(initial=initial)
             request = LLMRequest(
                 operation=LLMOperation.MEMORY_AGENT_WORKER,
                 profile=self._profile.profile_id,
                 messages=messages,
-                tools=self._tools.definitions,
+                instructions=instructions,
+                continuation_ref=None if initial else self._continuation_ref,
+                store=True,
+                compacted_context=None if initial else self._compacted_context,
+                prompt_cache=LLMPromptCacheConfig(
+                    key=self._prompt_cache_key,
+                    instruction_breakpoints=_instruction_breakpoints(
+                        self._canonical_sections
+                    ),
+                ),
+                tools=list(self._tool_definitions),
                 tool_choice="required",
                 max_output_tokens=max(1, self._profile.reserved_response_tokens),
+                reasoning=LLMReasoningConfig(
+                    effort=self._profile.reasoning_effort,
+                    context=self._profile.reasoning_context,
+                ),
                 metadata={
                     "run_id": self._fleet_spec.fleet_run_id,
                     "workflow_id": self._target_spec.target_task_id,
@@ -1072,6 +1172,117 @@ class WorkerRunner:
                 )
             if initial or not self._working_set.evict_one_for_context_pressure():
                 raise _ContextCapacityStop("minimum valid worker request cannot fit")
+
+    def _request_messages(self, *, initial: bool) -> list[LLMMessage]:
+        if initial:
+            return []
+        if self._compacted_context is not None:
+            return self._working_set.protected_messages()
+        if self._continuation_ref is not None:
+            return list(self._pending_messages)
+        return self._working_set.messages()
+
+    def _exact_control_context(self, *, initial: bool) -> str:
+        if initial:
+            return self._canonical_base
+        return f"{self._canonical_base}\n\n{self._execution_overlay()}\n"
+
+    async def _compact_if_needed(self) -> None:
+        continuation_ref = self._continuation_ref
+        latest_input = self._latest_usage.input_tokens
+        latest_output = self._latest_usage.output_tokens
+        if continuation_ref is None or latest_input is None or latest_output is None:
+            return
+        pending_tokens = self._manager.count_text(
+            _serialize_messages(self._pending_messages)
+        )
+        projected_context = (
+            latest_input
+            + latest_output
+            + pending_tokens
+            + self._profile.reserved_response_tokens
+        )
+        trigger = int(
+            self._profile.model_context_window_tokens
+            * self._limits.compaction_trigger_ratio
+        )
+        if projected_context <= trigger:
+            return
+
+        instructions = self._exact_control_context(initial=False)
+        compaction_request = LLMCompactionRequest(
+            operation=LLMOperation.MEMORY_AGENT_WORKER,
+            profile=self._profile.profile_id,
+            messages=list(self._pending_messages),
+            instructions=instructions,
+            continuation_ref=continuation_ref,
+            metadata={
+                "run_id": self._fleet_spec.fleet_run_id,
+                "workflow_id": self._target_spec.target_task_id,
+            },
+        )
+        local_input_tokens = self._manager.count_text(
+            _serialize_compaction_request(compaction_request)
+        )
+        input_tokens = max(
+            local_input_tokens,
+            latest_input + latest_output + pending_tokens,
+        )
+        output_tokens = self._maximum_output_tokens(input_tokens)
+        self._require_model_headroom(input_tokens, output_tokens)
+        reservation = await self._coordinator.reserve_model_call(
+            self._fleet_spec.fleet_budget,
+            self._fleet_state.usage,
+            self._target_spec.budget,
+            self._target_state.usage,
+            input_tokens=input_tokens,
+            requested_output_tokens=output_tokens,
+            target_state=self._target_state,
+            target_spec=self._target_spec,
+        )
+        result: LLMCompactionResult | None = None
+        try:
+            await self._coordinator.mark_model_invoked(reservation)
+            result = await self._client.compact(compaction_request)
+        except Exception as error:
+            failed_usage = getattr(error, "usage", None)
+            await self._coordinator.finish_model_call(
+                reservation,
+                self._target_state.usage,
+                self._fleet_state.usage,
+                failed_usage if isinstance(failed_usage, LLMUsage) else None,
+            )
+            attempt_count = getattr(error, "attempt_count", 1)
+            if isinstance(attempt_count, int) and attempt_count > 1:
+                await self._coordinator.charge_additional_model_attempts(
+                    self._target_state.usage,
+                    self._fleet_state.usage,
+                    attempt_count - 1,
+                    target_state=self._target_state,
+                    target_spec=self._target_spec,
+                )
+            raise
+        assert result is not None
+        await self._coordinator.finish_model_call(
+            reservation,
+            self._target_state.usage,
+            self._fleet_state.usage,
+            result.usage,
+        )
+        if result.retry_count:
+            await self._coordinator.charge_additional_model_attempts(
+                self._target_state.usage,
+                self._fleet_state.usage,
+                result.retry_count,
+                target_state=self._target_state,
+                target_spec=self._target_spec,
+            )
+        if result.context.provider != self._profile.provider:
+            raise RuntimeError(
+                "compacted context provider does not match worker provider"
+            )
+        self._compacted_context = result.context
+        self._continuation_ref = None
 
     def _maximum_output_tokens(self, input_tokens: int) -> int:
         maximum = self._profile.reserved_response_tokens
@@ -1253,6 +1464,14 @@ class WorkerRunner:
             and not calls[0].arguments
         )
 
+    @staticmethod
+    def _is_valid_yield(calls: list[LLMToolCall]) -> bool:
+        return (
+            len(calls) == 1
+            and calls[0].name == YIELD_CYCLE_TOOL_ID
+            and not calls[0].arguments
+        )
+
     def _outcome_for_budget_stop(
         self,
         scope: _BudgetScope,
@@ -1311,12 +1530,18 @@ def _apply_usage_delta(
         setattr(fleet_usage, field_name, getattr(fleet_usage, field_name) + amount)
 
 
-def _finalization_protocol_error(call: LLMToolCall) -> LLMToolResult:
+def _control_protocol_error(
+    call: LLMToolCall,
+    calls: list[LLMToolCall],
+) -> LLMToolResult:
+    control_name = call.name
     reason = (
-        "request_finalization must have no arguments"
+        f"{control_name} must have no arguments"
         if call.arguments
-        else "request_finalization must be the sole call in its response"
+        else f"{control_name} must be the sole call in its response"
     )
+    if {item.name for item in calls} >= _CONTROL_TOOL_IDS:
+        reason = "yield_cycle and request_finalization cannot be requested together"
     return LLMToolResult(
         call_id=call.id,
         name=call.name,
@@ -1374,11 +1599,49 @@ def _serialize_request(request: LLMRequest) -> str:
     ).decode()
 
 
+def _serialize_compaction_request(request: LLMCompactionRequest) -> str:
+    return orjson.dumps(
+        request.model_dump(mode="json"),
+        option=orjson.OPT_SORT_KEYS,
+    ).decode()
+
+
 def _serialize_messages(messages: list[LLMMessage]) -> str:
     return orjson.dumps(
         [message.model_dump(mode="json") for message in messages],
         option=orjson.OPT_SORT_KEYS,
     ).decode()
+
+
+def _instruction_breakpoints(sections: tuple[str, ...]) -> tuple[int, ...]:
+    offsets: list[int] = []
+    current = 0
+    for section in sections:
+        current += len(section)
+        offsets.append(current)
+    return tuple(offsets)
+
+
+def _worker_prompt_cache_key(
+    context: WorkerContext,
+    target_spec: TargetTaskSpec,
+    tools: list[LLMToolDefinition],
+) -> str:
+    identity = {
+        "schema_version": "bridger-memory-worker-prompt-cache-v1",
+        "worker_profile_id": context.worker_profile_id,
+        "target_id": target_spec.target_id,
+        "target_contract_version": target_spec.target_contract_version,
+        "source": context.source,
+        "permission_profile_id": context.permission_profile_id,
+        "tools": tools,
+    }
+    serialized = orjson.dumps(
+        identity,
+        option=orjson.OPT_SORT_KEYS,
+        default=_json_default,
+    )
+    return hashlib.sha256(serialized).hexdigest()
 
 
 def _json_default(value: object) -> object:

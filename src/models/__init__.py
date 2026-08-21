@@ -54,6 +54,8 @@ from models.hydration import (
     TargetContractView,
     WorkerContext,
     WorkerContextMode,
+    WorkerCycleFocus,
+    WorkerCycleFocusKind,
     WorkerInstructions,
     WorkerProfile,
 )
@@ -236,6 +238,8 @@ __all__ = [
     "ValidationVerdict",
     "WorkerContext",
     "WorkerContextMode",
+    "WorkerCycleFocus",
+    "WorkerCycleFocusKind",
     "WorkerInstructions",
     "WorkerProfile",
 ]

@@ -149,13 +149,22 @@ INITIALIZED
 → SCHEDULED
 → HYDRATING
 → WORKING
-→ FINALIZING
+→ SCHEDULED         (successful bounded-cycle yield; fresh Stage 3 hydration)
+→ HYDRATING
+→ WORKING
+→ FINALIZING        (standalone final-readiness request only)
 → VALIDATING
 → REVIEWING
 → ACCEPTED
 ```
 
 with `REPAIR` loops and explicit `BLOCKED / EXHAUSTED / FAILED / STOPPED` exits. This corresponds directly to the existing stage map and high-level termination design.  
+
+`WORKING → SCHEDULED` is the normal non-terminal cycle boundary. It preserves
+the admitted target and all authoritative progress, discards transient provider
+continuation/compaction state, and requires fresh deterministic Stage 3 hydration
+before another `WORKING` cycle. It does not enter finalization, validation,
+review, repair routing, or acceptance.
 
 `FINALIZING` is worth keeping even though it may be brief: it gives the runtime an explicit durable state between receiving the worker's finalization request and beginning validation.
 
@@ -967,5 +976,4 @@ That matches the central requirement that runtime state, product state, trace an
 | `CompletionItemState`   |         No | Runtime-controlled worker updates          | `TargetCompletionState`     | Resolution of one obligation   |
 
 ---
-
 

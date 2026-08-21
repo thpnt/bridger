@@ -2,15 +2,17 @@ import asyncio
 import copy
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import openai
 from pydantic import BaseModel, ValidationError
 
 from llm.errors import (
     LLMAuthenticationError,
+    LLMConfigurationError,
     LLMConnectionError,
     LLMContextLimitError,
     LLMError,
@@ -22,12 +24,16 @@ from llm.errors import (
     LLMTimeoutError,
 )
 from llm.models import (
+    LLMCompactedContext,
+    LLMCompactionRequest,
+    LLMCompactionResult,
     LLMMessage,
     LLMRequest,
     LLMResponse,
     LLMToolCall,
     LLMToolDefinition,
     LLMUsage,
+    dump_json_value,
 )
 from llm.profiles import LLMProfile
 from llm.retry import SleepCallable, run_with_retries
@@ -85,6 +91,11 @@ class OpenAILLMClient:
             raise
 
         normalized = response.with_retry_count(retry_count)
+        prompt_cache = (
+            request.prompt_cache
+            if _supports_explicit_prompt_caching(self._profile.model)
+            else None
+        )
         logger.info(
             "llm.generate.success",
             extra={
@@ -94,6 +105,17 @@ class OpenAILLMClient:
                 "profile": self._profile.name,
                 "latency_ms": normalized.latency_ms,
                 "input_tokens": normalized.usage.input_tokens,
+                "cached_input_tokens": normalized.usage.cached_input_tokens,
+                "cache_write_tokens": normalized.usage.cache_write_tokens,
+                "cache_hit_ratio": _cache_hit_ratio(normalized.usage),
+                "prompt_cache_key": (
+                    prompt_cache.key if prompt_cache is not None else None
+                ),
+                "prompt_cache_breakpoints": (
+                    len(prompt_cache.instruction_breakpoints)
+                    if prompt_cache is not None
+                    else 0
+                ),
                 "output_tokens": normalized.usage.output_tokens,
                 "retry_count": retry_count,
                 "structured_output": output_type.__name__ if output_type else None,
@@ -132,6 +154,62 @@ class OpenAILLMClient:
             latency_ms=latency_ms,
         )
 
+    async def compact(
+        self,
+        request: LLMCompactionRequest,
+    ) -> LLMCompactionResult:
+        """Compact one stored response chain into opaque provider output items."""
+
+        async def operation() -> LLMCompactionResult:
+            return await self._compact_once(request)
+
+        sleep = self._sleep if self._sleep is not None else _sleep
+        result, retry_count = await run_with_retries(
+            operation,
+            policy=self._profile.retry_policy,
+            sleep=sleep,
+        )
+        return result.model_copy(update={"retry_count": retry_count})
+
+    async def _compact_once(
+        self,
+        request: LLMCompactionRequest,
+    ) -> LLMCompactionResult:
+        started = self._clock()
+        try:
+            provider_response = await self._client.responses.compact(
+                **self._build_compaction_payload(request)
+            )
+        except (
+            openai.AuthenticationError,
+            openai.PermissionDeniedError,
+            openai.RateLimitError,
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+            openai.BadRequestError,
+            openai.APIStatusError,
+            openai.APIError,
+        ) as error:
+            raise self._map_openai_error(error, request) from error
+        logger.info(
+            "llm.compact.success",
+            extra={
+                "operation": request.operation.value,
+                "provider": self._profile.provider,
+                "model": self._profile.model,
+                "profile": self._profile.name,
+                "latency_ms": int((self._clock() - started) * 1000),
+            },
+        )
+        output = _get(provider_response, "output")
+        return LLMCompactionResult(
+            context=LLMCompactedContext(
+                provider=self._profile.provider,
+                payload=dump_json_value(output if output is not None else []),
+            ),
+            usage=_extract_usage(provider_response),
+        )
+
     def _build_payload(
         self,
         request: LLMRequest,
@@ -143,11 +221,45 @@ class OpenAILLMClient:
         if temperature is None:
             temperature = self._profile.temperature
 
+        input_items = _messages_to_openai(request.messages)
+        if request.compacted_context is not None:
+            compacted = request.compacted_context
+            if compacted.provider != self._profile.provider:
+                raise LLMConfigurationError(
+                    "compacted context provider does not match active provider"
+                )
+            if not isinstance(compacted.payload, list) or any(
+                not isinstance(item, dict) for item in compacted.payload
+            ):
+                raise LLMConfigurationError(
+                    "OpenAI compacted context payload must be an input-item list"
+                )
+            compacted_items = cast(list[dict[str, Any]], compacted.payload)
+            input_items = [*compacted_items, *input_items]
+
+        use_prompt_cache = request.prompt_cache is not None and (
+            _supports_explicit_prompt_caching(self._profile.model)
+        )
+        instruction_items: list[dict[str, Any]] = []
+        if use_prompt_cache:
+            instruction_items = _instructions_to_openai(request)
+            input_items = [*instruction_items, *input_items]
+
         payload: dict[str, Any] = {
             "model": self._profile.model,
-            "input": _messages_to_openai(request.messages),
-            "store": False,
+            "input": input_items,
+            "store": request.store,
         }
+        if request.instructions is not None and not use_prompt_cache:
+            payload["instructions"] = request.instructions
+        if use_prompt_cache:
+            assert request.prompt_cache is not None
+            payload["prompt_cache_key"] = request.prompt_cache.key
+            payload["prompt_cache_options"] = {
+                "mode": request.prompt_cache.mode,
+            }
+        if request.continuation_ref is not None:
+            payload["previous_response_id"] = request.continuation_ref
         if timeout_seconds is not None:
             payload["timeout"] = timeout_seconds
         if max_output_tokens is not None:
@@ -177,6 +289,21 @@ class OpenAILLMClient:
         }
         if metadata:
             payload["metadata"] = metadata
+        return payload
+
+    def _build_compaction_payload(
+        self,
+        request: LLMCompactionRequest,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self._profile.model,
+            "input": _messages_to_openai(request.messages),
+            "instructions": request.instructions,
+            "previous_response_id": request.continuation_ref,
+        }
+        timeout_seconds = request.timeout_seconds or self._profile.timeout_seconds
+        if timeout_seconds is not None:
+            payload["timeout"] = timeout_seconds
         return payload
 
     def _normalize_response(
@@ -350,7 +477,11 @@ class OpenAILLMClient:
             )
         return tool_calls
 
-    def _map_openai_error(self, error: Exception, request: LLMRequest) -> LLMError:
+    def _map_openai_error(
+        self,
+        error: Exception,
+        request: LLMRequest | LLMCompactionRequest,
+    ) -> LLMError:
         status_code = getattr(error, "status_code", None)
         code = _extract_error_code(error)
         detail = _extract_error_message(error)
@@ -446,6 +577,27 @@ def _messages_to_openai(messages: list[LLMMessage]) -> list[dict[str, Any]]:
     return items
 
 
+def _instructions_to_openai(request: LLMRequest) -> list[dict[str, Any]]:
+    instructions = request.instructions
+    prompt_cache = request.prompt_cache
+    if instructions is None or prompt_cache is None:
+        return []
+    content: list[dict[str, Any]] = []
+    start = 0
+    for end in prompt_cache.instruction_breakpoints:
+        content.append(
+            {
+                "type": "input_text",
+                "text": instructions[start:end],
+                "prompt_cache_breakpoint": {"mode": "explicit"},
+            }
+        )
+        start = end
+    if start < len(instructions):
+        content.append({"type": "input_text", "text": instructions[start:]})
+    return [{"type": "message", "role": "developer", "content": content}]
+
+
 def _message_to_openai_items(message: LLMMessage) -> list[dict[str, Any]]:
     if message.role in {"system", "user"}:
         return [{"role": message.role, "content": message.content}]
@@ -477,15 +629,14 @@ def _message_to_openai_items(message: LLMMessage) -> list[dict[str, Any]]:
 
 
 def _tool_to_openai(tool: LLMToolDefinition) -> dict[str, Any]:
+    parameters = (
+        _openai_strict_schema(tool.input_schema) if tool.strict else tool.input_schema
+    )
     return {
         "type": "function",
         "name": tool.name,
         "description": tool.description,
-        "parameters": (
-            _openai_strict_schema(tool.input_schema)
-            if tool.strict
-            else tool.input_schema
-        ),
+        "parameters": _canonicalize_json(parameters),
         "strict": tool.strict,
     }
 
@@ -527,8 +678,30 @@ def _extract_usage(provider_response: Any) -> LLMUsage:
         output_tokens=_get(usage, "output_tokens"),
         total_tokens=_get(usage, "total_tokens"),
         cached_input_tokens=_get(input_details, "cached_tokens"),
+        cache_write_tokens=_get(input_details, "cache_write_tokens"),
         reasoning_tokens=_get(output_details, "reasoning_tokens"),
     )
+
+
+def _cache_hit_ratio(usage: LLMUsage) -> float | None:
+    if not usage.input_tokens:
+        return None
+    return (usage.cached_input_tokens or 0) / usage.input_tokens
+
+
+def _supports_explicit_prompt_caching(model: str) -> bool:
+    match = re.match(r"^gpt-(\d+)\.(\d+)(?:$|-)", model.lower())
+    if match is None:
+        return False
+    return (int(match.group(1)), int(match.group(2))) >= (5, 6)
+
+
+def _canonicalize_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _canonicalize_json(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_canonicalize_json(item) for item in value]
+    return value
 
 
 def _extract_text(provider_response: Any) -> str | None:

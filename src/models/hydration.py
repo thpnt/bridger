@@ -23,6 +23,39 @@ class WorkerContextMode(StrEnum):
     REPAIR = "repair"
 
 
+class WorkerCycleFocusKind(StrEnum):
+    """Deterministic semantic objective for one hydrated worker cycle."""
+
+    OBLIGATION = "obligation"
+    REPAIR_FINDINGS = "repair-findings"
+    FINALIZATION_READINESS = "finalization-readiness"
+
+
+class WorkerCycleFocus(BaseModel):
+    """Transient projection of the authoritative work selected for this cycle."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: WorkerCycleFocusKind
+    obligation_id: str | None = Field(default=None, min_length=1)
+    finding_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_focus(self) -> WorkerCycleFocus:
+        """Keep the kind-specific focus payload exact and unambiguous."""
+        if self.kind is WorkerCycleFocusKind.OBLIGATION:
+            if self.obligation_id is None or self.finding_ids:
+                raise ValueError("obligation focus requires only obligation_id")
+        elif self.kind is WorkerCycleFocusKind.REPAIR_FINDINGS:
+            if self.obligation_id is not None or not self.finding_ids:
+                raise ValueError("repair focus requires only finding_ids")
+            if len(self.finding_ids) != len(set(self.finding_ids)):
+                raise ValueError("repair focus finding_ids must be unique")
+        elif self.obligation_id is not None or self.finding_ids:
+            raise ValueError("finalization-readiness focus has no identifiers")
+        return self
+
+
 class WorkerProfile(BaseModel):
     """Resolved immutable V0 worker and model context configuration."""
 
@@ -34,6 +67,10 @@ class WorkerProfile(BaseModel):
     tokenizer_encoding: str = Field(min_length=1)
     model_context_window_tokens: PositiveInt
     reserved_response_tokens: int = Field(ge=0)
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] = (
+        "xhigh"
+    )
+    reasoning_context: Literal["auto", "current_turn", "all_turns"] | None = "all_turns"
     initial_provider_input_hard_cap_tokens: int = Field(
         default=32_000,
         ge=1,
@@ -168,6 +205,7 @@ class WorkerContext(BaseModel):
     global_ownership_guidance: tuple[str, ...]
     target_worker_instructions: str = Field(min_length=1)
     target_contract: TargetContractView
+    cycle_focus: WorkerCycleFocus
     completion_obligations: tuple[CompletionObligationView, ...]
     repair_findings: tuple[RepairFinding, ...]
     working_summary: str | None = None
@@ -182,6 +220,27 @@ class WorkerContext(BaseModel):
             raise ValueError("initial worker context cannot include repair findings")
         if self.mode is WorkerContextMode.REPAIR and not self.repair_findings:
             raise ValueError("repair worker context requires repair findings")
+        if self.repair_findings:
+            expected_ids = tuple(item.finding_id for item in self.repair_findings)
+            if (
+                self.cycle_focus.kind is not WorkerCycleFocusKind.REPAIR_FINDINGS
+                or self.cycle_focus.finding_ids != expected_ids
+            ):
+                raise ValueError("repair cycle focus must match routed findings")
+            return self
+        unresolved = tuple(
+            item.obligation_id
+            for item in self.completion_obligations
+            if item.status is CompletionStatus.UNINVESTIGATED
+        )
+        if unresolved:
+            if (
+                self.cycle_focus.kind is not WorkerCycleFocusKind.OBLIGATION
+                or self.cycle_focus.obligation_id != unresolved[0]
+            ):
+                raise ValueError("normal cycle focus must select first unresolved item")
+        elif self.cycle_focus.kind is not WorkerCycleFocusKind.FINALIZATION_READINESS:
+            raise ValueError("resolved target requires finalization-readiness focus")
         return self
 
 
@@ -226,6 +285,8 @@ __all__ = [
     "TargetContractView",
     "WorkerContext",
     "WorkerContextMode",
+    "WorkerCycleFocus",
+    "WorkerCycleFocusKind",
     "WorkerInstructions",
     "WorkerProfile",
 ]

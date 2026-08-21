@@ -18,6 +18,7 @@ preflight first request
 HYDRATING → WORKING
 worker model/tool trajectory
         ↓
+        ├── worker yields bounded work → WORKING → SCHEDULED → fresh Stage 3
         ├── worker requests finalization → Stage 6
         ├── target execution budget prevents further work → EXHAUSTED
         └── runtime/context/provider interruption → Stage 5 boundary
@@ -27,7 +28,10 @@ Stage 4 owns:
 
 * `HYDRATING → WORKING` immediately before actual worker execution begins;
 * one bounded worker execution cycle;
+* enforcing the deterministic semantic focus selected by Stage 3;
 * provider request/conversation handling around the already-rendered Stage 3 context;
+* transient provider continuation and reasoning continuity within the cycle;
+* pressure-triggered compaction of only the transient provider trajectory;
 * the model/tool control loop;
 * concrete worker tool exposure and execution;
 * repository exploration through the existing `RepositoryNavigator`;
@@ -121,6 +125,12 @@ The active model conversation remains transient execution context and is never a
 
 One Stage 4 **cycle** is one hydrated worker execution, not one model turn.
 
+It is also one bounded semantic execution unit. A normal cycle receives one
+primary unresolved completion obligation selected deterministically by Stage 3.
+A repair cycle receives the complete currently routed repair finding set in
+persisted order. A final-readiness cycle receives the whole-target coherence
+check only after no obligation remains `UNINVESTIGATED`.
+
 A single cycle may contain many model/tool turns:
 
 ```text
@@ -159,6 +169,10 @@ max_repair_cycles
 
 bound how many worker executions may begin.
 
+One primary obligation does not mean exactly one obligation may change. The
+worker may preserve directly related discoveries, but must not deliberately
+advance through unrelated unresolved obligations in one cycle.
+
 ## 3.2 Cycle start
 
 Before actual execution begins, Stage 4 resolves:
@@ -192,19 +206,27 @@ WORKING
 
 A Stage 4 failure detected before the transition does not consume a cycle.
 
-## 3.3 Normal end
+## 3.3 Normal ends
 
-The only normal semantic end of the worker trajectory is:
+A bounded trajectory has two normal semantic ends:
 
 ```text
+yield_cycle()
+    → persist no new cycle object
+    → WORKING → SCHEDULED
+    → fresh Stage 3 hydration
+
 request_finalization()
+    → transfer the complete target to Stage 6
 ```
 
-That means only:
+`yield_cycle()` means the intended bounded work is complete, or useful durable
+progress has been preserved and a fresh cycle should continue. It never invokes
+finalization, validation, review, repair routing, or acceptance.
 
-> The worker believes the current candidate is ready to transfer to the finalization/evaluation path.
-
-It does not mean the target is complete, valid, reviewed, or accepted.
+`request_finalization()` means only that the worker believes the complete current
+candidate is ready for evaluation. It does not mean the target is complete,
+valid, reviewed, or accepted.
 
 Other trajectory exits are runtime outcomes such as:
 
@@ -236,6 +258,10 @@ while target is WORKING:
 
     inspect requested tool calls
 
+    if valid standalone yield request:
+        perform WORKING → SCHEDULED
+        stop Stage 4 without entering evaluation
+
     if valid standalone finalization request:
         stop Stage 4 and transfer control to Stage 6
 
@@ -262,12 +288,14 @@ lifecycle transitions
 completion authority
 ```
 
-No durable `WorkerRun`, `WorkerCycleResult`, or provider-conversation contract is introduced.
+No durable `WorkerRun`, `WorkerCycleResult`, `YieldRequest`, or
+provider-conversation contract is introduced.
 
 The Stage 4 runner may return a small internal control outcome such as:
 
 ```text
 FINALIZATION_REQUESTED
+CYCLE_YIELDED
 TARGET_BUDGET_EXHAUSTED
 FLEET_BUDGET_STOP
 EXECUTION_INTERRUPTED
@@ -331,7 +359,8 @@ No generic provider framework is introduced for V0.
 
 # 6. Provider conversation state
 
-Within one Stage 4 cycle, the runtime may retain immediate model/tool interaction state in process memory.
+Within one Stage 4 cycle, the runtime may retain immediate model/tool interaction
+and provider reasoning state in process memory.
 
 It is:
 
@@ -352,7 +381,16 @@ remote conversation persistence
 full historical transcript replay
 ```
 
-If an existing provider/client supports those mechanisms, they may be used as transport optimizations only when they do not become required for correctness or recovery.
+Provider-native continuation is nevertheless used inside the active cycle when
+supported. The generic `LLMRequest.continuation_ref` carries only a transient,
+provider-neutral handle. OpenAI maps it to `previous_response_id`, resends the
+exact current control context through `instructions` on every turn, enables
+request storage for the active chain, and configures GPT-5.6 worker reasoning as
+resolved by the worker profile (including `xhigh` / `all_turns`).
+
+The continuation reference is discarded on yield, finalization, interruption,
+recovery, or any other cycle boundary. It is never checkpointed or written to
+`TargetTaskState`.
 
 Normal worker responses use provider-native tool calling.
 
@@ -403,6 +441,12 @@ request finalization
 ```
 
 without the worker first observing whether the mutation succeeded.
+
+`yield_cycle()` is the sibling control and follows the same standalone/no-argument
+discipline. A response mixing an operational call with yield rejects yield but
+may execute valid operations. A response containing both control calls succeeds
+as neither control request. The worker must observe returned protocol/mutation
+results before ending the cycle.
 
 ---
 
@@ -941,17 +985,29 @@ The exact V0 limits are profile/runtime configuration, not new domain contracts.
 
 ---
 
-# 15. Finalization control
+# 15. Cycle controls
 
-Stage 4 exposes exactly one finalization affordance:
+Stage 4 always exposes two no-argument lifecycle controls:
 
 ```text
+yield_cycle()
 request_finalization()
 ```
 
-It takes no semantic arguments in V0.
+Each must be the sole tool call in its response and neither consumes the
+operational `tool_calls` budget.
 
-Stage 4 interprets it only as:
+Stage 4 interprets `yield_cycle()` as:
+
+```text
+stop issuing worker model/tool actions
+perform WORKING → SCHEDULED
+return CYCLE_YIELDED
+```
+
+It creates no yield artifact and invokes no evaluation stage.
+
+Stage 4 interprets `request_finalization()` only as:
 
 ```text
 stop issuing worker model/tool actions
@@ -974,7 +1030,8 @@ Those semantics remain Stage 6+ responsibility.
 
 The worker is allowed to request finalization even when it is mistaken about readiness. Downstream runtime validation remains the completion authority.
 
-`request_finalization()` is lifecycle control rather than an operational worker tool and therefore does not consume the `tool_calls` execution budget.
+`request_finalization()` remains the only worker control that transfers the
+complete target toward evaluation.
 
 ---
 
@@ -982,7 +1039,7 @@ The worker is allowed to request finalization even when it is mistaken about rea
 
 Stage 4 deliberately does **not** accumulate an unbounded provider transcript.
 
-Every subsequent model request is conceptually composed from:
+The effective Stage 4 context has four logical segments:
 
 ```text
 1. canonical Stage 3 base context
@@ -991,8 +1048,11 @@ Every subsequent model request is conceptually composed from:
 2. current Stage 4 execution-state overlay
    compact derived view of authoritative mutations since hydration
 
-3. recent tool-interaction working set
-   bounded transient model/tool context
+3. provider trajectory
+   transient reasoning, assistant calls, tool outputs and interaction state
+
+4. protected recent tool batches
+   bounded exact replay anchors
 ```
 
 This gives:
@@ -1004,9 +1064,18 @@ durable state
 recent tool results
     → immediate reasoning context
 
-old transcript
-    → not required
+provider trajectory
+    → transient within-cycle cognition only
 ```
+
+For OpenAI, the exact canonical base plus current overlay are supplied through
+`instructions` on every request. `previous_response_id` represents only the
+transient provider trajectory. Ordinary continued requests send only incremental
+tool outputs rather than replaying the whole transcript.
+
+The first two segments remain exact and are never replaced by compaction. Only
+the provider trajectory is lossy-compacted. The protected recent batches remain
+as a bounded exact replay anchor after compaction and a provider-neutral fallback.
 
 The Stage 3 32K hard cap remains specifically the **complete initial provider-input cap**.
 
@@ -1061,7 +1130,9 @@ Detailed artifact contents and detailed source evidence still remain on-demand t
 
 A tool result must remain available long enough for the worker to reason over it, but results must not accumulate indefinitely.
 
-V0 therefore uses a **bounded recent-tool working set**, not a one-turn result policy and not an infinite transcript.
+V0 therefore retains a **bounded recent-tool working set**, not a one-turn result
+policy and not an infinite transcript. On native-continuation paths it is no
+longer the sole representation of the active provider trajectory.
 
 ## 18.1 Tool batch
 
@@ -1152,9 +1223,10 @@ required response headroom
 
 Stage 4 does **not** silently discard mandatory base context or the protected recent working set.
 
-It stops the active trajectory with an active-context-capacity interruption and crosses into the Stage 5 recovery/reset boundary.
-
-V0 introduces no automatic summarization or compaction machinery inside Stage 4.
+When native provider trajectory pressure reaches the configured soft threshold,
+Stage 4 first compacts that transient trajectory. If the minimum valid request
+still cannot fit, or required compaction cannot run, the active trajectory is
+interrupted and crosses the existing Stage 5 recovery/reset boundary.
 
 ---
 
@@ -1195,7 +1267,8 @@ Stage 4 reuses the exact `ContextWindowManager` introduced in Stage 3.
 
 No second context-capacity authority is introduced.
 
-Before **every** provider model request, Stage 4 evaluates the complete effective request:
+Before the initial provider request, Stage 4 evaluates the complete locally known
+request:
 
 ```text
 canonical Stage 3 base
@@ -1215,18 +1288,46 @@ The manager determines whether the request fits the actual resolved model contex
 
 The output reservation uses the actual maximum output Stage 4 will allow for that call, not the model's theoretical maximum by default.
 
-Stage 4 first applies ordinary recent-tool eviction when context pressure exists.
+After stored continuation begins, local message serialization no longer exposes
+the complete reasoning trajectory. Provider-reported input/output usage becomes
+the primary pressure signal. Before the next normal inference, Stage 4 projects
+the latest effective context plus pending tool outputs and reserved response
+headroom against a runtime-owned soft threshold (initially approximately 75%).
+
+Stage 4 first applies ordinary recent-tool eviction where appropriate, then
+compacts the transient provider trajectory when continuation pressure requires it.
 
 It does not:
 
 ```text
 drop mandatory Stage 3 context
 silently drop current authoritative-state corrections
-summarize the active trajectory with another model
+replace exact control context with compacted provider output
 create a new context database
 ```
 
 If the minimum valid next request still cannot fit, execution is interrupted and Stage 5 owns any future reset/recovery policy.
+
+## 20.1 Provider compaction
+
+`LLMClient.compact()` receives exact current instructions, the latest transient
+continuation reference, and pending tool outputs needed to complete the latest
+tool batch. For OpenAI it maps to `responses.compact(...)` and returns opaque
+provider output items.
+
+After compaction, the old continuation chain is discarded. The next request
+starts a new chain with:
+
+```text
+exact canonical Stage 3 base
++ exact current execution overlay
++ opaque compacted provider trajectory
++ exact protected recent tool batches
+```
+
+The first post-compaction response ID begins the new continuation chain. Repeated
+compaction follows the same rule recursively. Neither compacted context nor a
+continuation reference crosses a cycle boundary.
 
 ---
 
@@ -1246,6 +1347,11 @@ Stage 4 only locks **when actual execution usage is charged**.
 | `tool_calls`    | `+1` immediately before every attempted operational worker-tool dispatch |
 | `input_tokens`  | add actual provider-reported input usage when reported                   |
 | `output_tokens` | add actual provider-reported output usage when reported                  |
+
+A native provider compaction is a model/provider invocation for these existing
+counters. Every compaction attempt consumes `model_calls`, retry attempts are
+charged individually, and provider-reported compaction input/output tokens are
+added at both target and fleet scope. There is no separate compaction budget.
 
 A cycle therefore may consume many:
 
@@ -1312,7 +1418,8 @@ unknown/disallowed tool identity
 
 Invalid actions are therefore not free attempts.
 
-`request_finalization()` is excluded because it is lifecycle control rather than operational tool work.
+`request_finalization()` and `yield_cycle()` are excluded because they are
+lifecycle controls rather than operational tool work.
 
 ---
 
@@ -1476,7 +1583,7 @@ Stage 4 preserves the existing separation between execution, semantic progress, 
 
 | Domain                                  | Stage 4 authority                           | Mutation path                                              |
 | --------------------------------------- | ------------------------------------------- | ---------------------------------------------------------- |
-| `TargetTaskState.phase`                 | Runtime only                                | `HYDRATING → WORKING`; target-budget `WORKING → EXHAUSTED` |
+| `TargetTaskState.phase`                 | Runtime only                                | `HYDRATING → WORKING`; yield `WORKING → SCHEDULED`; target-budget `WORKING → EXHAUSTED` |
 | `TargetTaskState.usage`                 | Runtime only                                | Stage 4 execution accounting                               |
 | `FleetRunState.usage`                   | Runtime only                                | same Stage 4 usage delta                                   |
 | `working_summary`                       | Worker-proposed, runtime-applied            | `update_progress`                                          |
@@ -1495,7 +1602,7 @@ Stage 4 preserves the existing separation between execution, semantic progress, 
 | `EvidenceReference`                     | Runtime creates immutable record            | `EvidenceRecorder`                                         |
 | `OpenQuestion`                          | Runtime creates immutable record            | progress updater                                           |
 | Repository/index/graph/enrichment state | Never                                       | read-only Layer 6 access                                   |
-| Active model conversation               | Transient only                              | Stage 4 runner                                             |
+| Active provider continuation/compaction | Transient only                              | Stage 4 runner; discarded at every cycle boundary          |
 | Trace/checkpoints                       | Not Stage 4 authority                       | Stage 5                                                    |
 
 The model proposes operations through tool calls. The runtime performs and validates every authoritative mutation.
@@ -1519,6 +1626,8 @@ workspace-boundary rejection
 invalid completion update
 unknown evidence reference
 mixed finalization + operational tool response
+mixed yield + operational tool response
+yield + finalization response
 ```
 
 For these cases:
@@ -1600,6 +1709,9 @@ CompletionItemState updated
 working summary updated
 question opened/resolved
 
+provider compaction attempted
+provider compacted context received
+cycle yield control received
 finalization control received
 budget prevented further action
 execution interrupted
@@ -1698,13 +1810,16 @@ open_finding_refs = []
 The worker then progressively:
 
 ```text
+works the deterministic current cycle focus
 orients through RepositoryNavigator
 retrieves bounded source evidence
 records durable EvidenceReference objects
 creates candidate Markdown
 updates completion obligations
 maintains working summary/questions as useful
-requests finalization when it believes the candidate is ready
+yields when authoritative target work remains
+requests finalization only from finalization-readiness focus when it believes
+the complete target contract is ready
 ```
 
 Repository/artifact/evidence detail is discovered through tools rather than preloaded into the initial context.
@@ -1722,13 +1837,15 @@ The Stage 3 repair context additionally contains the current routed findings.
 The worker may:
 
 ```text
+address the routed repair-finding set as the current cycle focus
 inspect additional repository evidence
 re-read existing candidate artifacts
 rewrite or reorganize candidate Markdown
 record additional evidence
 correct completion resolutions
 update continuation state
-request finalization again
+yield when additional target work remains
+request finalization again only when the complete target is ready
 ```
 
 The worker is not restricted to local patching. It may replace weak candidate structure when necessary.
@@ -1801,6 +1918,7 @@ new usage contract
 9. Multiple operational tool calls are executed sequentially in model-provided order.
 10. A multi-tool batch must fit the remaining applicable tool budget before any call in the batch executes.
 11. `request_finalization()` must be the sole call in its model response.
+11a. `yield_cycle()` must be the sole call in its model response, takes no arguments, and cannot be combined with finalization.
 12. Repository discovery uses the existing read-only `RepositoryNavigator` only.
 13. The worker cannot write outside `TargetTaskSpec.target_workspace`.
 14. Candidate Markdown mutation uses whole-file create/replace plus bounded line-range editing in V0.
@@ -1814,13 +1932,13 @@ new usage contract
 22. Runtime validation of completion updates is mechanical; semantic sufficiency remains downstream responsibility.
 23. `working_summary` is compact durable continuation state, not a transcript summary or target artifact.
 24. Open questions are immutable records whose current openness is represented by `open_question_refs`.
-25. Active Stage 4 context uses an immutable Stage 3 base + current execution-state overlay + bounded recent-tool working set.
+25. Active Stage 4 context separates exact Stage 3 control context, exact current authoritative state, transient provider trajectory, and bounded exact recent-tool replay.
 26. The execution-state overlay is transient and replaces itself rather than accumulating deltas.
 27. The 3 most recent tool batches are protected from ordinary eviction.
 28. Older tool results remain available opportunistically and are evicted only under working-set/context pressure.
 29. Tool results never accumulate without bound.
 30. Evicted tool-result placeholders are themselves bounded and eventually evictable.
-31. No LLM-based context summarizer/relevance classifier is introduced in Stage 4 V0.
+31. No LLM-based context summarizer/relevance classifier is introduced; native provider compaction may compact only the transient provider trajectory.
 32. Tool outputs are bounded at the tool boundary before entering model context.
 33. The existing `ContextWindowManager` is consulted before every model request.
 34. The Stage 3 32K limit applies to the complete initial provider request; later active context uses actual model capacity plus Stage 4 working-set controls.
@@ -1829,7 +1947,7 @@ new usage contract
 37. `repair_cycles` increments at the same boundary only for `REPAIR` mode.
 38. `model_calls` counts every actual provider invocation attempt.
 39. `tool_calls` counts every attempted operational tool dispatch, including controlled rejected calls.
-40. `request_finalization()` does not consume `tool_calls`.
+40. `request_finalization()` and `yield_cycle()` do not consume `tool_calls`.
 41. Provider-reported input/output tokens are charged to the existing usage counters when reported.
 42. Every usage delta is reflected consistently at target and fleet scope.
 43. Target and fleet hard budgets are checked before every new Stage 4 action.
@@ -1844,6 +1962,11 @@ new usage contract
 52. Stage 4 never decides that a target is complete or accepted.
 53. Initial and repair executions use the same worker loop and tool semantics.
 54. Repair consumes the same original remaining target budget and does not create a new target task.
+55. A successful yield performs `WORKING → SCHEDULED`, invokes no later evaluation stage, and requires fresh Stage 3 hydration.
+56. Provider continuation references and compacted provider state are cycle-local and never durable authority.
+57. OpenAI within-cycle continuation uses stored responses and `previous_response_id`; exact instructions are supplied on every request.
+58. Native compaction receives exact control instructions separately, replaces only transient provider trajectory, resets the old continuation chain, and replays the protected recent batches exactly.
+59. Compaction attempts and provider-reported usage use the existing model-call and token accounting at target and fleet scope.
 
 ---
 

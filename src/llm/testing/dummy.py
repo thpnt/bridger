@@ -4,7 +4,12 @@ from typing import TypeVar, cast
 from pydantic import BaseModel, ValidationError
 
 from llm.errors import LLMStructuredOutputError
-from llm.models import LLMRequest, LLMResponse
+from llm.models import (
+    LLMCompactionRequest,
+    LLMCompactionResult,
+    LLMRequest,
+    LLMResponse,
+)
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 
@@ -17,10 +22,15 @@ class DummyLLMClient:
     """Deterministic scripted LLM client for unit and orchestration tests."""
 
     def __init__(
-        self, outcomes: Sequence[LLMResponse[BaseModel] | BaseException]
+        self,
+        outcomes: Sequence[LLMResponse[BaseModel] | BaseException],
+        *,
+        compaction_outcomes: Sequence[LLMCompactionResult | BaseException] = (),
     ) -> None:
         self._outcomes = list(outcomes)
+        self._compaction_outcomes = list(compaction_outcomes)
         self.requests: list[LLMRequest] = []
+        self.compaction_requests: list[LLMCompactionRequest] = []
         self.output_types: list[type[BaseModel] | None] = []
 
     async def generate(
@@ -61,3 +71,15 @@ class DummyLLMClient:
                 outcome.model_copy(update={"structured_output": structured_output}),
             )
         return cast(LLMResponse[StructuredOutputT], outcome)
+
+    async def compact(self, request: LLMCompactionRequest) -> LLMCompactionResult:
+        """Return one scripted compaction result and record the exact request."""
+        self.compaction_requests.append(request)
+        if not self._compaction_outcomes:
+            raise DummyLLMExhaustedError(
+                "DummyLLMClient has no scripted compaction outcomes left"
+            )
+        outcome = self._compaction_outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome

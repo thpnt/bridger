@@ -178,8 +178,10 @@ Exhaustion raises `DummyLLMExhaustedError`.
 
 ## Privacy And Logging
 
-The OpenAI adapter sets `store=False` when creating Responses API calls. This
-disables response storage for the request; it is not a zero-retention guarantee.
+The OpenAI adapter honors the generic request's `store` value. It defaults to
+`False`; the Stage 4 memory-worker path enables it only for its active
+within-cycle continuation chain. Disabling response storage is not a
+zero-retention guarantee.
 
 Default logs include safe operational metadata: operation, provider, model,
 profile, latency, token usage, retry count, structured schema name, and tool-call
@@ -193,7 +195,9 @@ Arbitrary internal metadata is kept local.
 
 - OpenAI is the only production provider.
 - Streaming is not implemented.
-- Provider fallback, billing, cost calculation, prompt caching, and semantic
-  caching are out of scope.
+- Provider fallback, billing, cost calculation, and semantic caching are out of
+  scope. OpenAI prefix caching is implemented only when a request carries
+  explicit provider-neutral cache intent, currently the Stage 4 memory-worker
+  path.
 - The adapter returns tool calls but never executes tools.
 - Workflow-level repair retries for invalid structured output are not implemented.

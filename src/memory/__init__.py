@@ -96,6 +96,8 @@ from memory.worker_cycle import (
     WorkerRuntimeLimits,
 )
 from memory.worker_tools import (
+    FINALIZATION_TOOL_ID,
+    YIELD_CYCLE_TOOL_ID,
     CompletionStateUpdater,
     EvidenceRecorder,
     ProgressUpdater,
@@ -118,6 +120,7 @@ __all__ = [
     "FleetReviewError",
     "FleetReviewInvocationError",
     "FinalizationRequestError",
+    "FINALIZATION_TOOL_ID",
     "FleetExecutionCoordinator",
     "FleetRunLock",
     "FleetRuntimeStore",
@@ -142,6 +145,7 @@ __all__ = [
     "WorkerRunner",
     "WorkerRuntimeLimits",
     "WorkerToolRuntime",
+    "YIELD_CYCLE_TOOL_ID",
     "TargetWorkspace",
     "EvidenceRecorder",
     "CompletionStateUpdater",
