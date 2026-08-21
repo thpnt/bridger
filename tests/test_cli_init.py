@@ -7,15 +7,15 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
-import cli
-import init_pipeline
-from init_pipeline import (
+import bridger.cli as cli
+import bridger.init_pipeline as init_pipeline
+from bridger.init_pipeline import (
     InitMode,
     RepositoryBrainBuildError,
     RepositoryBrainBuildResult,
     resolve_init_configuration,
 )
-from repository_brain.harness import _budget_for
+from bridger.repository_brain.harness import _budget_for
 
 runner = CliRunner()
 
