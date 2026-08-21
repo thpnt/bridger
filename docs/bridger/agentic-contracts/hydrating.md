@@ -33,6 +33,7 @@ Stage 3 owns:
 * hydrating the complete candidate-artifact inventory;
 * validating referenced evidence state without eagerly hydrating evidence content;
 * hydrating currently open repair findings;
+* deterministically selecting the current bounded cycle focus;
 * deriving remaining target budget;
 * resolving the allowed worker tool identities;
 * enforcing the hard initial provider-input cap;
@@ -148,6 +149,8 @@ Stage 3 introduces:
 ```text
 WorkerContext               transient contract
 WorkerContextMode           transient vocabulary
+WorkerCycleFocus            transient deterministic projection
+WorkerCycleFocusKind        transient vocabulary
 ContextWindowManager        runtime service
 ```
 
@@ -199,6 +202,7 @@ WorkerContext
 │   └── target contract view
 │
 ├── semantic progress
+│   ├── deterministic current cycle focus
 │   └── completion obligations + current state
 │
 ├── continuation state
@@ -233,6 +237,35 @@ Normal execution does not persist it.
 The worker cannot mutate it.
 
 Changes made during Stage 4 affect the real durable authorities and are reflected only in a later reconstruction.
+
+`WorkerCycleFocus` is also transient and is never persisted separately. It is
+reconstructed from the target definition, completion state, and routed finding
+state on every hydration.
+
+## 4.3 Deterministic cycle focus
+
+Every hydrated execution receives exactly one current cycle focus:
+
+```text
+repair findings exist
+    → REPAIR_FINDINGS in persisted finding order
+
+otherwise first UNINVESTIGATED obligation
+in TargetDefinition order exists
+    → OBLIGATION(first unresolved obligation)
+
+otherwise
+    → FINALIZATION_READINESS
+```
+
+Normal cycles have one primary unresolved obligation. The complete target and
+all completion states remain visible, and directly related discoveries may
+resolve additional obligations. Repair cycles retain the complete currently
+routed finding set so `max_repair_cycles` semantics do not change. Finalization
+readiness is a deliberate whole-target coherence check after no obligation
+remains `UNINVESTIGATED`.
+
+The model never selects or ranks the next focus.
 
 ---
 
@@ -586,7 +619,9 @@ provider conversation IDs
 provider thread IDs
 ```
 
-Within one bounded Stage 4 worker execution, immediate model/tool interaction may naturally accumulate in the active provider context.
+Within one bounded Stage 4 worker execution, immediate model/tool interaction
+and provider reasoning state may remain available through a transient native
+continuation mechanism.
 
 Across worker executions, continuity is reconstructed from:
 
@@ -600,6 +635,9 @@ repair findings
 ```
 
 Recovery must therefore never depend on provider conversation state.
+
+Provider continuation references and compacted provider context are discarded
+at every worker-cycle boundary.
 
 ---
 
@@ -966,26 +1004,33 @@ Canonical order:
 ```text
 1. shared worker instructions
 
-2. fleet/source-stable context
+2. stable worker profile and tool surface
+   - worker profile identity
+   - permission profile identity
+   - allowed tool identities
+
+3. fleet/source-stable context
    - source binding
    - global cross-target ownership guidance
 
-3. target-stable context
+4. target-stable context
    - target-specific worker instructions
    - immutable target contract
 
-4. execution mode
+5. execution mode
 
-5. completion obligations + current states
+6. current cycle objective
 
-6. repair findings                  # REPAIR only
+7. completion obligations + current states
 
-7. working summary
-8. open questions
+8. repair findings                  # REPAIR only
 
-9. remaining target budget
+9. working summary
+10. open questions
 
-10. complete candidate-artifact inventory
+11. remaining target budget
+
+12. complete candidate-artifact inventory
 ```
 
 Stable sections must not contain unnecessary cycle-specific data such as:
@@ -1074,14 +1119,15 @@ provider conversation state
 8. resolve open findings
 9. validate referenced evidence state
 10. derive context mode
-11. derive remaining target budget
-12. derive the maximum WorkerContext allowance under the 32K complete-request hard cap
-13. construct the mandatory WorkerContext
-14. serialize/count the complete initial provider input as accurately as the V0 token-counting policy permits
-15. fail if the complete initial provider input exceeds 32K
-16. produce immutable WorkerContext
-17. optionally write debug snapshot
-18. return WorkerContext
+11. deterministically derive current cycle focus
+12. derive remaining target budget
+13. derive the maximum WorkerContext allowance under the 32K complete-request hard cap
+14. construct the mandatory WorkerContext
+15. serialize/count the complete initial provider input as accurately as the V0 token-counting policy permits
+16. fail if the complete initial provider input exceeds 32K
+17. produce immutable WorkerContext
+18. optionally write debug snapshot
+19. return WorkerContext
 ```
 
 Compilation requires no LLM call.
@@ -1313,6 +1359,9 @@ complete target semantic contract
 all completion obligations:
     uninvestigated
 
+cycle focus:
+    first obligation in target-definition order
+
 no prior candidate artifacts
 no prior evidence
 no findings
@@ -1342,6 +1391,9 @@ all completion obligations + current resolutions
 
 all open repair findings
 
+cycle focus:
+    complete routed finding set in persisted order
+
 working summary
 open questions
 
@@ -1360,7 +1412,7 @@ rewrite artifacts
 split/merge documents
 reorganize target-local output
 update completion state
-request finalization again
+yield for fresh hydration or request finalization again when fully ready
 ```
 
 Fleet-reconciliation reopening uses this same mechanism.
@@ -1392,6 +1444,7 @@ The following are derived:
 ```text
 WorkerContext
 WorkerContextMode
+WorkerCycleFocus
 remaining-budget view
 maximum WorkerContext token allowance
 serialized model-facing context
@@ -1441,6 +1494,10 @@ Debug snapshots do not alter this rule.
 29. No provider conversation/thread ID is required for correctness or recovery.
 30. No new persisted context authority is introduced.
 31. Target workers remain isolated from sibling execution histories.
+32. Normal cycles focus the first `UNINVESTIGATED` obligation in target-definition order.
+33. Repair cycles focus the complete routed finding set in persisted order.
+34. When no obligation remains `UNINVESTIGATED`, hydration selects `FINALIZATION_READINESS`.
+35. Cycle focus is transient, deterministic, reconstructable and never separately persisted.
 
 ---
 
@@ -1456,14 +1513,19 @@ model/tool loop
 concrete worker tool schemas
 tool execution behavior
 tool-result accumulation policy
-context-reset/compaction behavior
+provider-specific representation of continuation and compaction payloads
 completion-update operations
 evidence-recording operations
 workspace-write operations
+cycle-yield tool
 finalization tool
 ```
 
 Stage 4 must reuse `ContextWindowManager` to monitor effective active context before each model request.
+
+Stage 4 may preserve provider-native reasoning continuity and compact only its
+transient provider trajectory. Exact canonical hydration and the current
+authoritative execution overlay remain outside lossy compaction.
 
 ### Stage 5
 

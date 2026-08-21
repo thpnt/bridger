@@ -183,8 +183,40 @@ class LLMToolDefinition(BaseModel):
 class LLMReasoningConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    effort: Literal["minimal", "low", "medium", "high"] | None = None
+    effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None = None
+    context: Literal["auto", "current_turn", "all_turns"] | None = None
     summary: Literal["auto", "concise", "detailed"] | None = None
+
+
+class LLMCompactedContext(BaseModel):
+    """Opaque provider-owned transient trajectory returned by compaction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str = Field(min_length=1)
+    payload: JsonValue
+
+
+class LLMPromptCacheConfig(BaseModel):
+    """Provider-neutral prompt-prefix cache intent for exact instructions."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    key: str = Field(min_length=1, max_length=64)
+    mode: Literal["explicit"] = "explicit"
+    instruction_breakpoints: tuple[int, ...]
+
+    @field_validator("instruction_breakpoints")
+    @classmethod
+    def validate_breakpoints(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        """Require positive, strictly increasing instruction offsets."""
+        if not value:
+            raise ValueError("prompt cache requires at least one breakpoint")
+        if any(offset < 1 for offset in value):
+            raise ValueError("prompt cache breakpoints must be positive")
+        if tuple(sorted(set(value))) != value:
+            raise ValueError("prompt cache breakpoints must be strictly increasing")
+        return value
 
 
 class LLMRequest(BaseModel):
@@ -192,13 +224,51 @@ class LLMRequest(BaseModel):
 
     operation: LLMOperation
     profile: str = Field(default="balanced", min_length=1)
-    messages: list[LLMMessage] = Field(min_length=1)
+    messages: list[LLMMessage] = Field(default_factory=list)
+    instructions: str | None = Field(default=None, min_length=1)
+    continuation_ref: str | None = Field(default=None, min_length=1)
+    store: bool = False
+    compacted_context: LLMCompactedContext | None = None
+    prompt_cache: LLMPromptCacheConfig | None = None
     tools: list[LLMToolDefinition] = Field(default_factory=list)
     tool_choice: str | None = None
     max_output_tokens: int | None = Field(default=None, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0)
     temperature: float | None = Field(default=None, ge=0, le=2)
     reasoning: LLMReasoningConfig | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata(cls, value: dict[str, str]) -> dict[str, str]:
+        for key, item in value.items():
+            if len(key) > 64 or len(item) > 512:
+                raise ValueError("metadata keys and values exceed provider limits")
+        return value
+
+    @model_validator(mode="after")
+    def validate_prompt_cache(self) -> "LLMRequest":
+        """Keep cache boundaries within the exact instruction surface."""
+        if self.prompt_cache is None:
+            return self
+        if self.instructions is None:
+            raise ValueError("prompt cache requires exact instructions")
+        if self.prompt_cache.instruction_breakpoints[-1] > len(self.instructions):
+            raise ValueError("prompt cache breakpoint exceeds exact instructions")
+        return self
+
+
+class LLMCompactionRequest(BaseModel):
+    """Provider-neutral request to compact one active transient trajectory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation: LLMOperation
+    profile: str = Field(default="balanced", min_length=1)
+    messages: list[LLMMessage] = Field(default_factory=list)
+    instructions: str = Field(min_length=1)
+    continuation_ref: str = Field(min_length=1)
+    timeout_seconds: float | None = Field(default=None, gt=0)
     metadata: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("metadata")
@@ -217,6 +287,7 @@ class LLMUsage(BaseModel):
     output_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
     cached_input_tokens: int | None = Field(default=None, ge=0)
+    cache_write_tokens: int | None = Field(default=None, ge=0)
     reasoning_tokens: int | None = Field(default=None, ge=0)
 
 
@@ -255,6 +326,16 @@ class LLMResponse(BaseModel, Generic[StructuredOutputT]):
 
     def with_retry_count(self, retry_count: int) -> "LLMResponse[StructuredOutputT]":
         return self.model_copy(update={"retry_count": retry_count})
+
+
+class LLMCompactionResult(BaseModel):
+    """Opaque compacted provider context plus normal model-execution usage."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    context: LLMCompactedContext
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+    retry_count: int = Field(default=0, ge=0)
 
 
 def dump_json_value(value: Any) -> JsonValue:

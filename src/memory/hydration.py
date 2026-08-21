@@ -33,11 +33,14 @@ from models.hydration import (
     TargetContractView,
     WorkerContext,
     WorkerContextMode,
+    WorkerCycleFocus,
+    WorkerCycleFocusKind,
     WorkerInstructions,
     WorkerProfile,
 )
 from models.memory import (
     CandidateArtifactRef,
+    CompletionStatus,
     FindingOrigin,
     MemoryFleetSpec,
     MemoryTargetCatalog,
@@ -500,8 +503,27 @@ def compile_worker_context(
 
 def serialize_worker_context(context: WorkerContext) -> str:
     """Serialize WorkerContext deterministically with stable sections first."""
-    sections = [
+    return "".join(serialize_worker_context_sections(context))
+
+
+def serialize_worker_context_sections(
+    context: WorkerContext,
+) -> tuple[str, str, str]:
+    """Render global-, target-, and cycle-stable canonical context sections."""
+    global_sections = [
         _section("Shared worker instructions", context.shared_worker_instructions),
+        _section(
+            "Worker profile and tool surface",
+            _canonical_json(
+                {
+                    "worker_profile_id": context.worker_profile_id,
+                    "permission_profile_id": context.permission_profile_id,
+                    "allowed_tool_ids": context.allowed_tool_ids,
+                }
+            ),
+        ),
+    ]
+    target_sections = [
         _section(
             "Source binding and global ownership guidance",
             _canonical_json(
@@ -517,16 +539,15 @@ def serialize_worker_context(context: WorkerContext) -> str:
             + "\n\n"
             + _canonical_json(context.target_contract),
         ),
+    ]
+    cycle_sections = [
         _section(
-            "Execution mode and permissions",
-            _canonical_json(
-                {
-                    "mode": context.mode,
-                    "worker_profile_id": context.worker_profile_id,
-                    "permission_profile_id": context.permission_profile_id,
-                    "allowed_tool_ids": context.allowed_tool_ids,
-                }
-            ),
+            "Execution mode",
+            _canonical_json({"mode": context.mode}),
+        ),
+        _section(
+            "Current cycle objective",
+            _serialize_cycle_focus(context.cycle_focus),
         ),
         _section(
             "Completion obligations and current states",
@@ -534,12 +555,12 @@ def serialize_worker_context(context: WorkerContext) -> str:
         ),
     ]
     if context.mode is WorkerContextMode.REPAIR:
-        sections.append(
+        cycle_sections.append(
             _section("Open repair findings", _canonical_json(context.repair_findings))
         )
     if context.working_summary is not None:
-        sections.append(_section("Working summary", context.working_summary))
-    sections.extend(
+        cycle_sections.append(_section("Working summary", context.working_summary))
+    cycle_sections.extend(
         (
             _section("Open questions", _canonical_json(context.open_questions)),
             _section(
@@ -552,7 +573,11 @@ def serialize_worker_context(context: WorkerContext) -> str:
             ),
         )
     )
-    return "\n\n".join(sections) + "\n"
+    return (
+        "\n\n".join(global_sections) + "\n\n",
+        "\n\n".join(target_sections) + "\n\n",
+        "\n\n".join(cycle_sections) + "\n",
+    )
 
 
 def _validate_invocation(
@@ -654,6 +679,10 @@ def _compile_hydrating_context(
         if target_state.open_finding_refs
         else WorkerContextMode.INITIAL
     )
+    cycle_focus = _select_cycle_focus(
+        completion_obligations,
+        repair_findings,
+    )
     context = WorkerContext(
         target_task_id=target_spec.target_task_id,
         mode=mode,
@@ -665,6 +694,7 @@ def _compile_hydrating_context(
         global_ownership_guidance=tuple(catalog.cross_target_ownership_rules),
         target_worker_instructions=instructions.target_specific,
         target_contract=_project_target_contract(definition),
+        cycle_focus=cycle_focus,
         completion_obligations=completion_obligations,
         repair_findings=repair_findings,
         working_summary=target_state.working_summary,
@@ -683,6 +713,57 @@ def _compile_hydrating_context(
             "complete mandatory request exceeds the model context window"
         )
     return context, serialized, diagnostics
+
+
+def _select_cycle_focus(
+    completion_obligations: tuple[CompletionObligationView, ...],
+    repair_findings: tuple[RepairFinding, ...],
+) -> WorkerCycleFocus:
+    """Select one deterministic focus from the already-projected authorities."""
+    if repair_findings:
+        return WorkerCycleFocus(
+            kind=WorkerCycleFocusKind.REPAIR_FINDINGS,
+            finding_ids=tuple(finding.finding_id for finding in repair_findings),
+        )
+    for obligation in completion_obligations:
+        if obligation.status is CompletionStatus.UNINVESTIGATED:
+            return WorkerCycleFocus(
+                kind=WorkerCycleFocusKind.OBLIGATION,
+                obligation_id=obligation.obligation_id,
+            )
+    return WorkerCycleFocus(kind=WorkerCycleFocusKind.FINALIZATION_READINESS)
+
+
+def _serialize_cycle_focus(focus: WorkerCycleFocus) -> str:
+    """Render the harness-owned bounded-cycle instruction for the worker."""
+    if focus.kind is WorkerCycleFocusKind.OBLIGATION:
+        directive = (
+            f"obligation_id: {focus.obligation_id}\n\n"
+            "Your primary responsibility during this cycle is to investigate and "
+            "resolve this obligation.\n\n"
+            "Keep the complete target in mind, but do not deliberately move on to "
+            "unrelated unresolved obligations. If the same evidence directly "
+            "resolves closely related obligations, you may update them too."
+        )
+    elif focus.kind is WorkerCycleFocusKind.REPAIR_FINDINGS:
+        directive = (
+            "finding_ids:\n"
+            + "\n".join(f"- {finding_id}" for finding_id in focus.finding_ids)
+            + "\n\nResolve the currently routed repair finding set in persisted order."
+        )
+    else:
+        directive = (
+            "Inspect the current target as a whole, make any necessary final "
+            "coherence or organization fixes, verify completion state, and request "
+            "finalization when the complete target is ready."
+        )
+    return (
+        f"kind: {focus.kind.value}\n"
+        f"{directive}\n\n"
+        "Once this cycle's intended work is complete:\n\n"
+        "- use yield_cycle if the target still requires work;\n"
+        "- use request_finalization only if the complete target is ready."
+    )
 
 
 def _validate_models(

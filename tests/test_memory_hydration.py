@@ -27,6 +27,7 @@ from models.hydration import (
     PermissionProfile,
     WorkerContext,
     WorkerContextMode,
+    WorkerCycleFocusKind,
     WorkerInstructions,
     WorkerProfile,
 )
@@ -220,6 +221,8 @@ def test_repair_hydration_uses_same_context_architecture_and_all_findings() -> N
     context = fixture.compile()
 
     assert context.mode is WorkerContextMode.REPAIR
+    assert context.cycle_focus.kind is WorkerCycleFocusKind.REPAIR_FINDINGS
+    assert context.cycle_focus.finding_ids == ("finding-review", "finding-fleet")
     assert [finding.finding_id for finding in context.repair_findings] == [
         "finding-review",
         "finding-fleet",
@@ -228,6 +231,46 @@ def test_repair_hydration_uses_same_context_architecture_and_all_findings() -> N
     assert context.working_summary == "Continue from the accepted structure."
     assert context.target_task_id == fixture.target_spec.target_task_id
     assert fixture.target_state.phase is TargetPhase.HYDRATING
+
+
+def test_cycle_focus_is_deterministic_across_fresh_hydration() -> None:
+    fixture = _fixture()
+    fixture.completion_state.items[0].status = CompletionStatus.UNINVESTIGATED
+    fixture.completion_state.items[0].resolution_note = None
+
+    first = fixture.compile()
+
+    assert first.cycle_focus.kind is WorkerCycleFocusKind.OBLIGATION
+    assert first.cycle_focus.obligation_id == "second-contract-item"
+    assert len(first.completion_obligations) == 2
+
+    fixture.completion_state.items[1] = fixture.completion_state.items[1].model_copy(
+        update={
+            "status": CompletionStatus.COVERED,
+            "resolution_note": "Investigated in cycle one.",
+        }
+    )
+    fixture.target_state.phase = TargetPhase.SCHEDULED
+    second = fixture.compile()
+
+    assert second.cycle_focus.kind is WorkerCycleFocusKind.OBLIGATION
+    assert second.cycle_focus.obligation_id == "first-contract-item"
+
+    fixture.completion_state.items[0] = fixture.completion_state.items[0].model_copy(
+        update={
+            "status": CompletionStatus.UNKNOWN,
+            "resolution_note": "Evidence remained ambiguous.",
+        }
+    )
+    fixture.target_state.phase = TargetPhase.SCHEDULED
+    final = fixture.compile()
+
+    assert final.cycle_focus.kind is WorkerCycleFocusKind.FINALIZATION_READINESS
+    serialized = serialize_worker_context(final)
+    assert serialized.index("# Current cycle objective") < serialized.index(
+        "# Completion obligations and current states"
+    )
+    assert "use yield_cycle" in serialized
 
 
 def test_illegal_invocation_is_rejected_without_lifecycle_mutation() -> None:
@@ -409,9 +452,11 @@ def test_unused_capacity_remains_unused_and_serialization_is_stable_first() -> N
     assert not first_serialized.endswith(" " * 100)
     headings = [
         "# Shared worker instructions",
+        "# Worker profile and tool surface",
         "# Source binding and global ownership guidance",
         "# Target instructions and semantic contract",
-        "# Execution mode and permissions",
+        "# Execution mode",
+        "# Current cycle objective",
         "# Completion obligations and current states",
         "# Working summary",
         "# Open questions",

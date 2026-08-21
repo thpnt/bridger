@@ -10,7 +10,14 @@ from typing import Any
 import pytest
 
 from llm.errors import LLMConnectionError
-from llm.models import LLMResponse, LLMToolCall, LLMUsage
+from llm.models import (
+    LLMCompactedContext,
+    LLMCompactionResult,
+    LLMRequest,
+    LLMResponse,
+    LLMToolCall,
+    LLMUsage,
+)
 from llm.testing import DummyLLMClient
 from memory import (
     CompletionStateUpdater,
@@ -38,6 +45,8 @@ from models.hydration import (
     TargetContractView,
     WorkerContext,
     WorkerContextMode,
+    WorkerCycleFocus,
+    WorkerCycleFocusKind,
     WorkerProfile,
 )
 from models.memory import (
@@ -301,6 +310,362 @@ def test_worker_cycle_runs_multiple_turns_and_charges_both_scopes(
     assert fixture.manager.inspections == 2
 
 
+def test_standalone_yield_ends_only_the_current_cycle(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    client = DummyLLMClient([_response(_call("yield", "yield_cycle", {}))])
+
+    outcome = asyncio.run(fixture.runner([], client=client).run())
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert fixture.target_state.phase is TargetPhase.SCHEDULED
+    assert fixture.target_state.usage.cycles == 1
+    assert fixture.target_state.usage.model_calls == 1
+    assert fixture.target_state.usage.tool_calls == 0
+    assert {tool.name for tool in client.requests[0].tools} >= {
+        "yield_cycle",
+        "request_finalization",
+    }
+
+
+def test_yield_requires_no_arguments(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    client = DummyLLMClient(
+        [
+            _response(_call("invalid-yield", "yield_cycle", {"reason": "done"})),
+            _response(_call("valid-yield", "yield_cycle", {})),
+        ]
+    )
+
+    outcome = asyncio.run(fixture.runner([], client=client).run())
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert fixture.target_state.phase is TargetPhase.SCHEDULED
+    assert fixture.target_state.usage.model_calls == 2
+    assert fixture.target_state.usage.tool_calls == 0
+    assert "yield_cycle must have no arguments" in client.requests[1].model_dump_json()
+
+
+def test_yield_preserves_all_durable_progress_domains(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    runner = fixture.runner(
+        [
+            _response(
+                _call(
+                    "evidence",
+                    "record_evidence",
+                    {"kind": "file", "locator": {"path": "service.py"}},
+                )
+            ),
+            _response(
+                _call(
+                    "artifact",
+                    "write_target_artifact",
+                    {"path": "progress.md", "content": "Durable progress."},
+                ),
+                _call(
+                    "completion",
+                    "update_completion_item",
+                    {
+                        "obligation_id": "describe-runtime",
+                        "status": "covered",
+                        "resolution_note": "The bounded obligation is resolved.",
+                        "evidence_refs": [],
+                    },
+                ),
+                _call(
+                    "progress",
+                    "update_progress",
+                    {"working_summary": "Continue from the next obligation."},
+                ),
+            ),
+            _response(_call("yield", "yield_cycle", {})),
+        ]
+    )
+
+    outcome = asyncio.run(runner.run())
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert fixture.target_state.phase is TargetPhase.SCHEDULED
+    assert fixture.target_state.artifact_refs[0].relative_path == "progress.md"
+    assert len(fixture.target_state.evidence_refs) == 1
+    assert fixture.completion_state.items[0].status is CompletionStatus.COVERED
+    assert fixture.target_state.working_summary == "Continue from the next obligation."
+
+
+def test_mixed_yield_executes_operations_and_requires_later_standalone_yield(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    client = DummyLLMClient(
+        [
+            _response(
+                _call(
+                    "write",
+                    "write_target_artifact",
+                    {"path": "progress.md", "content": "Persisted progress."},
+                ),
+                _call("mixed-yield", "yield_cycle", {}),
+            ),
+            _response(_call("standalone-yield", "yield_cycle", {})),
+        ]
+    )
+
+    outcome = asyncio.run(fixture.runner([], client=client).run())
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert fixture.target_state.phase is TargetPhase.SCHEDULED
+    assert fixture.target_state.usage.tool_calls == 1
+    assert (tmp_path / "workspace" / "progress.md").read_text() == (
+        "Persisted progress."
+    )
+    assert "protocol_error" in client.requests[1].model_dump_json()
+
+
+def test_yield_and_finalization_together_succeed_as_neither_control(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    client = DummyLLMClient(
+        [
+            _response(
+                _call("yield", "yield_cycle", {}),
+                _call("final", "request_finalization", {}),
+            ),
+            _response(_call("yield-alone", "yield_cycle", {})),
+        ]
+    )
+
+    outcome = asyncio.run(fixture.runner([], client=client).run())
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert fixture.target_state.phase is TargetPhase.SCHEDULED
+    second_request = client.requests[1].model_dump_json()
+    assert second_request.count("cannot be requested together") == 2
+
+
+def test_response_ids_continue_only_with_incremental_tool_outputs(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    first = _response(_call("list", "list_target_artifacts", {})).model_copy(
+        update={"response_id": "response-a"}
+    )
+    second = _response(_call("yield", "yield_cycle", {})).model_copy(
+        update={"response_id": "response-b"}
+    )
+    client = DummyLLMClient([first, second])
+
+    outcome = asyncio.run(fixture.runner([], client=client).run())
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    initial, continued = client.requests
+    assert initial.continuation_ref is None
+    assert initial.messages == []
+    assert initial.store is True
+    assert initial.reasoning is not None
+    assert initial.reasoning.effort == "xhigh"
+    assert initial.reasoning.context == "all_turns"
+    assert continued.continuation_ref == "response-a"
+    assert [message.role for message in continued.messages] == ["tool"]
+    assert continued.instructions is not None
+    assert continued.instructions.startswith(initial.instructions or "")
+    assert "Current execution-state overlay" in continued.instructions
+    assert initial.prompt_cache is not None
+    assert continued.prompt_cache == initial.prompt_cache
+    final_breakpoint = initial.prompt_cache.instruction_breakpoints[-1]
+    assert initial.instructions is not None
+    assert continued.instructions[:final_breakpoint] == initial.instructions
+    assert continued.instructions[final_breakpoint:].startswith(
+        "\n\nCurrent execution-state overlay"
+    )
+    assert [tool.model_dump(mode="json") for tool in continued.tools] == [
+        tool.model_dump(mode="json") for tool in initial.tools
+    ]
+    assert client.compaction_requests == []
+    assert "response-a" not in fixture.target_state.model_dump_json()
+    assert "response-b" not in fixture.target_state.model_dump_json()
+
+
+def test_prompt_cache_identity_and_prefix_levels_are_deterministic(
+    tmp_path: Path,
+) -> None:
+    base_root = tmp_path / "base"
+    cycle_root = tmp_path / "cycle"
+    target_root = tmp_path / "target"
+    base_root.mkdir()
+    cycle_root.mkdir()
+    target_root.mkdir()
+
+    base = _fixture(base_root)
+    base_client = DummyLLMClient(
+        [_response(_call("base-final", "request_finalization", {}))]
+    )
+    asyncio.run(base.runner([], client=base_client).run())
+
+    changed_cycle = _fixture(cycle_root)
+    changed_cycle.context = changed_cycle.context.model_copy(
+        update={
+            "cycle_focus": WorkerCycleFocus(
+                kind=WorkerCycleFocusKind.OBLIGATION,
+                obligation_id="another-obligation",
+            )
+        }
+    )
+    cycle_client = DummyLLMClient(
+        [_response(_call("cycle-final", "request_finalization", {}))]
+    )
+    asyncio.run(changed_cycle.runner([], client=cycle_client).run())
+
+    changed_target = _fixture(target_root)
+    changed_target.target_spec = changed_target.target_spec.model_copy(
+        update={"target_id": "security"}
+    )
+    changed_target.definition = changed_target.definition.model_copy(
+        update={"target_id": "security"}
+    )
+    changed_target.context = changed_target.context.model_copy(
+        update={
+            "target_worker_instructions": "Investigate and document security.",
+            "target_contract": changed_target.context.target_contract.model_copy(
+                update={"target_id": "security"}
+            ),
+        }
+    )
+    target_client = DummyLLMClient(
+        [_response(_call("target-final", "request_finalization", {}))]
+    )
+    asyncio.run(changed_target.runner([], client=target_client).run())
+
+    base_request = base_client.requests[0]
+    cycle_request = cycle_client.requests[0]
+    target_request = target_client.requests[0]
+    assert base_request.prompt_cache is not None
+    assert cycle_request.prompt_cache is not None
+    assert target_request.prompt_cache is not None
+    assert base_request.prompt_cache.key == cycle_request.prompt_cache.key
+    assert base_request.prompt_cache.key != target_request.prompt_cache.key
+
+    base_sections = _prompt_cache_sections(base_request)
+    cycle_sections = _prompt_cache_sections(cycle_request)
+    target_sections = _prompt_cache_sections(target_request)
+    assert base_sections[:2] == cycle_sections[:2]
+    assert base_sections[2] != cycle_sections[2]
+    assert base_sections[0] == target_sections[0]
+    assert base_sections[1] != target_sections[1]
+
+
+def test_compaction_resets_the_chain_and_can_repeat_with_exact_recent_replay(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.target_spec = fixture.target_spec.model_copy(
+        update={
+            "budget": fixture.target_spec.budget.model_copy(
+                update={"max_input_tokens": 500_000}
+            )
+        }
+    )
+    first = _response(
+        _call(
+            "summary",
+            "update_progress",
+            {"working_summary": "Authoritative progress after cycle work."},
+        ),
+        usage=LLMUsage(input_tokens=74_000, output_tokens=1_000),
+    ).model_copy(update={"response_id": "response-a"})
+    second = _response(
+        _call("list", "list_target_artifacts", {}),
+        usage=LLMUsage(input_tokens=74_000, output_tokens=1_000),
+    ).model_copy(update={"response_id": "response-b"})
+    third = _response(
+        _call("yield", "yield_cycle", {}),
+        usage=LLMUsage(input_tokens=100, output_tokens=10),
+    ).model_copy(update={"response_id": "response-c"})
+    compacted_a = LLMCompactionResult(
+        context=LLMCompactedContext(
+            provider="openai",
+            payload=[
+                {
+                    "type": "compaction",
+                    "encrypted_content": "opaque-a",
+                }
+            ],
+        ),
+        usage=LLMUsage(input_tokens=500, output_tokens=100),
+    )
+    compacted_b = LLMCompactionResult(
+        context=LLMCompactedContext(
+            provider="openai",
+            payload=[
+                {
+                    "type": "compaction",
+                    "encrypted_content": "opaque-b",
+                }
+            ],
+        ),
+        usage=LLMUsage(input_tokens=600, output_tokens=120),
+    )
+    client = DummyLLMClient(
+        [first, second, third],
+        compaction_outcomes=[compacted_a, compacted_b],
+    )
+
+    runner = fixture.runner([], client=client)
+    outcome = asyncio.run(runner.run())
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert [request.continuation_ref for request in client.compaction_requests] == [
+        "response-a",
+        "response-b",
+    ]
+    assert all(
+        "Authoritative progress after cycle work." in request.instructions
+        for request in client.compaction_requests
+    )
+    first_post_compaction, second_post_compaction = client.requests[1:]
+    assert first_post_compaction.continuation_ref is None
+    assert first_post_compaction.compacted_context == compacted_a.context
+    assert [message.role for message in first_post_compaction.messages] == [
+        "assistant",
+        "tool",
+    ]
+    assert second_post_compaction.continuation_ref is None
+    assert second_post_compaction.compacted_context == compacted_b.context
+    assert [message.role for message in second_post_compaction.messages] == [
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+    ]
+    assert fixture.target_state.usage.model_calls == 5
+    assert fixture.fleet_state.usage.model_calls == 5
+    assert fixture.target_state.usage.input_tokens == 149_200
+    assert fixture.target_state.usage.output_tokens == 2_230
+    assert runner._continuation_ref is None
+    assert runner._compacted_context is None
+
+
+def test_compaction_failure_interrupts_without_discarding_the_chain(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    first = _response(
+        _call("list", "list_target_artifacts", {}),
+        usage=LLMUsage(input_tokens=74_000, output_tokens=1_000),
+    ).model_copy(update={"response_id": "response-a"})
+    failure = LLMConnectionError("compaction unavailable", retryable=True)
+    client = DummyLLMClient([first], compaction_outcomes=[failure])
+    runner = fixture.runner([], client=client)
+
+    outcome = asyncio.run(runner.run())
+
+    assert outcome is WorkerCycleOutcome.EXECUTION_INTERRUPTED
+    assert runner.last_runtime_error is failure
+    assert fixture.target_state.phase is TargetPhase.WORKING
+    assert fixture.target_state.usage.model_calls == 2
+    assert client.compaction_requests[0].continuation_ref == "response-a"
+
+
 def test_runtime_composes_stage4_directly_from_hydrated_authorities(
     tmp_path: Path,
 ) -> None:
@@ -509,7 +874,7 @@ def test_execution_overlay_replaces_prior_state_and_tool_working_set_is_bounded(
     outcome = asyncio.run(runner.run())
 
     assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
-    latest_overlay = client.requests[2].messages[1].content
+    latest_overlay = client.requests[2].instructions
     assert latest_overlay is not None
     assert "summary two" in latest_overlay
     assert "summary one" not in latest_overlay
@@ -544,6 +909,7 @@ def test_execution_permission_is_enforced_after_tool_exposure(
     assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
     assert {tool.name for tool in client.requests[0].tools} == {
         "list_target_artifacts",
+        "yield_cycle",
         "request_finalization",
     }
     assert "permission_denied" in client.requests[1].model_dump_json()
@@ -889,6 +1255,17 @@ def _fixture(
             evidence_expectations=("Record source evidence.",),
             output_quality_expectations=("Be precise.",),
         ),
+        cycle_focus=(
+            WorkerCycleFocus(
+                kind=WorkerCycleFocusKind.OBLIGATION,
+                obligation_id="describe-runtime",
+            )
+            if mode is WorkerContextMode.INITIAL
+            else WorkerCycleFocus(
+                kind=WorkerCycleFocusKind.REPAIR_FINDINGS,
+                finding_ids=("finding-1",),
+            )
+        ),
         completion_obligations=(
             CompletionObligationView(
                 obligation_id="describe-runtime",
@@ -925,6 +1302,17 @@ def _fixture(
         evidence={},
         questions={},
     )
+
+
+def _prompt_cache_sections(request: LLMRequest) -> tuple[str, ...]:
+    assert request.instructions is not None
+    assert request.prompt_cache is not None
+    sections: list[str] = []
+    start = 0
+    for end in request.prompt_cache.instruction_breakpoints:
+        sections.append(request.instructions[start:end])
+        start = end
+    return tuple(sections)
 
 
 def _finding() -> Any:

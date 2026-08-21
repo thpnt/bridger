@@ -2,7 +2,12 @@ from typing import Protocol, TypeVar
 
 from pydantic import BaseModel
 
-from llm.models import LLMRequest, LLMResponse
+from llm.models import (
+    LLMCompactionRequest,
+    LLMCompactionResult,
+    LLMRequest,
+    LLMResponse,
+)
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 
@@ -17,3 +22,9 @@ class LLMClient(Protocol):
         output_type: type[StructuredOutputT] | None = None,
     ) -> LLMResponse[StructuredOutputT]:
         """Generate one normalized LLM response for the supplied request."""
+
+    async def compact(
+        self,
+        request: LLMCompactionRequest,
+    ) -> LLMCompactionResult:
+        """Compact one active provider trajectory into opaque transient context."""

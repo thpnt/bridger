@@ -30,6 +30,7 @@ from models.hydration import (
     PermissionProfile,
     WorkerContext,
     WorkerContextMode,
+    WorkerCycleFocusKind,
     WorkerInstructions,
     WorkerProfile,
 )
@@ -42,6 +43,101 @@ from models.review import (
 from models.validation import ValidationVerdict
 
 _WORKER_TOOLS = ("write_target_artifact", "update_completion_item")
+
+
+def test_persisted_yield_rehydrates_directly_to_the_next_focus(tmp_path: Path) -> None:
+    fixture = _runtime(tmp_path)
+    scheduled = schedule_runnable_targets(
+        fixture.spec,
+        fixture.fleet_state,
+        [fixture.target_spec],
+        [fixture.target_state],
+        persistence=fixture.store,
+    )
+    assert scheduled == [fixture.target_spec.target_task_id]
+    profile = _worker_profile()
+    permissions = PermissionProfile(
+        profile_id=fixture.target_spec.permission_profile_id,
+        allowed_tool_ids=_WORKER_TOOLS,
+    )
+    instructions = WorkerInstructions(
+        worker_profile_id=profile.profile_id,
+        target_id=fixture.target_spec.target_id,
+        target_contract_version=fixture.target_spec.target_contract_version,
+        shared="Use controlled tools for every mutation.",
+        target_specific="Resolve the current bounded objective.",
+    )
+    context = compile_worker_context(
+        fleet_spec=fixture.spec,
+        target_spec=fixture.target_spec,
+        target_state=fixture.target_state,
+        completion_state=fixture.completion_state,
+        catalog=fixture.catalog,
+        target_definition=fixture.definition,
+        worker_profile=profile,
+        permission_profile=permissions,
+        worker_instructions=instructions,
+        persistence=fixture.store,
+    )
+    assert context.cycle_focus.kind is WorkerCycleFocusKind.OBLIGATION
+    client = DummyLLMClient(
+        [
+            _response(
+                _call(
+                    "completion",
+                    "update_completion_item",
+                    {
+                        "obligation_id": "describe-architecture",
+                        "status": CompletionStatus.COVERED.value,
+                        "resolution_note": "Bounded objective completed.",
+                        "evidence_refs": [],
+                    },
+                )
+            ),
+            _response(_call("yield", "yield_cycle", {})),
+        ]
+    )
+
+    outcome = asyncio.run(
+        run_worker_cycle(
+            fleet_spec=fixture.spec,
+            fleet_state=fixture.fleet_state,
+            target_spec=fixture.target_spec,
+            target_state=fixture.target_state,
+            completion_state=fixture.completion_state,
+            target_definition=fixture.definition,
+            context=context,
+            worker_profile=profile,
+            permission_profile=permissions,
+            context_window_manager=ContextWindowManager(profile),
+            llm_client=client,
+            navigator=WorkerNavigator(),  # type: ignore[arg-type]
+            evidence={},
+            questions={},
+            coordinator=FleetExecutionCoordinator(),
+            persistence=fixture.store,
+        )
+    )
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert fixture.target_state.phase is TargetPhase.SCHEDULED
+    assert fixture.target_state.pending_finalization_request_ref is None
+    rehydrated = compile_worker_context(
+        fleet_spec=fixture.spec,
+        target_spec=fixture.target_spec,
+        target_state=fixture.target_state,
+        completion_state=fixture.completion_state,
+        catalog=fixture.catalog,
+        target_definition=fixture.definition,
+        worker_profile=profile,
+        permission_profile=permissions,
+        worker_instructions=instructions,
+        persistence=fixture.store,
+    )
+
+    assert rehydrated.cycle_focus.kind is (WorkerCycleFocusKind.FINALIZATION_READINESS)
+    assert fixture.target_state.usage.cycles == 1
+    assert fixture.target_state.usage.tool_calls == 1
 
 
 def test_hard_validation_failure_reenters_the_normal_worker_pipeline(

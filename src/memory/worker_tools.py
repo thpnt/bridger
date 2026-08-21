@@ -72,6 +72,7 @@ TARGET_TOOL_IDS = (
     "update_progress",
 )
 FINALIZATION_TOOL_ID = "request_finalization"
+YIELD_CYCLE_TOOL_ID = "yield_cycle"
 WORKER_TOOL_IDS = (*REPOSITORY_TOOL_IDS, *TARGET_TOOL_IDS)
 
 
@@ -835,6 +836,7 @@ class WorkerToolRuntime:
             for tool_id in WORKER_TOOL_IDS
             if tool_id in self._allowed
         ]
+        self._definitions.append(_yield_cycle_definition())
         self._definitions.append(_finalization_definition())
 
     @property
@@ -972,11 +974,27 @@ def _finalization_definition() -> LLMToolDefinition:
     return tool.definition
 
 
+def _yield_cycle_definition() -> LLMToolDefinition:
+    tool = LLMTool.bind(
+        name=YIELD_CYCLE_TOOL_ID,
+        description=(
+            "End the current bounded worker cycle after preserving useful progress. "
+            "Use this when the current cycle objective is complete, or when a fresh "
+            "hydrated context should continue it. This must be the only tool call in "
+            "the response."
+        ),
+        arguments_type=_EmptyArguments,
+        handler=lambda _: None,
+    )
+    return tool.definition
+
+
 __all__ = [
     "FINALIZATION_TOOL_ID",
     "REPOSITORY_TOOL_IDS",
     "TARGET_TOOL_IDS",
     "WORKER_TOOL_IDS",
+    "YIELD_CYCLE_TOOL_ID",
     "CompletionStateUpdater",
     "EvidenceRecorder",
     "ProgressUpdater",

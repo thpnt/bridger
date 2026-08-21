@@ -1037,6 +1037,7 @@ No attempt is made to reconstruct:
 previous assistant messages
 provider thread IDs
 provider response handles
+provider compacted context
 historical tool turns
 ```
 
@@ -1070,6 +1071,8 @@ Discarded state includes:
 
 ```text
 provider conversation
+provider continuation reference
+provider compacted context
 execution-state overlay
 recent tool-result working set
 ```
@@ -1078,7 +1081,9 @@ recent tool-result working set
 
 Recovery remains valid using the other durable authorities when interruption occurs before the worker can update the summary.
 
-No LLM summarizer, compaction agent or generic context-reset service is introduced.
+Native within-cycle provider compaction, when available through `LLMClient`, is
+also transient and never participates in recovery. No LLM summarizer,
+compaction agent or generic context-reset service is introduced.
 
 Evicted repository information can be reacquired through existing repository-navigation tools.
 
@@ -1636,6 +1641,8 @@ PersistenceManagerState
 UsageLedger
 event-sourced reducer
 provider conversation state
+provider continuation reference
+provider compacted context
 persistent scheduler queue
 lease/heartbeat state
 distributed transaction system
