@@ -60,6 +60,7 @@ from bridger.llm.models import (
     LLMRequest,
     LLMResponse,
     LLMToolCall,
+    LLMToolResult,
     LLMUsage,
 )
 from bridger.llm.providers.openai import _tool_to_openai
@@ -647,7 +648,11 @@ def test_compaction_resets_the_chain_and_can_repeat_with_exact_recent_replay(
         compaction_outcomes=[compacted_a, compacted_b],
     )
 
-    runner = fixture.runner([], client=client)
+    runner = fixture.runner(
+        [],
+        client=client,
+        limits=WorkerRuntimeLimits(active_context_soft_limit_tokens=32_000),
+    )
     outcome = asyncio.run(runner.run())
 
     assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
@@ -692,7 +697,11 @@ def test_compaction_failure_interrupts_without_discarding_the_chain(
     ).model_copy(update={"response_id": "response-a"})
     failure = LLMConnectionError("compaction unavailable", retryable=True)
     client = DummyLLMClient([first], compaction_outcomes=[failure])
-    runner = fixture.runner([], client=client)
+    runner = fixture.runner(
+        [],
+        client=client,
+        limits=WorkerRuntimeLimits(active_context_soft_limit_tokens=32_000),
+    )
 
     outcome = asyncio.run(runner.run())
 
@@ -701,6 +710,82 @@ def test_compaction_failure_interrupts_without_discarding_the_chain(
     assert fixture.target_state.phase is TargetPhase.WORKING
     assert fixture.target_state.usage.model_calls == 2
     assert client.compaction_requests[0].continuation_ref == "response-a"
+
+
+def test_compaction_uses_the_active_working_limit_not_provider_capacity(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    first = _response(
+        _call("list", "list_target_artifacts", {}),
+        usage=LLMUsage(input_tokens=32_000, output_tokens=1_000),
+    ).model_copy(update={"response_id": "response-a"})
+    compacted = LLMCompactionResult(
+        context=LLMCompactedContext(
+            provider="openai",
+            payload=[{"type": "compaction", "encrypted_content": "opaque"}],
+        ),
+        usage=LLMUsage(input_tokens=100, output_tokens=10),
+    )
+    client = DummyLLMClient(
+        [first, _response(_call("yield", "yield_cycle", {}))],
+        compaction_outcomes=[compacted],
+    )
+
+    outcome = asyncio.run(
+        fixture.runner(
+            [],
+            client=client,
+            limits=WorkerRuntimeLimits(active_context_soft_limit_tokens=32_000),
+        ).run()
+    )
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert client.compaction_requests[0].continuation_ref == "response-a"
+    assert client.compaction_requests[0].messages[0].tool_call_id == "list"
+    assert fixture.profile.model_context_window_tokens == 100_000
+
+
+def test_generation_context_capacity_is_not_classified_as_budget_exhaustion(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    runner = fixture.runner([])
+
+    with pytest.raises(worker_cycle._ContextCapacityStop):
+        runner._maximum_output_tokens(fixture.profile.model_context_window_tokens)
+
+
+def test_pending_tool_results_are_aggregate_bounded_for_compaction(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.profile = fixture.profile.model_copy(
+        update={"model_context_window_tokens": 40_000}
+    )
+    fixture.manager = CountingContextWindowManager(fixture.profile)
+    runner = fixture.runner([])
+    runner._continuation_ref = "response-a"
+    runner._latest_usage = LLMUsage(input_tokens=35_000, output_tokens=1_000)
+    results = [
+        LLMToolResult(
+            call_id=f"tool-{index}",
+            name="list_target_artifacts",
+            output={"body": "x" * 32_000},
+        )
+        for index in range(5)
+    ]
+
+    bounded = runner._bound_pending_tool_results(results)
+    pending_tokens = fixture.manager.count_text(
+        worker_cycle._serialize_messages([result.as_message() for result in bounded])
+    )
+
+    assert pending_tokens <= 3_744
+    assert any(
+        isinstance(result.output, dict) and result.output.get("truncated")
+        for result in bounded
+    )
 
 
 def test_runtime_composes_stage4_directly_from_hydrated_authorities(

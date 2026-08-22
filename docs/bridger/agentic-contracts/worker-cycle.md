@@ -1081,6 +1081,14 @@ The Stage 3 32K hard cap remains specifically the **complete initial provider-in
 
 Stage 4 does not reinterpret 32K as a hard cap for every later request. Later requests are governed by the model's actual context capacity through the existing `ContextWindowManager`, plus the bounded recent-tool working-set policy below.
 
+The runtime owns a separate active working-context soft limit. It determines when
+Bridger compacts, while the resolved model profile determines whether the
+provider can accept that compaction request. A compaction request may therefore
+temporarily exceed the active soft limit; it needs only to fit the provider's
+actual context capacity and the normal execution budgets. Unlike a normal
+generation turn, compaction does not reserve response-token capacity in its
+provider-context fit calculation.
+
 ---
 
 # 17. Stage 4 execution-state overlay

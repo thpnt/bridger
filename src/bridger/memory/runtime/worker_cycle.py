@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 import orjson
-from pydantic import JsonValue
 
 from bridger.contracts.memory.core import (
     ExecutionBudget,
@@ -57,7 +56,9 @@ from bridger.memory.runtime.worker_tools import (
 
 DEFAULT_TOOL_CONTEXT_SOFT_TOKENS = 16_000
 DEFAULT_TOOL_RESULT_MAX_BYTES = 32 * 1024
+DEFAULT_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS = 128_000
 DEFAULT_COMPACTION_TRIGGER_RATIO = 0.75
+COMPACTION_INGRESS_SAFETY_TOKENS = 256
 PROTECTED_TOOL_BATCHES = 3
 _CONTROL_TOOL_IDS = {FINALIZATION_TOOL_ID, YIELD_CYCLE_TOOL_ID}
 
@@ -103,10 +104,15 @@ class WorkerRuntimeLimits:
 
     tool_context_soft_tokens: int = DEFAULT_TOOL_CONTEXT_SOFT_TOKENS
     tool_result_max_bytes: int = DEFAULT_TOOL_RESULT_MAX_BYTES
+    active_context_soft_limit_tokens: int = DEFAULT_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS
     compaction_trigger_ratio: float = DEFAULT_COMPACTION_TRIGGER_RATIO
 
     def __post_init__(self) -> None:
-        if self.tool_context_soft_tokens < 1 or self.tool_result_max_bytes < 1:
+        if (
+            self.tool_context_soft_tokens < 1
+            or self.tool_result_max_bytes < 1
+            or self.active_context_soft_limit_tokens < 1
+        ):
             raise ValueError("worker runtime limits must be positive")
         if not 0 < self.compaction_trigger_ratio < 1:
             raise ValueError("compaction_trigger_ratio must be between zero and one")
@@ -669,6 +675,48 @@ class FleetExecutionCoordinator:
             target_task_id=target_task_id,
         )
 
+    def record_compaction_started(
+        self,
+        target_task_id: str,
+        *,
+        projected_context_tokens: int,
+        active_context_soft_limit_tokens: int,
+        model_context_window_tokens: int,
+    ) -> None:
+        """Append compact context-pressure metadata before compaction dispatch."""
+        if self._persistence is None:
+            return
+        self._persistence.append_event(
+            "compaction_started",
+            {
+                "projected_context_tokens": projected_context_tokens,
+                "active_context_soft_limit_tokens": active_context_soft_limit_tokens,
+                "model_context_window_tokens": model_context_window_tokens,
+            },
+            target_task_id=target_task_id,
+        )
+
+    def record_compaction_completed(
+        self,
+        target_task_id: str,
+        *,
+        projected_context_tokens: int,
+        active_context_soft_limit_tokens: int,
+        model_context_window_tokens: int,
+    ) -> None:
+        """Append compact context-pressure metadata after successful compaction."""
+        if self._persistence is None:
+            return
+        self._persistence.append_event(
+            "compaction_completed",
+            {
+                "projected_context_tokens": projected_context_tokens,
+                "active_context_soft_limit_tokens": active_context_soft_limit_tokens,
+                "model_context_window_tokens": model_context_window_tokens,
+            },
+            target_task_id=target_task_id,
+        )
+
     def _require_bound_fleet_state(
         self,
         fleet_usage: ExecutionUsage,
@@ -1043,6 +1091,14 @@ class WorkerRunner:
                 return self._interrupt_from_error("tool-dispatch", error)
             if tool_reservation is not None:
                 await self._coordinator.release_tool_batch(tool_reservation)
+            try:
+                results = self._bound_pending_tool_results(results)
+            except _ContextCapacityStop as error:
+                return self._interrupt(
+                    category="context-capacity",
+                    operation="compaction",
+                    message=str(error),
+                )
             self._working_set.add(_ToolBatch(calls=list(calls), results=results))
             self._pending_messages = [result.as_message() for result in results]
 
@@ -1205,7 +1261,7 @@ class WorkerRunner:
             self._context.mode is WorkerContextMode.REPAIR,
             _BudgetScope.FLEET,
         )
-        self._require_model_headroom(input_tokens, output_tokens)
+        self._require_execution_headroom(input_tokens, output_tokens)
         if input_tokens > self._profile.initial_provider_input_hard_cap_tokens:
             raise WorkerCyclePreflightError(
                 "complete initial provider request exceeds the Stage 3 hard cap"
@@ -1214,7 +1270,7 @@ class WorkerRunner:
 
     def _next_request(self) -> tuple[LLMRequest, int, int]:
         request, input_tokens, output_tokens = self._build_request(initial=False)
-        self._require_model_headroom(input_tokens, output_tokens)
+        self._require_execution_headroom(input_tokens, output_tokens)
         return request, input_tokens, output_tokens
 
     def _build_request(self, *, initial: bool) -> tuple[LLMRequest, int, int]:
@@ -1297,7 +1353,7 @@ class WorkerRunner:
             + self._profile.reserved_response_tokens
         )
         trigger = int(
-            self._profile.model_context_window_tokens
+            self._limits.active_context_soft_limit_tokens
             * self._limits.compaction_trigger_ratio
         )
         if projected_context <= trigger:
@@ -1322,17 +1378,24 @@ class WorkerRunner:
             local_input_tokens,
             latest_input + latest_output + pending_tokens,
         )
-        output_tokens = self._maximum_output_tokens(input_tokens)
-        self._require_model_headroom(input_tokens, output_tokens)
+        self._require_compaction_capacity(input_tokens)
         reservation = await self._coordinator.reserve_model_call(
             self._fleet_spec.fleet_budget,
             self._fleet_state.usage,
             self._target_spec.budget,
             self._target_state.usage,
             input_tokens=input_tokens,
-            requested_output_tokens=output_tokens,
+            requested_output_tokens=self._compaction_budget_output_tokens(),
             target_state=self._target_state,
             target_spec=self._target_spec,
+        )
+        self._coordinator.record_compaction_started(
+            self._target_spec.target_task_id,
+            projected_context_tokens=projected_context,
+            active_context_soft_limit_tokens=(
+                self._limits.active_context_soft_limit_tokens
+            ),
+            model_context_window_tokens=self._profile.model_context_window_tokens,
         )
         result: LLMCompactionResult | None = None
         try:
@@ -1377,6 +1440,71 @@ class WorkerRunner:
             )
         self._compacted_context = result.context
         self._continuation_ref = None
+        self._coordinator.record_compaction_completed(
+            self._target_spec.target_task_id,
+            projected_context_tokens=projected_context,
+            active_context_soft_limit_tokens=(
+                self._limits.active_context_soft_limit_tokens
+            ),
+            model_context_window_tokens=self._profile.model_context_window_tokens,
+        )
+
+    def _bound_pending_tool_results(
+        self,
+        results: list[LLMToolResult],
+    ) -> list[LLMToolResult]:
+        """Keep one pending tool batch small enough for provider compaction."""
+        continuation_ref = self._continuation_ref
+        latest_input = self._latest_usage.input_tokens
+        latest_output = self._latest_usage.output_tokens
+        if continuation_ref is None or latest_input is None or latest_output is None:
+            return results
+
+        instructions = self._exact_control_context(initial=False)
+        base_request = LLMCompactionRequest(
+            operation=LLMOperation.MEMORY_AGENT_WORKER,
+            profile=self._profile.profile_id,
+            instructions=instructions,
+            continuation_ref=continuation_ref,
+            metadata={
+                "run_id": self._fleet_spec.fleet_run_id,
+                "workflow_id": self._target_spec.target_task_id,
+            },
+        )
+        fixed_tokens = self._manager.count_text(
+            _serialize_compaction_request(base_request)
+        )
+        available_batch_tokens = (
+            self._profile.model_context_window_tokens
+            - max(fixed_tokens, latest_input + latest_output)
+            - COMPACTION_INGRESS_SAFETY_TOKENS
+        )
+        if available_batch_tokens < 1:
+            raise _ContextCapacityStop(
+                "active trajectory leaves no provider capacity for compaction"
+            )
+
+        bounded = list(results)
+        while True:
+            pending_tokens = self._manager.count_text(
+                _serialize_messages([result.as_message() for result in bounded])
+            )
+            if pending_tokens <= available_batch_tokens:
+                return bounded
+            largest_index, largest = max(
+                enumerate(bounded),
+                key=lambda item: len(orjson.dumps(item[1].model_dump(mode="json"))),
+            )
+            serialized_size = len(orjson.dumps(largest.model_dump(mode="json")))
+            reduced = _bound_tool_result(
+                largest,
+                maximum_bytes=max(256, serialized_size // 2),
+            )
+            if len(orjson.dumps(reduced.model_dump(mode="json"))) >= serialized_size:
+                raise _ContextCapacityStop(
+                    "tool-result protocol overhead exceeds compaction ingress capacity"
+                )
+            bounded[largest_index] = reduced
 
     def _maximum_output_tokens(self, input_tokens: int) -> int:
         maximum = self._profile.reserved_response_tokens
@@ -1384,10 +1512,12 @@ class WorkerRunner:
             raise WorkerCyclePreflightError(
                 "worker profile must reserve positive Stage 4 response capacity"
             )
-        maximum = min(
-            maximum,
-            self._profile.model_context_window_tokens - input_tokens,
-        )
+        provider_remaining = self._profile.model_context_window_tokens - input_tokens
+        if provider_remaining < 1:
+            raise _ContextCapacityStop(
+                "normal worker request leaves no provider response capacity"
+            )
+        maximum = min(maximum, provider_remaining)
         target_remaining = _remaining_optional(
             self._target_spec.budget.max_output_tokens,
             self._target_state.usage.output_tokens,
@@ -1409,7 +1539,7 @@ class WorkerRunner:
             raise _BudgetStop(scope)
         return maximum
 
-    def _require_model_headroom(
+    def _require_execution_headroom(
         self,
         input_tokens: int,
         output_tokens: int,
@@ -1436,6 +1566,37 @@ class WorkerRunner:
             raise _BudgetStop(_BudgetScope.FLEET)
         if output_tokens < 1:
             raise _BudgetStop(_BudgetScope.TARGET)
+
+    def _require_compaction_capacity(self, input_tokens: int) -> None:
+        """Require only input fit for the provider compaction endpoint."""
+        if input_tokens > self._profile.model_context_window_tokens:
+            raise _ContextCapacityStop(
+                "compaction request exceeds the provider context capacity"
+            )
+
+    def _compaction_budget_output_tokens(self) -> int:
+        """Reserve normal execution budget headroom without generation capacity."""
+        target_remaining = _remaining_optional(
+            self._target_spec.budget.max_output_tokens,
+            self._target_state.usage.output_tokens,
+        )
+        fleet_remaining = _remaining_optional(
+            self._fleet_spec.fleet_budget.max_output_tokens,
+            self._fleet_state.usage.output_tokens,
+        )
+        maximum = self._profile.reserved_response_tokens
+        if target_remaining is not None:
+            maximum = min(maximum, target_remaining)
+        if fleet_remaining is not None:
+            maximum = min(maximum, fleet_remaining)
+        if maximum < 1:
+            scope = (
+                _BudgetScope.TARGET
+                if target_remaining is not None and target_remaining < 1
+                else _BudgetScope.FLEET
+            )
+            raise _BudgetStop(scope)
+        return maximum
 
     def _validate_invocation(self) -> None:
         if self._target_state.phase is not TargetPhase.HYDRATING:
@@ -1652,22 +1813,63 @@ def _bound_tool_result(
     if len(serialized) <= maximum_bytes:
         return result
     if result.error is not None:
-        maximum_message_chars = max(1, maximum_bytes // 2)
-        return result.model_copy(
+        return _truncate_tool_error(result, maximum_bytes)
+
+    prefix = serialized.decode("utf-8", errors="ignore")
+    low = 0
+    high = len(prefix)
+    best: LLMToolResult | None = None
+    while low <= high:
+        length = (low + high) // 2
+        candidate = result.model_copy(
             update={
-                "error": result.error.model_copy(
-                    update={"message": result.error.message[:maximum_message_chars]}
-                )
+                "output": {
+                    "truncated": True,
+                    "original_bytes": len(serialized),
+                    "serialized_prefix": prefix[:length],
+                    "instruction": "Retrieve a narrower range or smaller result set.",
+                }
             }
         )
-    prefix = serialized[:maximum_bytes].decode("utf-8", errors="ignore")
-    output: JsonValue = {
-        "truncated": True,
-        "original_bytes": len(serialized),
-        "serialized_prefix": prefix,
-        "instruction": "Retrieve a narrower range or smaller result set.",
-    }
-    return result.model_copy(update={"output": output})
+        if len(orjson.dumps(candidate.model_dump(mode="json"))) <= maximum_bytes:
+            best = candidate
+            low = length + 1
+        else:
+            high = length - 1
+    if best is not None:
+        return best
+    return result.model_copy(
+        update={
+            "output": (
+                "Result truncated. Retrieve a narrower range or smaller result set."
+            )
+        }
+    )
+
+
+def _truncate_tool_error(
+    result: LLMToolResult,
+    maximum_bytes: int,
+) -> LLMToolResult:
+    """Reduce an error body without changing its tool-result protocol shape."""
+    assert result.error is not None
+    message = result.error.message
+    low = 0
+    high = len(message)
+    best: LLMToolResult | None = None
+    while low <= high:
+        length = (low + high) // 2
+        candidate = result.model_copy(
+            update={
+                "error": result.error.model_copy(update={"message": message[:length]})
+            }
+        )
+        if len(orjson.dumps(candidate.model_dump(mode="json"))) <= maximum_bytes:
+            best = candidate
+            low = length + 1
+        else:
+            high = length - 1
+    return best or result
 
 
 def _placeholder_batch(batch: _ToolBatch) -> _ToolBatch:

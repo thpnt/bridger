@@ -352,13 +352,12 @@ def test_init_profiles_preflight_a_real_shipped_worker_context(
     assert diagnostics.within_initial_input_limit is True
     assert worker_profile.initial_provider_input_hard_cap_tokens <= 32_000
     assert reviewer_profile.initial_provider_input_hard_cap_tokens <= 32_000
-    if not test_budgets:
-        assert worker_profile.model_context_window_tokens == 128_000
-        assert worker_profile.initial_provider_input_hard_cap_tokens == 32_000
-        assert (
-            worker_profile.model_context_window_tokens
-            != worker_profile.initial_provider_input_hard_cap_tokens
-        )
+    assert worker_profile.model_context_window_tokens == 1_050_000
+    assert worker_profile.initial_provider_input_hard_cap_tokens == 32_000
+    assert (
+        worker_profile.model_context_window_tokens
+        != worker_profile.initial_provider_input_hard_cap_tokens
+    )
 
 
 def test_illegal_invocation_is_rejected_without_lifecycle_mutation() -> None:

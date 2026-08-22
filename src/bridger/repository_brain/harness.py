@@ -64,6 +64,8 @@ from bridger.repository_brain.publication import publish_repository_brain
 _PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "prompts"
 _TARGETS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "default-targets"
 _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS = 32_000
+_TEST_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS = 32_000
+_FULL_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS = 128_000
 _FRONTEND_DEPENDENCY_SECTIONS = (
     "dependencies",
     "devDependencies",
@@ -209,7 +211,7 @@ async def run_memory_harness(
                     evidence=_load_evidence(store, spec, state),
                     questions=_load_questions(store, spec, state),
                     coordinator=coordinator,
-                    limits=WorkerRuntimeLimits(),
+                    limits=_worker_runtime_limits(configuration.test_budgets),
                     persistence=store,
                 )
                 if outcome is not WorkerCycleOutcome.FINALIZATION_REQUESTED:
@@ -358,11 +360,7 @@ def _profiles(
     reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH,
 ) -> tuple[WorkerProfile, WorkerProfile]:
     reserved = 2_048 if test_budgets else 8_192
-    context_window = 32_000 if test_budgets else 128_000
-    initial_input_cap = min(
-        _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS,
-        context_window - reserved,
-    )
+    initial_input_cap = _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS
     resolved_reasoning_effort = (
         None
         if reasoning_effort is ReasoningEffort.NONE
@@ -376,7 +374,7 @@ def _profiles(
             profile_id="bridger-worker-v1",
             model=profile.model,
             tokenizer_encoding="o200k_base",
-            model_context_window_tokens=context_window,
+            model_context_window_tokens=profile.model_context_window_tokens,
             reserved_response_tokens=reserved,
             initial_provider_input_hard_cap_tokens=initial_input_cap,
             reasoning_effort=resolved_reasoning_effort,
@@ -385,11 +383,22 @@ def _profiles(
             profile_id="bridger-reviewer-v1",
             model=profile.model,
             tokenizer_encoding="o200k_base",
-            model_context_window_tokens=context_window,
+            model_context_window_tokens=profile.model_context_window_tokens,
             reserved_response_tokens=reserved,
             initial_provider_input_hard_cap_tokens=initial_input_cap,
             reasoning_effort=resolved_reasoning_effort,
         ),
+    )
+
+
+def _worker_runtime_limits(test_budgets: bool) -> WorkerRuntimeLimits:
+    """Resolve Repository Brain's active Stage 4 working-context policy."""
+    return WorkerRuntimeLimits(
+        active_context_soft_limit_tokens=(
+            _TEST_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS
+            if test_budgets
+            else _FULL_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS
+        )
     )
 
 

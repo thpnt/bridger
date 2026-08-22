@@ -81,6 +81,20 @@ _EVENT_REQUIRED_KEYS: dict[str, frozenset[str]] = {
     "tool_dispatch_completed": frozenset({"tool", "status"}),
     "tool_dispatch_rejected": frozenset({"tool", "status"}),
     "tool_dispatch_failed": frozenset({"tool", "status"}),
+    "compaction_started": frozenset(
+        {
+            "projected_context_tokens",
+            "active_context_soft_limit_tokens",
+            "model_context_window_tokens",
+        }
+    ),
+    "compaction_completed": frozenset(
+        {
+            "projected_context_tokens",
+            "active_context_soft_limit_tokens",
+            "model_context_window_tokens",
+        }
+    ),
     "artifact_mutated": frozenset({"action"}),
     "evidence_recorded": frozenset({"evidence_id"}),
     "completion_updated": frozenset({"obligation_id"}),

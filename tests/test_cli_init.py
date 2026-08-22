@@ -28,6 +28,7 @@ from bridger.repository_brain.harness import (
     _budget_for,
     _frontend_stack_present,
     _profiles,
+    _worker_runtime_limits,
 )
 
 runner = CliRunner()
@@ -159,12 +160,13 @@ def test_init_worker_profiles_keep_initial_input_within_v0_cap(
     assert worker.initial_provider_input_hard_cap_tokens <= 32_000
     assert reviewer.initial_provider_input_hard_cap_tokens <= 32_000
     assert worker.reasoning_effort == reviewer.reasoning_effort == "xhigh"
-    if test_budgets:
-        assert worker.model_context_window_tokens == 32_000
-        assert worker.initial_provider_input_hard_cap_tokens == 29_952
-    else:
-        assert worker.model_context_window_tokens == 128_000
-        assert worker.initial_provider_input_hard_cap_tokens == 32_000
+    assert worker.model_context_window_tokens == 1_050_000
+    assert reviewer.model_context_window_tokens == 1_050_000
+    assert worker.initial_provider_input_hard_cap_tokens == 32_000
+    assert reviewer.initial_provider_input_hard_cap_tokens == 32_000
+    assert _worker_runtime_limits(test_budgets).active_context_soft_limit_tokens == (
+        32_000 if test_budgets else 128_000
+    )
 
 
 @pytest.mark.parametrize("reasoning", list(ReasoningEffort))

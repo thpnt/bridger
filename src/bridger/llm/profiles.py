@@ -19,6 +19,7 @@ class LLMProfile(BaseModel):
     name: str = Field(min_length=1)
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
+    model_context_window_tokens: int = Field(default=1_050_000, ge=1)
     max_output_tokens: int | None = Field(default=None, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0)
     retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
@@ -35,11 +36,19 @@ def resolve_llm_profile(profile_name: str = "balanced") -> LLMProfile:
         raise LLMConfigurationError(
             "BRIDGER_OPENAI_MODEL is required for the balanced LLM profile"
         )
+    model_context_window_tokens = _optional_int(
+        "BRIDGER_OPENAI_MODEL_CONTEXT_WINDOW_TOKENS"
+    )
 
     return LLMProfile(
         name="balanced",
         provider="openai",
         model=model,
+        model_context_window_tokens=(
+            1_050_000
+            if model_context_window_tokens is None
+            else model_context_window_tokens
+        ),
         max_output_tokens=_optional_int("BRIDGER_OPENAI_MAX_OUTPUT_TOKENS"),
         timeout_seconds=_optional_float("BRIDGER_OPENAI_TIMEOUT_SECONDS"),
     )
