@@ -43,7 +43,11 @@ from bridger.llm.models import (
 from bridger.llm.tools import LLMTool, ToolExecutor
 from bridger.memory.persistence.durability import FleetRuntimeStore
 from bridger.navigation.navigator import MAX_RANGE_LINES, RepositoryNavigator
-from bridger.navigation.tools import build_navigation_tools
+from bridger.navigation.tools import (
+    _CommunityTargetReference,
+    _EdgeTargetReference,
+    build_navigation_tools,
+)
 from bridger.repository.errors import RepositoryError
 
 MAX_ARTIFACT_BYTES = 1024 * 1024
@@ -772,20 +776,9 @@ class _MoveArtifactArguments(_Arguments):
     expected_revision: int = Field(ge=1)
 
 
-class _EdgeTargetReferenceArguments(_Arguments):
-    source_node_id: str = Field(min_length=1)
-    target_node_id: str = Field(min_length=1)
-    relation: str = Field(min_length=1)
-
-
-class _CommunityTargetReferenceArguments(_Arguments):
-    community_id: int = Field(ge=0)
-    member_signature: str = Field(min_length=1)
-
-
 class _GraphEntityEvidenceLocatorArguments(_Arguments):
     target_type: EnrichmentTargetType
-    target_ref: str | _EdgeTargetReferenceArguments | _CommunityTargetReferenceArguments
+    target_ref: str | _EdgeTargetReference | _CommunityTargetReference
 
 
 class _RecordEvidenceArguments(_Arguments):
