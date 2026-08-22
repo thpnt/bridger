@@ -1,19 +1,82 @@
 schema_version: 1
 target_id: business-logic
-target_contract_version: v1
+target_contract_version: v2
 activation: {mode: always}
 depends_on: []
-canonical_question: What product or domain behavior does the software implement, and what semantic rules must remain true?
-purpose: Explain product meaning, rules, invariants, states, and transitions.
-expected_abstraction: Repository-level domain semantics.
-always_relevant_scope: [Product behavior and semantic rules.]
-conditional_scope: []
-exclusions: [Runtime component mechanics and technical state representation.]
-boundary_guidance: [Own domain meaning rather than implementation mechanics.]
-investigation_expectations: [Trace central product behavior through implementation evidence.]
-evidence_expectations: [Ground behavioral claims in source and relevant tests.]
+canonical_question: What product or domain behavior does the software implement, and what semantic rules must remain true regardless of implementation?
+purpose: Explain product meaning, domain behavior, rules, invariants, states, transitions, and outcomes.
+expected_abstraction: Deep implementation-grounded semantic understanding that remains technology-independent where possible.
+always_relevant_scope:
+  - Domain concepts, terminology, actors, actions, workflows, rules, invariants, validation, and eligibility.
+  - Domain states, allowed and forbidden transitions, calculations, outcomes, side effects, relationships, and failures.
+  - Implementation locations needed to ground and navigate product behavior.
+conditional_scope:
+  - Pricing, billing, subscriptions, entitlements, quotas, limits, approvals, and scheduling rules.
+  - Domain permissions, lifecycle rules, calculations, regulatory constraints, and provider interactions that affect product behavior.
+exclusions:
+  - Bootstrap, routing, middleware, composition, persistence mechanics, provider protocols, operations, testing, conventions, and visual design.
+boundary_guidance:
+  - Own what the software means and guarantees, not the incidental components or storage mechanisms that implement it.
+investigation_expectations:
+  - Establish terminology, actors, actions, workflows, decisions, validations, invariants, legal transitions, and meaningful failure paths.
+  - Trace central workflows from trigger through domain decision, state transition, side effects, and alternate outcomes.
+  - Verify important rules against source and relevant tests and preserve unresolved ambiguity.
+evidence_expectations:
+  - Ground central rules and workflows in implementation-level evidence across the relevant chain.
+  - Use tests for invariants and edge cases and documentation for terminology, while surfacing conflicts with source.
 completion_obligations:
-  - obligation_id: domain-behavior
-    description: Resolve the repository's product behavior and important semantic rules.
+  - obligation_id: domain-concepts
+    description: Identify and relate the principal domain and product concepts.
     applicability: always
-output_quality_expectations: [Explain rules and invariants with concrete repository evidence.]
+  - obligation_id: domain-actions
+    description: Explain the major user and system actions.
+    applicability: always
+  - obligation_id: domain-workflows
+    description: Explain central product and domain workflows end to end semantically.
+    applicability: always
+  - obligation_id: rules-invariants
+    description: Make important business and domain rules and invariants explicit.
+    applicability: always
+  - obligation_id: domain-states-transitions
+    description: Explain important domain states and allowed, forbidden, and significant transitions.
+    applicability: always
+  - obligation_id: validation-eligibility
+    description: Explain important domain validation and eligibility rules.
+    applicability: always
+  - obligation_id: domain-authorization
+    description: Explain business-significant authorization and permission rules when present.
+    applicability: conditional
+    condition_hint: Product behavior contains actor permissions, entitlements, or business-significant authorization decisions.
+  - obligation_id: domain-side-effects
+    description: Explain business-significant outcomes and side effects.
+    applicability: always
+  - obligation_id: domain-failures
+    description: Explain domain-specific failures and alternate outcomes.
+    applicability: always
+  - obligation_id: pricing-billing
+    description: Explain pricing and billing semantics when present.
+    applicability: conditional
+    condition_hint: The product implements pricing or billing behavior.
+  - obligation_id: subscriptions-entitlements
+    description: Explain subscription and entitlement semantics when present.
+    applicability: conditional
+    condition_hint: The product implements subscriptions or entitlements.
+  - obligation_id: quotas-limits
+    description: Explain domain quotas and limits when present.
+    applicability: conditional
+    condition_hint: The product enforces business-significant quotas or limits.
+  - obligation_id: approvals-scheduling
+    description: Explain approval and scheduling rules when present.
+    applicability: conditional
+    condition_hint: The product implements approval or scheduling workflows.
+  - obligation_id: lifecycle-calculations
+    description: Explain domain lifecycle rules and business-significant calculations when present.
+    applicability: conditional
+    condition_hint: The product has specialized lifecycle rules or domain calculations beyond its central workflows.
+  - obligation_id: regulatory-provider-semantics
+    description: Explain encoded regulatory constraints and provider interactions that affect product semantics when present.
+    applicability: conditional
+    condition_hint: Regulatory constraints or external-provider behavior materially changes product outcomes.
+output_quality_expectations:
+  - Use repository terminology, synthesize behavior, and separate semantic rules from implementation mechanics.
+  - Be source-grounded, explicit about uncertainty, navigable, and free of generic domain-analysis filler.

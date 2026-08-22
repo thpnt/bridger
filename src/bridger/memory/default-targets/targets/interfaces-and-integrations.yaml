@@ -1,19 +1,55 @@
 schema_version: 1
 target_id: interfaces-and-integrations
-target_contract_version: v1
+target_contract_version: v2
 activation: {mode: always}
 depends_on: []
-canonical_question: What capabilities cross system boundaries, through what contracts, and how are those boundaries implemented?
-purpose: Explain external and internal system-boundary contracts.
-expected_abstraction: Repository-level boundary mechanics.
-always_relevant_scope: [Interfaces, integrations, contracts, and adapters.]
-conditional_scope: []
-exclusions: [Detailed product meaning and general runtime composition.]
-boundary_guidance: [Own boundary contracts and mechanics.]
-investigation_expectations: [Trace meaningful boundary crossings and failure behavior.]
-evidence_expectations: [Ground contract claims in source, configuration, and tests.]
+canonical_question: What capabilities cross repository or system boundaries, through what contracts, and how are those boundaries implemented?
+purpose: Explain boundary contracts and external interactions from their declared surfaces through their internal handoffs.
+expected_abstraction: Boundary-contract and external-interaction understanding.
+always_relevant_scope:
+  - Significant inbound and outbound boundaries, their direction, purpose, surfaces, payloads, responses, serialization, and mappings.
+  - Boundary authentication, authorization, idempotency, timeouts, retries, failures, compatibility, callbacks, webhooks, and events.
+conditional_scope:
+  - HTTP, GraphQL, RPC, CLI, public library APIs, webhooks, events, sockets, streams, plugins, providers, generated clients, callbacks, and rate limits.
+exclusions:
+  - Product rules, generic internal component interactions, persistence internals, operational provider integration, and presentation.
+boundary_guidance:
+  - Own boundary contracts, adapters, and mechanics; defer internal architecture and product semantics.
+investigation_expectations:
+  - Trace each significant boundary from contract through adapter, validation, authentication, mapping, handoff, response, and failure behavior.
+  - Do not infer a meaningful integration from a manifest dependency alone.
+evidence_expectations:
+  - Use routes, schemas, protocol definitions, event definitions, public exports, handlers, clients, and adapters.
+  - Prefer contract and integration tests as support and never invent external facts absent from the repository.
 completion_obligations:
-  - obligation_id: boundary-contracts
-    description: Resolve meaningful interfaces and integration contracts.
+  - obligation_id: inbound-interfaces
+    description: Identify significant inbound interfaces.
     applicability: always
-output_quality_expectations: [Identify contracts, adapters, and important failure semantics.]
+  - obligation_id: outbound-integrations
+    description: Identify significant outbound integrations.
+    applicability: always
+  - obligation_id: contracts-mappings
+    description: Explain important payload contracts, serialization, and mappings.
+    applicability: always
+  - obligation_id: boundary-authentication-security
+    description: Explain boundary authentication, authorization, and security mechanics when present.
+    applicability: conditional
+    condition_hint: A significant boundary authenticates, authorizes, signs, verifies, or otherwise secures traffic.
+  - obligation_id: error-retry-idempotency
+    description: Explain boundary error, retry, timeout, and idempotency semantics where relevant.
+    applicability: conditional
+    condition_hint: Boundary behavior includes material failure handling, timeouts, retries, or idempotency.
+  - obligation_id: callbacks-events-webhooks
+    description: Explain callbacks, events, and webhooks when present.
+    applicability: conditional
+    condition_hint: The repository sends or receives callbacks, events, or webhooks.
+  - obligation_id: versioning-compatibility
+    description: Explain boundary versioning and compatibility constraints when present.
+    applicability: conditional
+    condition_hint: A public or external contract has explicit versions or compatibility guarantees.
+  - obligation_id: boundary-internal-handoff
+    description: Explain the handoff between each significant boundary and internal implementation.
+    applicability: always
+output_quality_expectations:
+  - Make consumers, compatibility constraints, adapters, and failure semantics clear.
+  - Keep external unknowns explicit and avoid duplicating internal architecture or product meaning.

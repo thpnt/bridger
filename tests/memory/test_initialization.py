@@ -48,6 +48,117 @@ from bridger.memory import (
 )
 
 _REVISION = "a" * 40
+_DEFAULT_TARGETS_ROOT = (
+    Path(__file__).resolve().parents[2]
+    / "src"
+    / "bridger"
+    / "memory"
+    / "default-targets"
+)
+_SHIPPED_OBLIGATION_IDS = {
+    "repository": [
+        "repository-purpose",
+        "languages-frameworks-toolchain",
+        "applications-packages-workspaces",
+        "source-organization",
+        "entry-surfaces",
+        "generated-vendor-special-regions",
+        "specialist-navigation",
+    ],
+    "business-logic": [
+        "domain-concepts",
+        "domain-actions",
+        "domain-workflows",
+        "rules-invariants",
+        "domain-states-transitions",
+        "validation-eligibility",
+        "domain-authorization",
+        "domain-side-effects",
+        "domain-failures",
+        "pricing-billing",
+        "subscriptions-entitlements",
+        "quotas-limits",
+        "approvals-scheduling",
+        "lifecycle-calculations",
+        "regulatory-provider-semantics",
+    ],
+    "architecture": [
+        "runtime-entrypoints",
+        "runtime-components",
+        "component-responsibilities",
+        "component-dependencies",
+        "execution-paths",
+        "bootstrap-composition",
+        "async-background-execution",
+        "component-state-ownership",
+        "extension-mechanisms",
+        "runtime-error-recovery",
+    ],
+    "data-and-state": [
+        "state-categories-stores",
+        "sources-of-truth",
+        "data-models",
+        "read-write-ownership",
+        "mutation-lifecycle",
+        "consistency-transactions",
+        "migrations-schema-evolution",
+        "caches-derived-state",
+        "retention-versioning-locking",
+    ],
+    "interfaces-and-integrations": [
+        "inbound-interfaces",
+        "outbound-integrations",
+        "contracts-mappings",
+        "boundary-authentication-security",
+        "error-retry-idempotency",
+        "callbacks-events-webhooks",
+        "versioning-compatibility",
+        "boundary-internal-handoff",
+    ],
+    "testing": [
+        "frameworks-test-levels",
+        "test-organization",
+        "fixtures-factories-setup",
+        "isolation-external-dependencies",
+        "validation-commands",
+        "change-verification-mapping",
+        "ci-verification",
+        "specialized-test-strategies",
+        "material-testing-gaps",
+    ],
+    "conventions": [
+        "naming-layout",
+        "structural-patterns",
+        "error-logging-configuration",
+        "type-schema-patterns",
+        "specialist-implementation-conventions",
+        "enforced-vs-observed",
+        "local-convention-scope",
+    ],
+    "operations": [
+        "build-package-path",
+        "runtime-prerequisites-configuration",
+        "environments",
+        "ci-cd-release",
+        "deployment-topology",
+        "secrets-config-injection",
+        "health-observability",
+        "migrations-rollout-rollback",
+        "scaling-scheduled-operations",
+        "operator-developer-commands",
+    ],
+    "design": [
+        "visual-language",
+        "tokens-themes",
+        "component-design-patterns",
+        "layout-navigation",
+        "responsive-behavior",
+        "interaction-feedback",
+        "standardized-ui-states",
+        "accessibility-patterns",
+        "design-system-tooling",
+    ],
+}
 
 
 @pytest.fixture
@@ -203,6 +314,31 @@ def test_static_target_artifacts_load_from_yaml(tmp_path: Path) -> None:
     assert loaded_definitions[0].completion_obligations == (
         repository.completion_obligations
     )
+
+
+def test_shipped_target_bundle_has_versioned_granular_contracts() -> None:
+    catalog, definitions = load_target_artifacts(_DEFAULT_TARGETS_ROOT)
+
+    assert catalog.catalog_version == "v2"
+    assert [definition.target_id for definition in definitions] == list(
+        _SHIPPED_OBLIGATION_IDS
+    )
+    assert {
+        definition.target_id: [
+            obligation.obligation_id for obligation in definition.completion_obligations
+        ]
+        for definition in definitions
+    } == _SHIPPED_OBLIGATION_IDS
+    assert all(definition.target_contract_version == "v2" for definition in definitions)
+    assert all(entry.target_contract_version == "v2" for entry in catalog.targets)
+    conditional = {
+        obligation.obligation_id: obligation.condition_hint
+        for definition in definitions
+        for obligation in definition.completion_obligations
+        if obligation.applicability is ObligationApplicability.CONDITIONAL
+    }
+    assert conditional
+    assert all(condition_hint for condition_hint in conditional.values())
 
 
 def test_static_target_artifacts_reject_duplicates_and_version_mismatch(
@@ -496,6 +632,53 @@ def test_initialize_fleet_materializes_exact_active_initial_state(
         / "initialization"
         / "fleet-state.json"
     ).is_file()
+
+
+def test_shipped_contracts_materialize_every_obligation_independently(
+    tmp_path: Path,
+    upstream: tuple[RepositoryContext, FileIndex, SymbolIndex, GraphBuildResult],
+) -> None:
+    catalog, definitions = load_target_artifacts(_DEFAULT_TARGETS_ROOT)
+    spec = _bind(
+        tmp_path,
+        upstream,
+        catalog,
+        definitions,
+        activation_rules={"frontend_stack_present_v1": lambda *_: False},
+    )
+
+    _, task_specs, _, completion_states = initialize_fleet(
+        spec,
+        catalog,
+        definitions,
+    )
+
+    target_ids_by_task = {task.target_task_id: task.target_id for task in task_specs}
+    materialized = {
+        target_ids_by_task[state.target_task_id]: [
+            item.obligation_id for item in state.items
+        ]
+        for state in completion_states
+    }
+    assert materialized == {
+        target_id: obligation_ids
+        for target_id, obligation_ids in _SHIPPED_OBLIGATION_IDS.items()
+        if target_id != "design"
+    }
+
+    architecture = next(
+        state
+        for state in completion_states
+        if target_ids_by_task[state.target_task_id] == "architecture"
+    )
+    architecture.items[0] = architecture.items[0].model_copy(
+        update={
+            "status": CompletionStatus.COVERED,
+            "resolution_note": "Entrypoints were investigated.",
+        }
+    )
+    assert architecture.items[1].status is CompletionStatus.UNINVESTIGATED
+    assert len(architecture.items) == len(_SHIPPED_OBLIGATION_IDS["architecture"])
 
 
 @pytest.mark.parametrize("failure", ["inactive", "invalid", "cycle"])

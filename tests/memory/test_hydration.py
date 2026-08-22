@@ -40,6 +40,7 @@ from bridger.contracts.memory.hydration import (
     WorkerInstructions,
     WorkerProfile,
 )
+from bridger.llm.profiles import LLMProfile
 from bridger.memory import (
     CandidateArtifactRecord,
     ContextWindowConfigurationError,
@@ -51,8 +52,10 @@ from bridger.memory import (
     WorkerContextHydrationError,
     WorkerContextInvocationError,
     compile_worker_context,
+    load_target_artifacts,
     serialize_worker_context,
 )
+from bridger.repository_brain.harness import _profiles
 
 _SOURCE = SourceBinding(
     repository_id="repository-1",
@@ -66,6 +69,13 @@ _BUDGET = ExecutionBudget(
     max_repair_cycles=4,
     max_input_tokens=50_000,
     max_output_tokens=None,
+)
+_DEFAULT_TARGETS_ROOT = (
+    Path(__file__).resolve().parents[2]
+    / "src"
+    / "bridger"
+    / "memory"
+    / "default-targets"
 )
 
 
@@ -271,6 +281,84 @@ def test_cycle_focus_is_deterministic_across_fresh_hydration() -> None:
         "# Completion obligations and current states"
     )
     assert "use yield_cycle" in serialized
+
+
+def test_shipped_architecture_contract_prevents_early_finalization() -> None:
+    fixture = _fixture_with_shipped_architecture()
+
+    first = fixture.compile()
+    assert first.cycle_focus.kind is WorkerCycleFocusKind.OBLIGATION
+    assert first.cycle_focus.obligation_id == "runtime-entrypoints"
+
+    fixture.completion_state.items[0] = fixture.completion_state.items[0].model_copy(
+        update={
+            "status": CompletionStatus.COVERED,
+            "resolution_note": "Runtime entrypoints were investigated.",
+        }
+    )
+    fixture.target_state.phase = TargetPhase.SCHEDULED
+    second = fixture.compile()
+    assert second.cycle_focus.kind is WorkerCycleFocusKind.OBLIGATION
+    assert second.cycle_focus.obligation_id == "runtime-components"
+    assert len(second.completion_obligations) == 10
+
+    fixture.completion_state.items = [
+        item.model_copy(
+            update={
+                "status": (
+                    CompletionStatus.COVERED
+                    if index % 2 == 0
+                    else CompletionStatus.NOT_APPLICABLE
+                ),
+                "resolution_note": "Obligation was explicitly resolved.",
+            }
+        )
+        for index, item in enumerate(fixture.completion_state.items)
+    ]
+    fixture.target_state.phase = TargetPhase.SCHEDULED
+    final = fixture.compile()
+    assert final.cycle_focus.kind is WorkerCycleFocusKind.FINALIZATION_READINESS
+
+
+@pytest.mark.parametrize("test_budgets", [False, True])
+def test_init_profiles_preflight_a_real_shipped_worker_context(
+    test_budgets: bool,
+) -> None:
+    worker_profile, reviewer_profile = _profiles(
+        LLMProfile(
+            name="balanced",
+            provider="openai",
+            model="gpt-5.6-terra",
+        ),
+        test_budgets,
+    )
+    fixture = _fixture_with_shipped_architecture()
+    fixture.worker_profile = worker_profile
+    fixture.worker_instructions = fixture.worker_instructions.model_copy(
+        update={"worker_profile_id": worker_profile.profile_id}
+    )
+    fixture.target_spec = fixture.target_spec.model_copy(
+        update={"worker_profile_id": worker_profile.profile_id}
+    )
+    fixture.fleet_spec = fixture.fleet_spec.model_copy(
+        update={"default_worker_profile_id": worker_profile.profile_id}
+    )
+
+    context = fixture.compile()
+    diagnostics = ContextWindowManager(worker_profile).inspect_initial_worker_context(
+        serialize_worker_context(context)
+    )
+
+    assert diagnostics.within_initial_input_limit is True
+    assert worker_profile.initial_provider_input_hard_cap_tokens <= 32_000
+    assert reviewer_profile.initial_provider_input_hard_cap_tokens <= 32_000
+    if not test_budgets:
+        assert worker_profile.model_context_window_tokens == 128_000
+        assert worker_profile.initial_provider_input_hard_cap_tokens == 32_000
+        assert (
+            worker_profile.model_context_window_tokens
+            != worker_profile.initial_provider_input_hard_cap_tokens
+        )
 
 
 def test_illegal_invocation_is_rejected_without_lifecycle_mutation() -> None:
@@ -660,6 +748,38 @@ def _fixture() -> HydrationFixture:
         ),
         state_reader=FakeHydrationStateReader(),
     )
+
+
+def _fixture_with_shipped_architecture() -> HydrationFixture:
+    fixture = _fixture()
+    catalog, definitions = load_target_artifacts(_DEFAULT_TARGETS_ROOT)
+    definition = next(
+        definition
+        for definition in definitions
+        if definition.target_id == "architecture"
+    )
+    fixture.catalog = catalog
+    fixture.definition = definition
+    fixture.fleet_spec = fixture.fleet_spec.model_copy(
+        update={
+            "target_catalog_id": catalog.catalog_id,
+            "target_catalog_version": catalog.catalog_version,
+        }
+    )
+    fixture.target_spec = fixture.target_spec.model_copy(
+        update={"target_contract_version": definition.target_contract_version}
+    )
+    fixture.completion_state = TargetCompletionState(
+        target_task_id=fixture.target_spec.target_task_id,
+        items=[
+            CompletionItemState(obligation_id=obligation.obligation_id)
+            for obligation in definition.completion_obligations
+        ],
+    )
+    fixture.worker_instructions = fixture.worker_instructions.model_copy(
+        update={"target_contract_version": definition.target_contract_version}
+    )
+    return fixture
 
 
 def _question(question_id: str, content: str) -> OpenQuestionRecord:

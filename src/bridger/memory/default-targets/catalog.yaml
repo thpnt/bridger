@@ -1,25 +1,25 @@
 schema_version: 1
 catalog_id: bridger-v0-memory
-catalog_version: v1
+catalog_version: v2
 targets:
   - target_id: repository
-    target_contract_version: v1
+    target_contract_version: v2
   - target_id: business-logic
-    target_contract_version: v1
+    target_contract_version: v2
   - target_id: architecture
-    target_contract_version: v1
+    target_contract_version: v2
   - target_id: data-and-state
-    target_contract_version: v1
+    target_contract_version: v2
   - target_id: interfaces-and-integrations
-    target_contract_version: v1
+    target_contract_version: v2
   - target_id: testing
-    target_contract_version: v1
+    target_contract_version: v2
   - target_id: conventions
-    target_contract_version: v1
+    target_contract_version: v2
   - target_id: operations
-    target_contract_version: v1
+    target_contract_version: v2
   - target_id: design
-    target_contract_version: v1
+    target_contract_version: v2
 cross_target_ownership_rules:
   - The target answering the primary question owns the canonical detailed explanation.
   - Other targets may retain only bounded context and should link to the canonical owner.

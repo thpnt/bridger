@@ -1,19 +1,55 @@
 schema_version: 1
 target_id: testing
-target_contract_version: v1
+target_contract_version: v2
 activation: {mode: always}
 depends_on: []
 canonical_question: How does the repository establish correctness, and how should a contributor verify a change?
-purpose: Explain verification strategy and practical test surfaces.
-expected_abstraction: Repository-level verification strategy.
-always_relevant_scope: [Test architecture, validation commands, and correctness evidence.]
-conditional_scope: []
-exclusions: [Complete product behavior explained by business logic.]
-boundary_guidance: [Own verification strategy rather than all behavior under test.]
-investigation_expectations: [Inspect test organization and supported validation paths.]
-evidence_expectations: [Ground verification guidance in repository commands and tests.]
+purpose: Explain the verification strategy and practical test surfaces contributors should use.
+expected_abstraction: Verification strategy and practical validation model.
+always_relevant_scope:
+  - Test frameworks, configuration, layout, levels, commands, fixtures, factories, doubles, isolation, patterns, and change-to-test mapping.
+conditional_scope:
+  - Integration, database, end-to-end, browser, contract, snapshot, visual, accessibility, performance, and security tests.
+  - Test services, CI execution, coverage, sharding, parallelism, and special local validation workflows.
+exclusions:
+  - Complete domain behavior, production architecture, release mechanics beyond verification, and generic test coding conventions.
+boundary_guidance:
+  - Own how correctness is established, not the complete behavior under test or all individual test-writing style.
+investigation_expectations:
+  - Inspect test configuration, commands, representative test levels, fixtures, factories, doubles, external-service handling, and CI definitions.
+  - Do not infer the repository's strategy from a single directory or configuration file.
+evidence_expectations:
+  - Use test source and configuration as primary evidence, manifest scripts for commands, and CI for automatically executed suites.
 completion_obligations:
-  - obligation_id: verification-strategy
-    description: Resolve how contributors should establish correctness for changes.
+  - obligation_id: frameworks-test-levels
+    description: Identify test frameworks and principal test levels.
     applicability: always
-output_quality_expectations: [Provide practical, repository-specific verification guidance.]
+  - obligation_id: test-organization
+    description: Explain test organization and layout.
+    applicability: always
+  - obligation_id: fixtures-factories-setup
+    description: Explain fixtures, factories, and test setup.
+    applicability: always
+  - obligation_id: isolation-external-dependencies
+    description: Explain isolation and external-dependency handling.
+    applicability: always
+  - obligation_id: validation-commands
+    description: Identify standard validation and test commands.
+    applicability: always
+  - obligation_id: change-verification-mapping
+    description: Map important change types to appropriate verification surfaces.
+    applicability: always
+  - obligation_id: ci-verification
+    description: Identify CI-triggered verification when present.
+    applicability: conditional
+    condition_hint: CI configuration executes tests, checks, or other verification.
+  - obligation_id: specialized-test-strategies
+    description: Explain end-to-end, contract, visual, accessibility, performance, security, and other specialized strategies when present.
+    applicability: conditional
+    condition_hint: One or more specialized test categories are represented in the repository.
+  - obligation_id: material-testing-gaps
+    description: Surface material testing gaps discovered during investigation without claiming exhaustive gap analysis.
+    applicability: always
+output_quality_expectations:
+  - Be practical and repository-specific so a contributor can choose tests to add or run for a change.
+  - Avoid encyclopedic inventories and duplicating the behavior owned by specialist targets.

@@ -1,5 +1,6 @@
 """Public init-command and canonical orchestration boundary tests."""
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,15 +10,31 @@ from typer.testing import CliRunner
 
 import bridger.cli as cli
 import bridger.init_pipeline as init_pipeline
+from bridger.contracts.files import IntakeConfiguration
 from bridger.init_pipeline import (
     InitMode,
     RepositoryBrainBuildError,
     RepositoryBrainBuildResult,
     resolve_init_configuration,
 )
-from bridger.repository_brain.harness import _budget_for
+from bridger.llm.profiles import LLMProfile
+from bridger.memory import load_target_artifacts, resolve_target_activation
+from bridger.memory.errors import TargetActivationError
+from bridger.repository.service import prepare_repository
+from bridger.repository_brain.harness import (
+    _budget_for,
+    _frontend_stack_present,
+    _profiles,
+)
 
 runner = CliRunner()
+_DEFAULT_TARGETS_ROOT = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "bridger"
+    / "memory"
+    / "default-targets"
+)
 
 
 @pytest.mark.parametrize(
@@ -71,6 +88,169 @@ def test_test_mode_uses_full_topology_with_reduced_budgets() -> None:
     assert test_budget.max_cycles < full_budget.max_cycles
     assert test_budget.max_model_calls < full_budget.max_model_calls
     assert test_budget.max_input_tokens < full_budget.max_input_tokens
+
+
+@pytest.mark.parametrize("test_budgets", [False, True])
+def test_init_worker_profiles_keep_initial_input_within_v0_cap(
+    test_budgets: bool,
+) -> None:
+    worker, reviewer = _profiles(
+        LLMProfile(
+            name="balanced",
+            provider="openai",
+            model="gpt-5.6-terra",
+        ),
+        test_budgets,
+    )
+
+    assert worker.initial_provider_input_hard_cap_tokens <= 32_000
+    assert reviewer.initial_provider_input_hard_cap_tokens <= 32_000
+    if test_budgets:
+        assert worker.model_context_window_tokens == 32_000
+        assert worker.initial_provider_input_hard_cap_tokens == 29_952
+    else:
+        assert worker.model_context_window_tokens == 128_000
+        assert worker.initial_provider_input_hard_cap_tokens == 32_000
+
+
+@pytest.mark.parametrize(
+    "dependency",
+    [
+        "react",
+        "next",
+        "vue",
+        "nuxt",
+        "angular",
+        "@angular/core",
+        "svelte",
+        "@sveltejs/kit",
+    ],
+)
+def test_frontend_framework_families_are_detected_from_dependencies(
+    tmp_path: Path,
+    dependency: str,
+) -> None:
+    repository = _repository_with_files(
+        tmp_path,
+        {"package.json": _package_manifest("devDependencies", dependency)},
+    )
+    context, file_index = prepare_repository(repository)
+
+    assert _frontend_stack_present(
+        context,
+        file_index,
+        SimpleNamespace(),
+        SimpleNamespace(),
+    )
+
+
+def test_nested_workspace_manifest_activates_design_through_stage_zero(
+    tmp_path: Path,
+) -> None:
+    repository = _repository_with_files(
+        tmp_path,
+        {
+            "package.json": _package_manifest("devDependencies", "typescript"),
+            "apps/web/package.json": _package_manifest("dependencies", "react"),
+        },
+    )
+    context, file_index = prepare_repository(repository)
+    catalog, definitions = load_target_artifacts(_DEFAULT_TARGETS_ROOT)
+
+    active = resolve_target_activation(
+        catalog,
+        definitions,
+        context,
+        file_index,
+        SimpleNamespace(),
+        SimpleNamespace(),
+        activation_rules={"frontend_stack_present_v1": _frontend_stack_present},
+    )
+
+    assert "design" in active
+
+
+def test_frontend_mentions_and_path_names_do_not_activate_design(
+    tmp_path: Path,
+) -> None:
+    repository = _repository_with_files(
+        tmp_path,
+        {
+            "package.json": _package_manifest("devDependencies", "vite"),
+            "src/react_helpers.ts": "export const framework = 'React';\n",
+            "README.md": "This README mentions React, Vue, and Angular.\n",
+        },
+    )
+    context, file_index = prepare_repository(repository)
+
+    assert not _frontend_stack_present(
+        context,
+        file_index,
+        SimpleNamespace(),
+        SimpleNamespace(),
+    )
+
+
+def test_frontend_activation_reads_the_pinned_revision_not_dirty_manifest(
+    tmp_path: Path,
+) -> None:
+    repository = _repository_with_files(
+        tmp_path,
+        {"package.json": _package_manifest("dependencies", "react")},
+    )
+    context, file_index = prepare_repository(repository)
+    (repository / "package.json").write_text(
+        _package_manifest("devDependencies", "vite"),
+        encoding="utf-8",
+    )
+
+    assert _frontend_stack_present(
+        context,
+        file_index,
+        SimpleNamespace(),
+        SimpleNamespace(),
+    )
+
+
+def test_malformed_package_manifest_fails_deterministically(tmp_path: Path) -> None:
+    repository = _repository_with_files(
+        tmp_path,
+        {"package.json": "{not-json\n"},
+    )
+    context, file_index = prepare_repository(repository)
+
+    with pytest.raises(ValueError, match="invalid package manifest"):
+        _frontend_stack_present(
+            context,
+            file_index,
+            SimpleNamespace(),
+            SimpleNamespace(),
+        )
+
+
+def test_unreadable_package_manifest_fails_through_stage_zero(tmp_path: Path) -> None:
+    repository = _repository_with_files(
+        tmp_path,
+        {"package.json": _package_manifest("dependencies", "react")},
+    )
+    context, file_index = prepare_repository(
+        repository,
+        configuration=IntakeConfiguration(
+            sensitive_path_patterns=("package.json",),
+        ),
+    )
+    catalog, definitions = load_target_artifacts(_DEFAULT_TARGETS_ROOT)
+
+    with pytest.raises(TargetActivationError, match="activation rule failed"):
+        resolve_target_activation(
+            catalog,
+            definitions,
+            context,
+            file_index,
+            SimpleNamespace(),
+            SimpleNamespace(),
+            activation_rules={"frontend_stack_present_v1": _frontend_stack_present},
+        )
 
 
 def test_deterministic_pipeline_never_enters_model_stages(
@@ -203,3 +383,22 @@ def _git(repository: Path, *arguments: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def _repository_with_files(tmp_path: Path, files: dict[str, str]) -> Path:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    _git(repository, "init")
+    _git(repository, "config", "user.email", "test@example.com")
+    _git(repository, "config", "user.name", "Bridger Test")
+    for relative_path, content in files.items():
+        path = repository / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "initial")
+    return repository
+
+
+def _package_manifest(section: str, dependency: str) -> str:
+    return json.dumps({section: {dependency: "1.0.0"}}) + "\n"

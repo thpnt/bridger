@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from bridger.contracts.enrichment import GraphEnrichmentConfig, GraphEnrichmentOverlay
-from bridger.contracts.files import FileIndex
+from bridger.contracts.files import FileIndex, SourceReadRequest
 from bridger.contracts.graph import GraphBuildResult
 from bridger.contracts.memory.core import (
     ExecutionBudget,
@@ -48,10 +49,31 @@ from bridger.memory import (
 from bridger.memory.evaluation.review import review_target
 from bridger.memory.runtime.worker_tools import WORKER_TOOL_IDS
 from bridger.navigation.navigator import RepositoryNavigator
+from bridger.repository.reader import read_file
 from bridger.repository_brain.publication import publish_repository_brain
 
-_PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "prompts"
+_PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "prompts"
 _TARGETS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "default-targets"
+_INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS = 32_000
+_FRONTEND_DEPENDENCY_SECTIONS = (
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+)
+_FRONTEND_FRAMEWORK_PACKAGES = frozenset(
+    {
+        "@angular/core",
+        "@sveltejs/kit",
+        "angular",
+        "next",
+        "nuxt",
+        "react",
+        "react-dom",
+        "svelte",
+        "vue",
+    }
+)
 
 
 async def run_memory_harness(
@@ -288,6 +310,10 @@ def _profiles(
 ) -> tuple[WorkerProfile, WorkerProfile]:
     reserved = 2_048 if test_budgets else 8_192
     context_window = 32_000 if test_budgets else 128_000
+    initial_input_cap = min(
+        _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS,
+        context_window - reserved,
+    )
     return (
         WorkerProfile(
             profile_id="bridger-worker-v1",
@@ -295,7 +321,7 @@ def _profiles(
             tokenizer_encoding="o200k_base",
             model_context_window_tokens=context_window,
             reserved_response_tokens=reserved,
-            initial_provider_input_hard_cap_tokens=context_window - reserved,
+            initial_provider_input_hard_cap_tokens=initial_input_cap,
         ),
         WorkerProfile(
             profile_id="bridger-reviewer-v1",
@@ -303,7 +329,7 @@ def _profiles(
             tokenizer_encoding="o200k_base",
             model_context_window_tokens=context_window,
             reserved_response_tokens=reserved,
-            initial_provider_input_hard_cap_tokens=context_window - reserved,
+            initial_provider_input_hard_cap_tokens=initial_input_cap,
         ),
     )
 
@@ -311,7 +337,7 @@ def _profiles(
 def _budget_for(test_budgets: bool) -> ExecutionBudget:
     if test_budgets:
         return ExecutionBudget(
-            max_cycles=12,
+            max_cycles=4,
             max_model_calls=48,
             max_tool_calls=192,
             max_repair_cycles=3,
@@ -329,18 +355,48 @@ def _budget_for(test_budgets: bool) -> ExecutionBudget:
 
 
 def _frontend_stack_present(
-    _context: RepositoryContext,
+    context: RepositoryContext,
     file_index: FileIndex,
     _symbol_index: SymbolIndex,
     _graph_build: GraphBuildResult,
 ) -> bool:
-    """Activate the optional design target from deterministic repository facts."""
-    frontend_markers = {"react", "next", "vue", "nuxt", "angular", "svelte"}
-    return any(
-        marker in file.path.lower()
-        for file in file_index.files
-        for marker in frontend_markers
-    )
+    """Detect a frontend framework from revision-bound package manifests."""
+    manifest_paths = [
+        file.path for file in file_index.files if Path(file.path).name == "package.json"
+    ]
+    frontend_present = False
+    for manifest_path in manifest_paths:
+        result = read_file(
+            context,
+            file_index,
+            SourceReadRequest(path=manifest_path),
+        )
+        try:
+            manifest = json.loads(result.content)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"invalid package manifest: {manifest_path}") from error
+        if not isinstance(manifest, dict):
+            raise ValueError(f"package manifest is not an object: {manifest_path}")
+        frontend_present = (
+            _declares_frontend_framework(manifest, manifest_path) or frontend_present
+        )
+    return frontend_present
+
+
+def _declares_frontend_framework(
+    manifest: dict[str, object],
+    manifest_path: str,
+) -> bool:
+    for section_name in _FRONTEND_DEPENDENCY_SECTIONS:
+        section = manifest.get(section_name, {})
+        if not isinstance(section, dict):
+            raise ValueError(
+                f"package manifest dependency section is not an object: "
+                f"{manifest_path}:{section_name}"
+            )
+        if _FRONTEND_FRAMEWORK_PACKAGES.intersection(section):
+            return True
+    return False
 
 
 def _read_prompt(path: Path) -> str:

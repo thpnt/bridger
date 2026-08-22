@@ -1,19 +1,59 @@
 schema_version: 1
 target_id: data-and-state
-target_contract_version: v1
+target_contract_version: v2
 activation: {mode: always}
 depends_on: []
-canonical_question: What state exists, where does truth live, and how is it represented and changed technically?
-purpose: Explain technical state authority, persistence, mutation, and consistency.
-expected_abstraction: Repository-level technical state model.
-always_relevant_scope: [State authority, representation, lifecycle, and persistence.]
-conditional_scope: []
-exclusions: [Product meaning of state transitions.]
-boundary_guidance: [Own technical state details, not domain meaning.]
-investigation_expectations: [Trace state creation, mutation, persistence, and recovery paths.]
-evidence_expectations: [Ground state claims in source and schema evidence.]
+canonical_question: What state exists, where does truth live, who owns it, and how is it represented, read, changed, and kept consistent?
+purpose: Explain technical state authority, representation, ownership, persistence, mutation, lifecycle, and consistency.
+expected_abstraction: Deep technical state and persistence model.
+always_relevant_scope:
+  - State categories, authoritative stores, models, ownership, readers, writers, and data-access boundaries.
+  - Mutation paths, consistency, transactions, lifecycle, serialization, and persistent, ephemeral, derived, or authoritative state.
+conditional_scope:
+  - Schemas, migrations, caches, sessions, client or filesystem state, event or object stores, and durable queues.
+  - Materialized views, replication, locking, retention, expiry, versioning, and schema evolution.
+exclusions:
+  - Domain meaning, complete architecture, external API contracts, deployment state, infrastructure state, and secrets injection.
+boundary_guidance:
+  - Own technical truth, representation, ownership, and lifecycle rather than the product meaning of transitions.
+investigation_expectations:
+  - Trace significant state from authority and representation through readers, writers, coordination, derived copies, and lifecycle.
+  - Inspect both definitions and usage rather than documenting schemas in isolation.
+evidence_expectations:
+  - Use schemas, migrations, models, persistence configuration, and serialization for representation.
+  - Use source readers and writers for ownership and lifecycle, with tests as supporting evidence.
 completion_obligations:
-  - obligation_id: state-authority
-    description: Resolve where important state lives and how it changes.
+  - obligation_id: state-categories-stores
+    description: Identify the principal state categories and stores.
     applicability: always
-output_quality_expectations: [Make state ownership and lifecycle explicit.]
+  - obligation_id: sources-of-truth
+    description: Distinguish authoritative sources of truth from derived and cached state.
+    applicability: always
+  - obligation_id: data-models
+    description: Explain important persisted and data models technically.
+    applicability: always
+  - obligation_id: read-write-ownership
+    description: Explain read and write ownership and data-access boundaries.
+    applicability: always
+  - obligation_id: mutation-lifecycle
+    description: Explain important mutation and data lifecycle paths.
+    applicability: always
+  - obligation_id: consistency-transactions
+    description: Explain consistency and transaction semantics when present.
+    applicability: conditional
+    condition_hint: State changes use transactions or material consistency coordination.
+  - obligation_id: migrations-schema-evolution
+    description: Explain migrations and schema evolution when present.
+    applicability: conditional
+    condition_hint: Persistent schemas or representations evolve through explicit migration or versioning mechanisms.
+  - obligation_id: caches-derived-state
+    description: Explain caches, derived or materialized state, and invalidation when present.
+    applicability: conditional
+    condition_hint: Cached, derived, replicated, or materialized state exists.
+  - obligation_id: retention-versioning-locking
+    description: Explain important retention, expiry, versioning, or locking mechanisms when present.
+    applicability: conditional
+    condition_hint: State has material retention, expiry, versioning, replication, or locking behavior.
+output_quality_expectations:
+  - Emphasize authority, ownership, lifecycle, consistency, and relationships without becoming an exhaustive field dictionary.
+  - Keep unknown or contradictory ownership and lifecycle behavior explicit.
