@@ -34,11 +34,15 @@ from bridger.graph.enrichment import (
     load_graph_enrichment,
     validate_graph_enrichment,
 )
+from bridger.graph.enrichment.execution import CommunityNameBatchRequest
 from bridger.graph.enrichment.naming import (
     InvalidCommunityNameBatch,
     validate_community_name_batch,
 )
-from bridger.graph.enrichment.service import _create_community_name_client
+from bridger.graph.enrichment.service import (
+    _create_community_name_client,
+    _run_batch_execution,
+)
 from bridger.llm.client import LLMClient
 from bridger.llm.errors import LLMProviderError
 from bridger.llm.models import LLMRequest, LLMResponse
@@ -338,6 +342,27 @@ def test_layer5_client_disables_internal_retry_budget(
 
     assert _create_community_name_client(_config()) is sentinel
     assert captured[0].retry_policy.max_attempts == 1
+
+
+def test_layer5_sync_entrypoint_rejects_an_active_event_loop() -> None:
+    batch = CommunityNameBatchRequest(
+        batch_id="community-names-0000",
+        evidence=(CommunityEvidence(community_id=0),),
+    )
+
+    async def invoke() -> None:
+        with pytest.raises(
+            RuntimeError,
+            match="enrich_graph_snapshot cannot run inside an active event loop",
+        ):
+            _run_batch_execution(
+                cast(LLMClient, object()),
+                [batch],
+                profile_version="test-v1",
+                max_concurrency=1,
+            )
+
+    asyncio.run(invoke())
 
 
 def _graph_state(

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from bridger.contracts.enrichment import GraphEnrichmentOverlay
 from bridger.contracts.files import FileIndex
 from bridger.contracts.graph import GraphBuildResult, GraphConstructionConfig
 from bridger.contracts.repository import RepositoryContext
@@ -15,6 +16,7 @@ from bridger.contracts.symbols import SymbolIndex
 from bridger.extraction.service import extract_repository_facts
 from bridger.graph.intelligence import build_graph_intelligence
 from bridger.graph.lifecycle import create_graph_snapshot
+from bridger.llm.profiles import LLMProfile
 from bridger.repository.service import prepare_repository
 
 
@@ -126,16 +128,27 @@ def build_repository_brain(
         )
 
     _report_stage(on_stage, "Generating enrichment and Repository Brain memory")
-    publication_path = asyncio.run(
-        _run_model_driven_pipeline(
-            configuration,
-            context,
-            file_index,
-            symbol_index,
-            graph_build,
-            on_stage,
+    try:
+        # Layer 5 owns a synchronous public API that runs its internal async
+        # batching. Complete it before entering the memory fleet event loop.
+        from bridger.repository_brain.harness import prepare_model_layers
+
+        profile, enrichment = prepare_model_layers(configuration, graph_build)
+        publication_path = asyncio.run(
+            _run_model_driven_pipeline(
+                configuration,
+                context,
+                file_index,
+                symbol_index,
+                graph_build,
+                profile,
+                enrichment,
+                on_stage,
+            )
         )
-    )
+    except Exception as error:
+        message = str(error) or type(error).__name__
+        raise RepositoryBrainBuildError(message) from error
     return RepositoryBrainBuildResult(
         mode=configuration.mode,
         graph_build=graph_build,
@@ -149,31 +162,25 @@ async def _run_model_driven_pipeline(
     file_index: FileIndex,
     symbol_index: SymbolIndex,
     graph_build: GraphBuildResult,
+    profile: LLMProfile,
+    enrichment: GraphEnrichmentOverlay,
     on_stage: Callable[[str], None] | None,
 ) -> Path:
-    """Run Layer 5 through publication using the existing durable contracts."""
+    """Run the asynchronous memory fleet through publication."""
     # The complete composition is implemented in the harness module so the CLI
     # never becomes a second state authority.
-    from bridger.repository_brain.harness import (
-        prepare_model_layers,
-        run_memory_harness,
-    )
+    from bridger.repository_brain.harness import run_memory_harness
 
-    try:
-        profile, enrichment = prepare_model_layers(configuration, graph_build)
-        _report_stage(on_stage, "Running memory fleet validation and publication")
-        return await run_memory_harness(
-            configuration,
-            context,
-            file_index,
-            symbol_index,
-            graph_build,
-            profile,
-            enrichment,
-        )
-    except Exception as error:
-        message = str(error) or type(error).__name__
-        raise RepositoryBrainBuildError(message) from error
+    _report_stage(on_stage, "Running memory fleet validation and publication")
+    return await run_memory_harness(
+        configuration,
+        context,
+        file_index,
+        symbol_index,
+        graph_build,
+        profile,
+        enrichment,
+    )
 
 
 def _report_stage(callback: Callable[[str], None] | None, stage: str) -> None:

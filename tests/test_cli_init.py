@@ -1,5 +1,6 @@
 """Public init-command and canonical orchestration boundary tests."""
 
+import asyncio
 import json
 import subprocess
 from pathlib import Path
@@ -10,6 +11,7 @@ from typer.testing import CliRunner
 
 import bridger.cli as cli
 import bridger.init_pipeline as init_pipeline
+import bridger.repository_brain.harness as harness
 from bridger.contracts.files import IntakeConfiguration
 from bridger.init_pipeline import (
     InitMode,
@@ -385,6 +387,14 @@ def test_model_modes_enter_the_shared_full_pipeline(
         "create_graph_snapshot",
         lambda *_args, **_kwargs: graph_build,
     )
+    monkeypatch.setattr(
+        harness,
+        "prepare_model_layers",
+        lambda *_args, **_kwargs: (
+            LLMProfile(name="balanced", provider="openai", model="test-model"),
+            SimpleNamespace(),
+        ),
+    )
 
     async def model_stage(*_args: object) -> Path:
         return tmp_path / "published" / "repository-brain.json"
@@ -396,6 +406,61 @@ def test_model_modes_enter_the_shared_full_pipeline(
     )
 
     assert result.publication_path == tmp_path / "published" / "repository-brain.json"
+
+
+@pytest.mark.parametrize("mode", [InitMode.FULL, InitMode.TEST])
+def test_model_pipeline_prepares_enrichment_before_entering_memory_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mode: InitMode,
+) -> None:
+    graph_build = SimpleNamespace(snapshot_root=tmp_path / "graph")
+    events: list[str] = []
+    enrichment = SimpleNamespace()
+
+    monkeypatch.setattr(
+        init_pipeline,
+        "prepare_repository",
+        lambda _: ("context", "index"),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "extract_repository_facts",
+        lambda *_args, **_kwargs: ("symbols", "report", "extraction"),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "build_graph_intelligence",
+        lambda *_args, **_kwargs: ("graph", "diagnostics", "structural"),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "create_graph_snapshot",
+        lambda *_args, **_kwargs: graph_build,
+    )
+
+    def prepare_layers(*_args: object, **_kwargs: object) -> tuple[object, object]:
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        events.append("enrichment")
+        return SimpleNamespace(), enrichment
+
+    async def run_memory(*args: object, **_kwargs: object) -> Path:
+        asyncio.get_running_loop()
+        assert events == ["enrichment"]
+        assert args[-1] is enrichment
+        events.append("memory")
+        return tmp_path / "published" / "repository-brain.json"
+
+    monkeypatch.setattr(harness, "prepare_model_layers", prepare_layers)
+    monkeypatch.setattr(harness, "run_memory_harness", run_memory)
+
+    result = init_pipeline.build_repository_brain(
+        resolve_init_configuration(mode, repository_root=tmp_path)
+    )
+
+    assert result.publication_path == tmp_path / "published" / "repository-brain.json"
+    assert events == ["enrichment", "memory"]
 
 
 def test_init_surfaces_pipeline_failures(monkeypatch: pytest.MonkeyPatch) -> None:
