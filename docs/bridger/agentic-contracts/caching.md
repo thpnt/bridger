@@ -448,9 +448,9 @@ output_tokens
 reasoning_tokens
 ```
 
-Cache statistics are operational diagnostics and cost/latency telemetry.
-
-They do not affect semantic execution state.
+Cache statistics are operational telemetry and do not affect semantic execution
+state. Durable usage records total provider input, cached input, cache writes,
+and output independently.
 
 Useful Stage 4 diagnostics include:
 
@@ -463,9 +463,10 @@ active cache key
 selected cache breakpoints
 ```
 
-Do not introduce cache-specific execution budgets for V0.
-
-Normal input-token accounting should continue to follow provider-reported usage.
+Do not introduce cache-specific execution budgets for V0. Cumulative input
+budget consumption is derived as total provider-reported input minus
+provider-reported cached input (never below zero). Cache writes remain telemetry
+only; they do not create another execution budget.
 
 ---
 

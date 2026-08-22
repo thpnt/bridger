@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from openai._models import construct_type
 from openai.types.responses import CompactedResponse
 from pydantic import BaseModel
 
@@ -766,6 +767,64 @@ def test_openai_compacted_response_round_trips_to_a_valid_continuation_request()
     None
 ):
     worker_instructions = "Bridger worker control instructions"
+    raw_compacted_response = {
+        "id": "compact-response",
+        "created_at": 1,
+        "object": "response.compaction",
+        "output": [
+            {
+                "id": "msg-prior-developer-1",
+                "type": "message",
+                "status": "completed",
+                "role": "developer",
+                "phase": "commentary",
+                "content": [
+                    {"type": "input_text", "text": "prior target context"},
+                    {"type": "input_text", "text": "prior obligation context"},
+                    {"type": "input_text", "text": "prior tool rules"},
+                ],
+            },
+            {
+                "id": "msg-prior-developer-2",
+                "type": "message",
+                "status": "completed",
+                "role": "developer",
+                "phase": "final_answer",
+                "content": [
+                    {"type": "input_text", "text": "prior repair context"},
+                    {"type": "input_text", "text": "prior focus context"},
+                    {"type": "input_text", "text": "prior yield rule"},
+                    {
+                        "type": "input_text",
+                        "text": "prior finalization rule",
+                    },
+                ],
+            },
+            {
+                "id": "cmp-opaque",
+                "type": "compaction",
+                "encrypted_content": "opaque-encrypted-context",
+                "created_by": "response-a",
+            },
+        ],
+        "usage": {
+            "input_tokens": 200,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 30,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 230,
+        },
+    }
+    compacted_response = construct_type(
+        value=raw_compacted_response,
+        type_=CompactedResponse,
+    )
+    assert isinstance(compacted_response, CompactedResponse)
+    assert [type(item).__name__ for item in compacted_response.output] == [
+        "ResponseOutputMessage",
+        "ResponseOutputMessage",
+        "ResponseCompactionItem",
+    ]
     provider = _FakeOpenAI(
         [
             {
@@ -776,36 +835,7 @@ def test_openai_compacted_response_round_trips_to_a_valid_continuation_request()
                 "output": [],
             }
         ],
-        compaction_outcomes=[
-            CompactedResponse.model_construct(
-                id="compact-response",
-                created_at=1,
-                object="response.compaction",
-                output=[
-                    {
-                        "id": "msg-prior-user",
-                        "type": "message",
-                        "status": "completed",
-                        "role": "user",
-                        "phase": "final_answer",
-                        "content": [
-                            {"type": "input_text", "text": "prior worker input"}
-                        ],
-                    },
-                    {
-                        "id": "cmp-opaque",
-                        "type": "compaction",
-                        "encrypted_content": "opaque-encrypted-context",
-                        "created_by": "response-a",
-                    },
-                ],
-                usage={
-                    "input_tokens": 200,
-                    "output_tokens": 30,
-                    "total_tokens": 230,
-                },
-            )
-        ],
+        compaction_outcomes=[compacted_response],
     )
     client = _openai_client(provider, model="gpt-5.6")
     prompt_cache = LLMPromptCacheConfig(
@@ -853,8 +883,22 @@ def test_openai_compacted_response_round_trips_to_a_valid_continuation_request()
     assert compacted.context.payload == [
         {
             "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": "prior worker input"}],
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "prior target context"},
+                {"type": "input_text", "text": "prior obligation context"},
+                {"type": "input_text", "text": "prior tool rules"},
+            ],
+        },
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "prior repair context"},
+                {"type": "input_text", "text": "prior focus context"},
+                {"type": "input_text", "text": "prior yield rule"},
+                {"type": "input_text", "text": "prior finalization rule"},
+            ],
         },
         {
             "type": "compaction",

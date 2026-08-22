@@ -92,7 +92,14 @@ class ExecutionUsage(BaseModel):
     tool_calls: int = Field(default=0, ge=0)
     repair_cycles: int = Field(default=0, ge=0)
     input_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
+
+
+def budgeted_input_tokens(usage: ExecutionUsage) -> int:
+    """Return provider input that consumes a cumulative execution budget."""
+    return max(0, usage.input_tokens - usage.cached_input_tokens)
 
 
 class FindingRef(BaseModel):
@@ -398,6 +405,7 @@ __all__ = [
     "CompletionItemState",
     "CompletionObligationDefinition",
     "CompletionStatus",
+    "budgeted_input_tokens",
     "ExecutionBudget",
     "ExecutionUsage",
     "FindingOrigin",

@@ -349,14 +349,14 @@ def test_init_profiles_preflight_a_real_shipped_worker_context(
         serialize_worker_context(context)
     )
 
-    assert diagnostics.within_initial_input_limit is True
-    assert worker_profile.initial_provider_input_hard_cap_tokens <= 32_000
-    assert reviewer_profile.initial_provider_input_hard_cap_tokens <= 32_000
+    assert diagnostics.within_provider_input_limit is True
+    assert worker_profile.provider_input_hard_cap_tokens <= 32_000
+    assert reviewer_profile.provider_input_hard_cap_tokens <= 32_000
     assert worker_profile.model_context_window_tokens == 1_050_000
-    assert worker_profile.initial_provider_input_hard_cap_tokens == 32_000
+    assert worker_profile.provider_input_hard_cap_tokens == 32_000
     assert (
         worker_profile.model_context_window_tokens
-        != worker_profile.initial_provider_input_hard_cap_tokens
+        != worker_profile.provider_input_hard_cap_tokens
     )
 
 
@@ -483,7 +483,7 @@ def test_complete_request_hard_cap_includes_fixed_request_overhead() -> None:
 
     exact = _fixture()
     exact.worker_profile = exact.worker_profile.model_copy(
-        update={"initial_provider_input_hard_cap_tokens": context_tokens + fixed_tokens}
+        update={"provider_input_hard_cap_tokens": context_tokens + fixed_tokens}
     )
     exact_context = exact.compile(
         fixed_request_input=fixed_input,
@@ -498,14 +498,14 @@ def test_complete_request_hard_cap_includes_fixed_request_overhead() -> None:
         serialize_worker_context(exact_context)
     )
     assert diagnostics.complete_initial_provider_input_tokens == (
-        exact.worker_profile.initial_provider_input_hard_cap_tokens
+        exact.worker_profile.provider_input_hard_cap_tokens
     )
-    assert diagnostics.remaining_initial_input_tokens == 0
+    assert diagnostics.remaining_provider_input_tokens == 0
 
     over = _fixture()
     over.worker_profile = over.worker_profile.model_copy(
         update={
-            "initial_provider_input_hard_cap_tokens": (
+            "provider_input_hard_cap_tokens": (
                 context_tokens + fixed_tokens - 1
             )
         }
@@ -535,7 +535,7 @@ def test_unused_capacity_remains_unused_and_serialization_is_stable_first() -> N
 
     assert first_serialized == second_serialized
     assert diagnostics.complete_initial_provider_input_tokens < 32_000
-    assert diagnostics.remaining_initial_input_tokens > 0
+    assert diagnostics.remaining_provider_input_tokens > 0
     assert not first_serialized.endswith(" " * 100)
     headings = [
         "# Shared worker instructions",
@@ -570,7 +570,7 @@ def test_debug_snapshot_is_optional_and_debug_write_failure_is_non_blocking(
     payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
     assert payload["context"] == context.model_dump(mode="json")
     assert payload["serialized_model_context"] == serialize_worker_context(context)
-    assert payload["diagnostics"]["within_initial_input_limit"] is True
+    assert payload["diagnostics"]["within_provider_input_limit"] is True
 
     class FailingDebugWriter(WorkerContextDebugWriter):
         def write(self, *_: object) -> None:

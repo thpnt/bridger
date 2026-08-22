@@ -196,6 +196,22 @@ def test_target_hard_budget_limits_exhaust_target(
     assert fleet_state.phase is FleetPhase.EXHAUSTED
 
 
+def test_cached_input_does_not_consume_cumulative_input_budget() -> None:
+    budget = _BUDGET.model_copy(update={"max_input_tokens": 4})
+    fleet_spec, fleet_state, specs, states = _fleet(
+        ["architecture"],
+        target_budget=budget,
+        fleet_phase=FleetPhase.RUNNING,
+    )
+    states[0].usage.input_tokens = 4
+    states[0].usage.cached_input_tokens = 1
+
+    assert schedule_runnable_targets(fleet_spec, fleet_state, specs, states) == [
+        "task-architecture"
+    ]
+    assert states[0].phase is TargetPhase.SCHEDULED
+
+
 def test_unconfigured_token_budgets_do_not_restrict_admission() -> None:
     fleet_spec, fleet_state, specs, states = _fleet(["architecture"])
     states[0].usage.input_tokens = 1_000_000

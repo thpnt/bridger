@@ -24,6 +24,7 @@ from bridger.contracts.memory.core import (
     TargetPhase,
     TargetTaskSpec,
     TargetTaskState,
+    budgeted_input_tokens,
 )
 from bridger.contracts.memory.fleet_validation import FleetValidationFinding
 from bridger.contracts.memory.hydration import (
@@ -704,7 +705,7 @@ def _compile_hydrating_context(
     )
     serialized = serialize_worker_context(context)
     diagnostics = manager.inspect_initial_worker_context(serialized)
-    if not diagnostics.within_initial_input_limit:
+    if not diagnostics.within_provider_input_limit:
         raise WorkerContextHydrationError(
             "complete mandatory initial provider input exceeds the hard cap"
         )
@@ -1075,7 +1076,7 @@ def _remaining_budget(
         "input_tokens": (
             None
             if budget.max_input_tokens is None
-            else budget.max_input_tokens - usage.input_tokens
+            else budget.max_input_tokens - budgeted_input_tokens(usage)
         ),
         "output_tokens": (
             None

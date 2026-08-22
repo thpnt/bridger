@@ -28,6 +28,7 @@ from bridger.contracts.memory.core import (
     TargetPhase,
     TargetTaskSpec,
     TargetTaskState,
+    budgeted_input_tokens,
 )
 from bridger.contracts.memory.persistence import RuntimeErrorRecord, TaskCheckpoint
 from bridger.contracts.memory.worker_cycle import EvidenceReference, OpenQuestion
@@ -449,6 +450,46 @@ def recover_target(
         _replace_model(target_state, after)
         return True
     return False
+
+
+def normalize_target_for_fleet_budget_stop(
+    store: FleetRuntimeStore,
+    target_spec: TargetTaskSpec,
+    target_state: TargetTaskState,
+    completion_state: TargetCompletionState,
+    evidence: Mapping[str, EvidenceReference],
+    questions: Mapping[str, OpenQuestion],
+) -> bool:
+    """Safely return an admitted target to SCHEDULED for fleet exhaustion."""
+    if target_state.phase is TargetPhase.SCHEDULED:
+        return True
+    if target_state.phase is TargetPhase.HYDRATING:
+        before = target_state.phase
+    elif target_state.phase is TargetPhase.WORKING:
+        create_checkpoint(
+            store,
+            target_spec,
+            target_state,
+            completion_state,
+            evidence,
+            questions,
+        )
+        before = TargetPhase.WORKING
+    else:
+        return False
+    after = target_state.model_copy(update={"phase": TargetPhase.SCHEDULED})
+    store.persist_target_state(
+        target_spec,
+        after,
+        event_type="recovery_reset",
+        payload={
+            "from_phase": before.value,
+            "to_phase": TargetPhase.SCHEDULED.value,
+            "reason": "fleet budget exhaustion",
+        },
+    )
+    _replace_model(target_state, after)
+    return True
 
 
 def recover_fleet(
@@ -1249,10 +1290,12 @@ def _validate_reservation_capacity(
     fleet_output = sum(item.output_token_reservation for item in reservations)
     if (
         fleet_spec.fleet_budget.max_input_tokens is not None
-        and fleet_state.usage.input_tokens + fleet_input
+        and fleet_input
+        and budgeted_input_tokens(fleet_state.usage) + fleet_input
         > fleet_spec.fleet_budget.max_input_tokens
     ) or (
         fleet_spec.fleet_budget.max_output_tokens is not None
+        and fleet_output
         and fleet_state.usage.output_tokens + fleet_output
         > fleet_spec.fleet_budget.max_output_tokens
     ):
@@ -1266,9 +1309,12 @@ def _validate_reservation_capacity(
         usage = target_states[task_id].usage
         if (
             target_spec.budget.max_input_tokens is not None
-            and usage.input_tokens + input_hold > target_spec.budget.max_input_tokens
+            and input_hold
+            and budgeted_input_tokens(usage) + input_hold
+            > target_spec.budget.max_input_tokens
         ) or (
             target_spec.budget.max_output_tokens is not None
+            and output_hold
             and usage.output_tokens + output_hold > target_spec.budget.max_output_tokens
         ):
             raise ValueError("provider ambiguity exceeds target token budget")
@@ -1277,7 +1323,7 @@ def _validate_reservation_capacity(
             output_limit = target_spec.budget.max_output_tokens
             if (
                 input_limit is not None
-                and usage.input_tokens + input_hold >= input_limit
+                and budgeted_input_tokens(usage) + input_hold >= input_limit
             ) or (
                 output_limit is not None
                 and usage.output_tokens + output_hold >= output_limit
@@ -1315,6 +1361,7 @@ __all__ = [
     "RecoveredFleet",
     "create_checkpoint",
     "initialize_persistence",
+    "normalize_target_for_fleet_budget_stop",
     "record_runtime_error",
     "recover_fleet",
     "recover_target",

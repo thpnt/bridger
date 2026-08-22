@@ -825,7 +825,7 @@ def test_failed_preflight_does_not_enter_working_or_consume_cycle(
 ) -> None:
     fixture = _fixture(tmp_path)
     fixture.profile = fixture.profile.model_copy(
-        update={"initial_provider_input_hard_cap_tokens": 1}
+        update={"provider_input_hard_cap_tokens": 1}
     )
     fixture.manager = CountingContextWindowManager(fixture.profile)
     fixture.context = fixture.context.model_copy(
@@ -833,7 +833,7 @@ def test_failed_preflight_does_not_enter_working_or_consume_cycle(
     )
     runner = fixture.runner([_response(_call("final", "request_finalization", {}))])
 
-    with pytest.raises(WorkerCyclePreflightError, match="initial provider request"):
+    with pytest.raises(WorkerCyclePreflightError, match="provider-input hard cap"):
         asyncio.run(runner.run())
 
     assert fixture.target_state.phase is TargetPhase.HYDRATING

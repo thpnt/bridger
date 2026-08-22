@@ -110,6 +110,8 @@ class ExecutionUsage(BaseModel):
     repair_cycles: int = Field(default=0, ge=0)
 
     input_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
 
 
@@ -128,6 +130,12 @@ class CandidateArtifactRef(BaseModel):
     revision: int = Field(ge=1)
     digest: str
 ```
+
+`ExecutionBudget.max_input_tokens` is cumulative when configured. Its consumed
+quantity is `max(0, input_tokens - cached_input_tokens)`, while `input_tokens`
+continues to record total provider-reported input. Fleet and target budgets are
+separate authorities: a fleet budget is aggregate allowance and a target budget
+is allowance for one target.
 
 ### Lifecycle decision
 
@@ -4059,13 +4067,16 @@ context window       1,050,000 tokens
 maximum output         128,000 tokens
 ```
 
-For Bridger V0 the hard maximum **complete initial provider request input** is:
+For Bridger V0 the hard maximum **complete normal provider generation request
+input** is:
 
 ```text
 32,000 tokens
 ```
 
-This is a hard Stage 3 limit, not a preferred fill target.
+This is a shared runtime-profile limit, not a preferred fill target. Stage 3
+enforces it for the initial request and Stage 4 enforces it independently for
+each later normal generation request.
 
 Bridger should minimize initial model context rather than attempt to utilize the available model context window.
 
@@ -4089,7 +4100,11 @@ A future profile/model may select another hard limit.
 
 ## 17.3 Complete request budget
 
-The 32K hard limit applies to the **complete first provider input**, not merely the serialized `WorkerContext`.
+The 32K hard limit applies to every complete normal provider input, not merely
+the serialized `WorkerContext` used for the first request. Stage 3 derives and
+reports the initial-request allowance from this shared profile policy; Stage 4
+enforces the same policy for later normal requests. Compaction is governed by
+actual provider context capacity instead.
 
 Therefore the maximum `WorkerContext` payload allowance is derived after accounting for provider/request overhead such as:
 
@@ -4751,7 +4766,7 @@ Debug snapshots do not alter this rule.
 15. Fleet budget is not exposed as worker-owned headroom.
 16. Remaining target budget is derived, not authoritative.
 17. Execution budgets and model context-window capacity are separate mechanisms.
-18. The V0 complete initial provider-input hard cap is 32K tokens.
+18. The V0 normal provider-generation input hard cap is 32K tokens for every request.
 19. The 32K cap is a maximum, not a target or fill level.
 20. Unused initial context capacity remains unused.
 21. `ContextWindowManager` observes both initial hydration and later accumulated Stage 4 context.
@@ -5911,9 +5926,11 @@ The first two segments remain exact and are never replaced by compaction. Only
 the provider trajectory is lossy-compacted. The protected recent batches remain
 as a bounded exact replay anchor after compaction and a provider-neutral fallback.
 
-The Stage 3 32K hard cap remains specifically the **complete initial provider-input cap**.
-
-Stage 4 does not reinterpret 32K as a hard cap for every later request. Later requests are governed by the model's actual context capacity through the existing `ContextWindowManager`, plus the bounded recent-tool working-set policy below.
+The profile's 32K hard cap applies to the complete Bridger-constructed input of
+every normal provider generation request, including the initial request and all
+later requests. Stage 4 uses the existing deterministic working-set eviction
+machinery when removable material causes a later request to exceed that cap.
+The actual model context window remains a separate capacity limit.
 
 ---
 
@@ -6775,7 +6792,7 @@ new usage contract
 31. No LLM-based context summarizer/relevance classifier is introduced; native provider compaction may compact only the transient provider trajectory.
 32. Tool outputs are bounded at the tool boundary before entering model context.
 33. The existing `ContextWindowManager` is consulted before every model request.
-34. The Stage 3 32K limit applies to the complete initial provider request; later active context uses actual model capacity plus Stage 4 working-set controls.
+34. The 32K normal provider-generation limit applies to every complete Bridger-constructed worker request; compaction uses actual model capacity plus Stage 4 working-set controls.
 35. Mandatory Stage 3 context and current authoritative-state corrections are never silently discarded.
 36. `cycles` increments once on `HYDRATING → WORKING`.
 37. `repair_cycles` increments at the same boundary only for `REPAIR` mode.

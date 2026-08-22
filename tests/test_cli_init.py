@@ -25,9 +25,10 @@ from bridger.memory import load_target_artifacts, resolve_target_activation
 from bridger.memory.errors import TargetActivationError
 from bridger.repository.service import prepare_repository
 from bridger.repository_brain.harness import (
-    _budget_for,
+    _fleet_budget_for,
     _frontend_stack_present,
     _profiles,
+    _target_budget_for,
     _worker_runtime_limits,
 )
 
@@ -134,14 +135,18 @@ def test_deterministic_mode_disables_model_stages() -> None:
 
 def test_test_mode_uses_full_topology_with_reduced_budgets() -> None:
     configuration = resolve_init_configuration(InitMode.TEST)
-    full_budget = _budget_for(False)
-    test_budget = _budget_for(True)
+    full_budget = _fleet_budget_for(False, target_capacity=4)
+    test_budget = _fleet_budget_for(True, target_capacity=4)
+    test_target_budget = _target_budget_for(True)
 
     assert configuration.enable_model_stages is True
     assert configuration.test_budgets is True
     assert test_budget.max_cycles < full_budget.max_cycles
     assert test_budget.max_model_calls < full_budget.max_model_calls
     assert test_budget.max_input_tokens < full_budget.max_input_tokens
+    assert test_target_budget.max_input_tokens is None
+    assert test_budget.max_input_tokens == 250_000
+    assert test_budget.max_cycles == test_target_budget.max_cycles * 4
 
 
 @pytest.mark.parametrize("test_budgets", [False, True])
@@ -157,13 +162,13 @@ def test_init_worker_profiles_keep_initial_input_within_v0_cap(
         test_budgets,
     )
 
-    assert worker.initial_provider_input_hard_cap_tokens <= 32_000
-    assert reviewer.initial_provider_input_hard_cap_tokens <= 32_000
+    assert worker.provider_input_hard_cap_tokens <= 32_000
+    assert reviewer.provider_input_hard_cap_tokens <= 32_000
     assert worker.reasoning_effort == reviewer.reasoning_effort == "xhigh"
     assert worker.model_context_window_tokens == 1_050_000
     assert reviewer.model_context_window_tokens == 1_050_000
-    assert worker.initial_provider_input_hard_cap_tokens == 32_000
-    assert reviewer.initial_provider_input_hard_cap_tokens == 32_000
+    assert worker.provider_input_hard_cap_tokens == 32_000
+    assert reviewer.provider_input_hard_cap_tokens == 32_000
     assert _worker_runtime_limits(test_budgets).active_context_soft_limit_tokens == (
         32_000 if test_budgets else 128_000
     )

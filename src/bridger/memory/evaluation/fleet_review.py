@@ -527,7 +527,7 @@ def _build_review_request(
     )
     if (
         diagnostics.current_request_input_tokens
-        > reviewer_profile.initial_provider_input_hard_cap_tokens
+        > reviewer_profile.provider_input_hard_cap_tokens
         or not diagnostics.within_context_limit
     ):
         raise FleetReviewError("complete mandatory fleet review request does not fit")

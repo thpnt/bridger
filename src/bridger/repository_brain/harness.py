@@ -105,7 +105,11 @@ async def run_memory_harness(
         profile_id="bridger-memory-tools-v1",
         allowed_tool_ids=WORKER_TOOL_IDS,
     )
-    budget = _budget_for(configuration.test_budgets)
+    target_budget = _target_budget_for(configuration.test_budgets)
+    fleet_budget = _fleet_budget_for(
+        configuration.test_budgets,
+        target_capacity=len(catalog.targets),
+    )
     output_root = configuration.bridger_root / "memory"
     fleet_spec = bind_memory_run(
         context,
@@ -118,8 +122,8 @@ async def run_memory_harness(
         default_worker_profile_id=worker_profile.profile_id,
         default_reviewer_profile_id=reviewer_profile.profile_id,
         default_permission_profile_id=permissions.profile_id,
-        fleet_budget=budget,
-        default_target_budget=budget,
+        fleet_budget=fleet_budget,
+        default_target_budget=target_budget,
         runtime_root=configuration.bridger_root / "runtime",
         output_root=output_root,
         max_concurrent_targets=1,
@@ -214,6 +218,9 @@ async def run_memory_harness(
                     limits=_worker_runtime_limits(configuration.test_budgets),
                     persistence=store,
                 )
+                if outcome is WorkerCycleOutcome.FLEET_BUDGET_STOP:
+                    store.exhaust_fleet_budget(fleet_state)
+                    break
                 if outcome is not WorkerCycleOutcome.FINALIZATION_REQUESTED:
                     continue
                 target_validation = validate_target_candidate(
@@ -376,7 +383,7 @@ def _profiles(
             tokenizer_encoding="o200k_base",
             model_context_window_tokens=profile.model_context_window_tokens,
             reserved_response_tokens=reserved,
-            initial_provider_input_hard_cap_tokens=initial_input_cap,
+            provider_input_hard_cap_tokens=initial_input_cap,
             reasoning_effort=resolved_reasoning_effort,
         ),
         WorkerProfile(
@@ -385,7 +392,7 @@ def _profiles(
             tokenizer_encoding="o200k_base",
             model_context_window_tokens=profile.model_context_window_tokens,
             reserved_response_tokens=reserved,
-            initial_provider_input_hard_cap_tokens=initial_input_cap,
+            provider_input_hard_cap_tokens=initial_input_cap,
             reasoning_effort=resolved_reasoning_effort,
         ),
     )
@@ -402,14 +409,15 @@ def _worker_runtime_limits(test_budgets: bool) -> WorkerRuntimeLimits:
     )
 
 
-def _budget_for(test_budgets: bool) -> ExecutionBudget:
+def _target_budget_for(test_budgets: bool) -> ExecutionBudget:
+    """Resolve limits for one target execution."""
     if test_budgets:
         return ExecutionBudget(
             max_cycles=4,
             max_model_calls=48,
             max_tool_calls=192,
             max_repair_cycles=3,
-            max_input_tokens=250_000,
+            max_input_tokens=None,
             max_output_tokens=32_000,
         )
     return ExecutionBudget(
@@ -417,8 +425,23 @@ def _budget_for(test_budgets: bool) -> ExecutionBudget:
         max_model_calls=240,
         max_tool_calls=960,
         max_repair_cycles=12,
-        max_input_tokens=1_000_000,
+        max_input_tokens=None,
         max_output_tokens=200_000,
+    )
+
+
+def _fleet_budget_for(test_budgets: bool, *, target_capacity: int) -> ExecutionBudget:
+    """Resolve aggregate fleet limits from the per-target runtime profile."""
+    if target_capacity < 1:
+        raise ValueError("fleet target capacity must be positive")
+    target_budget = _target_budget_for(test_budgets)
+    return ExecutionBudget(
+        max_cycles=target_budget.max_cycles * target_capacity,
+        max_model_calls=target_budget.max_model_calls * target_capacity,
+        max_tool_calls=target_budget.max_tool_calls * target_capacity,
+        max_repair_cycles=target_budget.max_repair_cycles * target_capacity,
+        max_input_tokens=250_000 if test_budgets else 1_000_000,
+        max_output_tokens=(target_budget.max_output_tokens or 0) * target_capacity,
     )
 
 

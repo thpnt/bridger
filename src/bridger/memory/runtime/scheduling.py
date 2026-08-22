@@ -15,6 +15,7 @@ from bridger.contracts.memory.core import (
     TargetPhase,
     TargetTaskSpec,
     TargetTaskState,
+    budgeted_input_tokens,
 )
 from bridger.memory.errors import FleetSchedulingError
 from bridger.memory.persistence.durability import FleetRuntimeStore
@@ -274,7 +275,7 @@ def _budget_allows(
     if usage.tool_calls >= budget.max_tool_calls:
         return False
     if budget.max_input_tokens is not None and (
-        usage.input_tokens >= budget.max_input_tokens
+        budgeted_input_tokens(usage) >= budget.max_input_tokens
     ):
         return False
     if budget.max_output_tokens is not None and (

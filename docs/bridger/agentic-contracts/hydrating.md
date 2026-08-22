@@ -36,7 +36,7 @@ Stage 3 owns:
 * deterministically selecting the current bounded cycle focus;
 * deriving remaining target budget;
 * resolving the allowed worker tool identities;
-* enforcing the hard initial provider-input cap;
+* enforcing the shared normal provider-input cap for the complete initial request;
 * compiling one immutable `WorkerContext`;
 * optional debug persistence of that compiled context.
 
@@ -759,7 +759,7 @@ model context-window capacity
 configured/reserved output capacity
 current input-token count
 remaining request context capacity
-hard initial provider-input cap
+normal provider-input hard cap
 ```
 
 It is used by Stage 3 to bound initial hydration.
@@ -788,13 +788,16 @@ context window       1,050,000 tokens
 maximum output         128,000 tokens
 ```
 
-For Bridger V0 the hard maximum **complete initial provider request input** is:
+For Bridger V0 the hard maximum **complete normal provider generation request
+input** is:
 
 ```text
 32,000 tokens
 ```
 
-This is a hard Stage 3 limit, not a preferred fill target.
+This is a shared runtime-profile limit, not a preferred fill target. Stage 3
+enforces it for the initial request and Stage 4 enforces it independently for
+each later normal generation request.
 
 Bridger should minimize initial model context rather than attempt to utilize the available model context window.
 
@@ -818,7 +821,11 @@ A future profile/model may select another hard limit.
 
 ## 17.3 Complete request budget
 
-The 32K hard limit applies to the **complete first provider input**, not merely the serialized `WorkerContext`.
+The 32K hard limit applies to every complete normal provider input, not merely
+the serialized `WorkerContext` used for the first request. Stage 3 derives and
+reports the initial-request allowance from this shared profile policy; Stage 4
+enforces the same policy for later normal requests. Compaction is governed by
+actual provider context capacity instead.
 
 Therefore the maximum `WorkerContext` payload allowance is derived after accounting for provider/request overhead such as:
 
@@ -1480,7 +1487,7 @@ Debug snapshots do not alter this rule.
 15. Fleet budget is not exposed as worker-owned headroom.
 16. Remaining target budget is derived, not authoritative.
 17. Execution budgets and model context-window capacity are separate mechanisms.
-18. The V0 complete initial provider-input hard cap is 32K tokens.
+18. The V0 normal provider-generation input hard cap is 32K tokens for every request.
 19. The 32K cap is a maximum, not a target or fill level.
 20. Unused initial context capacity remains unused.
 21. `ContextWindowManager` observes both initial hydration and later accumulated Stage 4 context.

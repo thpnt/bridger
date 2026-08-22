@@ -17,6 +17,7 @@ from bridger.contracts.memory.core import (
     CompletionItemState,
     CompletionObligationDefinition,
     ExecutionBudget,
+    FleetPhase,
     FleetRunState,
     MemoryFleetSpec,
     MemoryTargetCatalog,
@@ -251,6 +252,52 @@ def test_recovery_event_retains_interruption_diagnostics(tmp_path: Path) -> None
         "retryable": True,
         "error_id": error_event.payload["error_id"],
     }
+
+
+def test_fleet_budget_exhaustion_is_a_durable_terminal_state(tmp_path: Path) -> None:
+    fixture = _runtime(tmp_path)
+    fixture.fleet_state.phase = FleetPhase.RUNNING
+
+    fixture.store.exhaust_fleet_budget(fixture.fleet_state)
+
+    persisted = FleetRunState.model_validate_json(
+        fixture.store.paths.fleet_state.read_bytes()
+    )
+    assert persisted.phase is FleetPhase.EXHAUSTED
+    assert persisted.termination_reason == "fleet budget exhaustion"
+    event = fixture.store.recover_event_tail()[-1]
+    assert event.event_type == "phase_transition"
+    assert event.payload["reason"] == "fleet budget exhaustion"
+
+
+def test_provider_settlement_preserves_cache_usage_after_budget_overage(
+    tmp_path: Path,
+) -> None:
+    fixture = _runtime(tmp_path)
+    attempt_id = fixture.store.prepare_provider_attempt(
+        fixture.fleet_state,
+        fixture.target_spec,
+        fixture.target_state,
+        input_tokens=1,
+        output_tokens=1,
+        cycle_start=True,
+    )
+
+    fixture.store.settle_provider_attempt(
+        fixture.fleet_state,
+        fixture.target_spec,
+        fixture.target_state,
+        attempt_id,
+        input_tokens=100_001,
+        cached_input_tokens=0,
+        cache_write_tokens=17,
+        output_tokens=1,
+    )
+
+    assert fixture.target_state.usage.input_tokens == 100_001
+    assert fixture.target_state.usage.cached_input_tokens == 0
+    assert fixture.target_state.usage.cache_write_tokens == 17
+    assert fixture.fleet_state.usage == fixture.target_state.usage
 
 
 def test_harness_resumes_scheduled_target_without_stage_two_admission(

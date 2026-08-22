@@ -110,6 +110,8 @@ class ExecutionUsage(BaseModel):
     repair_cycles: int = Field(default=0, ge=0)
 
     input_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
 
 
@@ -128,6 +130,12 @@ class CandidateArtifactRef(BaseModel):
     revision: int = Field(ge=1)
     digest: str
 ```
+
+`ExecutionBudget.max_input_tokens` is cumulative when configured. Its consumed
+quantity is `max(0, input_tokens - cached_input_tokens)`, while `input_tokens`
+continues to record total provider-reported input. Fleet and target budgets are
+separate authorities: a fleet budget is aggregate allowance and a target budget
+is allowance for one target.
 
 ### Lifecycle decision
 
@@ -976,4 +984,3 @@ That matches the central requirement that runtime state, product state, trace an
 | `CompletionItemState`   |         No | Runtime-controlled worker updates          | `TargetCompletionState`     | Resolution of one obligation   |
 
 ---
-

@@ -71,7 +71,7 @@ class WorkerProfile(BaseModel):
         Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None
     ) = "xhigh"
     reasoning_context: Literal["auto", "current_turn", "all_turns"] | None = "all_turns"
-    initial_provider_input_hard_cap_tokens: int = Field(
+    provider_input_hard_cap_tokens: int = Field(
         default=32_000,
         ge=1,
         le=32_000,
@@ -79,13 +79,13 @@ class WorkerProfile(BaseModel):
 
     @model_validator(mode="after")
     def validate_context_capacity(self) -> WorkerProfile:
-        """Require both the initial request and response reserve to fit."""
+        """Require one normal request and its response reserve to fit."""
         if (
-            self.initial_provider_input_hard_cap_tokens + self.reserved_response_tokens
+            self.provider_input_hard_cap_tokens + self.reserved_response_tokens
             > self.model_context_window_tokens
         ):
             raise ValueError(
-                "initial input cap and reserved response exceed model context window"
+                "provider input cap and reserved response exceed model context window"
             )
         return self
 
@@ -251,14 +251,14 @@ class ContextWindowDiagnostics(BaseModel):
 
     model_context_window_tokens: PositiveInt
     reserved_response_tokens: int = Field(ge=0)
-    initial_provider_input_hard_cap_tokens: PositiveInt
+    provider_input_hard_cap_tokens: PositiveInt
     fixed_request_input_tokens: int = Field(ge=0)
     maximum_worker_context_tokens: int = Field(ge=0)
     worker_context_tokens: int = Field(ge=0)
     complete_initial_provider_input_tokens: int = Field(ge=0)
-    remaining_initial_input_tokens: int = Field(ge=0)
+    remaining_provider_input_tokens: int = Field(ge=0)
     remaining_model_context_tokens: int = Field(ge=0)
-    within_initial_input_limit: bool
+    within_provider_input_limit: bool
     within_model_context_limit: bool
 
 

@@ -18,6 +18,7 @@ from bridger.contracts.memory.core import (
     TargetPhase,
     TargetTaskSpec,
     TargetTaskState,
+    budgeted_input_tokens,
 )
 from bridger.contracts.memory.hydration import (
     WorkerContext,
@@ -185,7 +186,8 @@ class FleetExecutionCoordinator:
         if target_usage.model_calls >= target_budget.max_model_calls:
             raise _BudgetStop(_BudgetScope.TARGET)
         if target_budget.max_input_tokens is not None and (
-            target_usage.input_tokens + input_tokens > target_budget.max_input_tokens
+            budgeted_input_tokens(target_usage) + input_tokens
+            > target_budget.max_input_tokens
         ):
             raise _BudgetStop(_BudgetScope.TARGET)
         target_output = _remaining_optional(
@@ -207,7 +209,9 @@ class FleetExecutionCoordinator:
             if fleet_usage.model_calls >= fleet_budget.max_model_calls:
                 raise _BudgetStop(_BudgetScope.FLEET)
             if fleet_budget.max_input_tokens is not None and (
-                fleet_usage.input_tokens + self._reserved_input_tokens + input_tokens
+                budgeted_input_tokens(fleet_usage)
+                + self._reserved_input_tokens
+                + input_tokens
                 > fleet_budget.max_input_tokens
             ):
                 raise _BudgetStop(_BudgetScope.FLEET)
@@ -266,7 +270,8 @@ class FleetExecutionCoordinator:
         if target_usage.model_calls >= target_budget.max_model_calls:
             raise _BudgetStop(_BudgetScope.TARGET)
         if target_budget.max_input_tokens is not None and (
-            target_usage.input_tokens + input_tokens > target_budget.max_input_tokens
+            budgeted_input_tokens(target_usage) + input_tokens
+            > target_budget.max_input_tokens
         ):
             raise _BudgetStop(_BudgetScope.TARGET)
         target_output = _remaining_optional(
@@ -282,7 +287,9 @@ class FleetExecutionCoordinator:
             if fleet_usage.model_calls >= fleet_budget.max_model_calls:
                 raise _BudgetStop(_BudgetScope.FLEET)
             if fleet_budget.max_input_tokens is not None and (
-                fleet_usage.input_tokens + self._reserved_input_tokens + input_tokens
+                budgeted_input_tokens(fleet_usage)
+                + self._reserved_input_tokens
+                + input_tokens
                 > fleet_budget.max_input_tokens
             ):
                 raise _BudgetStop(_BudgetScope.FLEET)
@@ -336,7 +343,9 @@ class FleetExecutionCoordinator:
             if usage.model_calls >= fleet_budget.max_model_calls:
                 raise _BudgetStop(_BudgetScope.FLEET)
             if fleet_budget.max_input_tokens is not None and (
-                usage.input_tokens + self._reserved_input_tokens + input_tokens
+                budgeted_input_tokens(usage)
+                + self._reserved_input_tokens
+                + input_tokens
                 > fleet_budget.max_input_tokens
             ):
                 raise _BudgetStop(_BudgetScope.FLEET)
@@ -399,6 +408,10 @@ class FleetExecutionCoordinator:
                     reservation.target_state,
                     reservation.attempt_id,
                     input_tokens=(usage.input_tokens or 0) if usage else 0,
+                    cached_input_tokens=(
+                        usage.cached_input_tokens or 0
+                    ) if usage else 0,
+                    cache_write_tokens=(usage.cache_write_tokens or 0) if usage else 0,
                     output_tokens=(usage.output_tokens or 0) if usage else 0,
                     failed=usage is None,
                 )
@@ -407,6 +420,8 @@ class FleetExecutionCoordinator:
                     target_usage,
                     fleet_usage,
                     input_tokens=usage.input_tokens or 0,
+                    cached_input_tokens=usage.cached_input_tokens or 0,
+                    cache_write_tokens=usage.cache_write_tokens or 0,
                     output_tokens=usage.output_tokens or 0,
                 )
 
@@ -430,11 +445,17 @@ class FleetExecutionCoordinator:
                     reservation.fleet_state,
                     reservation.attempt_id,
                     input_tokens=(usage.input_tokens or 0) if usage else 0,
+                    cached_input_tokens=(
+                        usage.cached_input_tokens or 0
+                    ) if usage else 0,
+                    cache_write_tokens=(usage.cache_write_tokens or 0) if usage else 0,
                     output_tokens=(usage.output_tokens or 0) if usage else 0,
                     failed=usage is None,
                 )
             elif usage is not None:
                 fleet_state.usage.input_tokens += usage.input_tokens or 0
+                fleet_state.usage.cached_input_tokens += usage.cached_input_tokens or 0
+                fleet_state.usage.cache_write_tokens += usage.cache_write_tokens or 0
                 fleet_state.usage.output_tokens += usage.output_tokens or 0
 
     async def charge_additional_fleet_model_attempts(
@@ -467,14 +488,22 @@ class FleetExecutionCoordinator:
         """Charge tokens from a definitive fleet-review retry failure."""
         delta = {
             "input_tokens": usage.input_tokens or 0,
+            "cached_input_tokens": usage.cached_input_tokens or 0,
+            "cache_write_tokens": usage.cache_write_tokens or 0,
             "output_tokens": usage.output_tokens or 0,
         }
         async with self._lock:
             if self._persistence is None:
                 fleet_state.usage.input_tokens += delta["input_tokens"]
+                fleet_state.usage.cached_input_tokens += delta["cached_input_tokens"]
+                fleet_state.usage.cache_write_tokens += delta["cache_write_tokens"]
                 fleet_state.usage.output_tokens += delta["output_tokens"]
             else:
-                self._persistence.apply_fleet_usage_delta(fleet_state, delta)
+                self._persistence.apply_fleet_usage_delta(
+                    fleet_state,
+                    delta,
+                    allow_budget_overage=True,
+                )
 
     async def charge_additional_model_attempts(
         self,
@@ -562,6 +591,8 @@ class FleetExecutionCoordinator:
         """Charge tokens reported by a definitive intermediate retry failure."""
         delta = {
             "input_tokens": usage.input_tokens or 0,
+            "cached_input_tokens": usage.cached_input_tokens or 0,
+            "cache_write_tokens": usage.cache_write_tokens or 0,
             "output_tokens": usage.output_tokens or 0,
         }
         async with self._lock:
@@ -574,6 +605,7 @@ class FleetExecutionCoordinator:
                 target_spec,
                 target_state,
                 delta,
+                allow_budget_overage=True,
             )
 
     async def reserve_tool_batch(
@@ -1262,10 +1294,6 @@ class WorkerRunner:
             _BudgetScope.FLEET,
         )
         self._require_execution_headroom(input_tokens, output_tokens)
-        if input_tokens > self._profile.initial_provider_input_hard_cap_tokens:
-            raise WorkerCyclePreflightError(
-                "complete initial provider request exceeds the Stage 3 hard cap"
-            )
         return request, input_tokens, output_tokens
 
     def _next_request(self) -> tuple[LLMRequest, int, int]:
@@ -1314,11 +1342,21 @@ class WorkerRunner:
                 serialized,
                 reserved_response_tokens=output_tokens,
             )
-            if diagnostics.within_context_limit:
+            if (
+                input_tokens <= self._profile.provider_input_hard_cap_tokens
+                and diagnostics.within_context_limit
+            ):
                 return (
                     request.model_copy(update={"max_output_tokens": output_tokens}),
                     diagnostics.current_request_input_tokens,
                     output_tokens,
+                )
+            if input_tokens > self._profile.provider_input_hard_cap_tokens:
+                if not initial and self._working_set.evict_one_for_context_pressure():
+                    continue
+                raise WorkerCyclePreflightError(
+                    "minimum valid normal worker request exceeds the "
+                    "provider-input hard cap"
                 )
             if initial or not self._working_set.evict_one_for_context_pressure():
                 raise _ContextCapacityStop("minimum valid worker request cannot fit")
@@ -1555,12 +1593,12 @@ class WorkerRunner:
         ):
             raise _BudgetStop(_BudgetScope.FLEET)
         if self._target_spec.budget.max_input_tokens is not None and (
-            self._target_state.usage.input_tokens + input_tokens
+            budgeted_input_tokens(self._target_state.usage) + input_tokens
             > self._target_spec.budget.max_input_tokens
         ):
             raise _BudgetStop(_BudgetScope.TARGET)
         if self._fleet_spec.fleet_budget.max_input_tokens is not None and (
-            self._fleet_state.usage.input_tokens + input_tokens
+            budgeted_input_tokens(self._fleet_state.usage) + input_tokens
             > self._fleet_spec.fleet_budget.max_input_tokens
         ):
             raise _BudgetStop(_BudgetScope.FLEET)
@@ -1764,7 +1802,7 @@ def _remaining_budget(
         "tool_calls": max(0, budget.max_tool_calls - usage.tool_calls),
         "input_tokens": _remaining_optional(
             budget.max_input_tokens,
-            usage.input_tokens,
+            budgeted_input_tokens(usage),
         ),
         "output_tokens": _remaining_optional(
             budget.max_output_tokens,

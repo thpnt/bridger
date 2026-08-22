@@ -38,10 +38,10 @@ class ContextWindowManager:
         )
         if (
             self._fixed_request_input_tokens
-            > profile.initial_provider_input_hard_cap_tokens
+            > profile.provider_input_hard_cap_tokens
         ):
             raise ContextWindowConfigurationError(
-                "fixed request input exceeds the initial provider-input hard cap"
+                "fixed request input exceeds the provider-input hard cap"
             )
 
     @property
@@ -58,7 +58,7 @@ class ContextWindowManager:
     def maximum_worker_context_tokens(self) -> int:
         """Return the hard WorkerContext allowance without attempting to fill it."""
         return (
-            self._profile.initial_provider_input_hard_cap_tokens
+            self._profile.provider_input_hard_cap_tokens
             - self._fixed_request_input_tokens
         )
 
@@ -73,7 +73,7 @@ class ContextWindowManager:
         """Measure one complete mandatory initial provider input."""
         worker_context_tokens = self.count_text(serialized_worker_context)
         complete_input_tokens = self._fixed_request_input_tokens + worker_context_tokens
-        initial_cap = self._profile.initial_provider_input_hard_cap_tokens
+        provider_input_cap = self._profile.provider_input_hard_cap_tokens
         model_remaining = (
             self._profile.model_context_window_tokens
             - self._profile.reserved_response_tokens
@@ -82,14 +82,16 @@ class ContextWindowManager:
         return ContextWindowDiagnostics(
             model_context_window_tokens=self._profile.model_context_window_tokens,
             reserved_response_tokens=self._profile.reserved_response_tokens,
-            initial_provider_input_hard_cap_tokens=initial_cap,
+            provider_input_hard_cap_tokens=provider_input_cap,
             fixed_request_input_tokens=self._fixed_request_input_tokens,
             maximum_worker_context_tokens=self.maximum_worker_context_tokens,
             worker_context_tokens=worker_context_tokens,
             complete_initial_provider_input_tokens=complete_input_tokens,
-            remaining_initial_input_tokens=max(0, initial_cap - complete_input_tokens),
+            remaining_provider_input_tokens=max(
+                0, provider_input_cap - complete_input_tokens
+            ),
             remaining_model_context_tokens=max(0, model_remaining),
-            within_initial_input_limit=complete_input_tokens <= initial_cap,
+            within_provider_input_limit=complete_input_tokens <= provider_input_cap,
             within_model_context_limit=model_remaining >= 0,
         )
 

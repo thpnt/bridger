@@ -22,12 +22,14 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from bridger.contracts.memory.core import (
     ExecutionBudget,
     ExecutionUsage,
+    FleetPhase,
     FleetRunState,
     MemoryFleetSpec,
     TargetCompletionState,
     TargetPhase,
     TargetTaskSpec,
     TargetTaskState,
+    budgeted_input_tokens,
 )
 from bridger.contracts.memory.persistence import TaskEvent
 from bridger.contracts.memory.worker_cycle import EvidenceReference, OpenQuestion
@@ -65,6 +67,8 @@ _USAGE_FIELDS = (
     "tool_calls",
     "repair_cycles",
     "input_tokens",
+    "cached_input_tokens",
+    "cache_write_tokens",
     "output_tokens",
 )
 _EVENT_REQUIRED_KEYS: dict[str, frozenset[str]] = {
@@ -728,6 +732,30 @@ class FleetRuntimeStore:
                 operation_id=operation_id,
             )
 
+    def exhaust_fleet_budget(self, fleet_state: FleetRunState) -> None:
+        """Durably record expected fleet-level execution budget exhaustion."""
+        with self.state_locks():
+            if fleet_state.fleet_run_id != self.fleet_spec.fleet_run_id:
+                raise ValueError("fleet state belongs to another fleet")
+            before = fleet_state.phase
+            after = fleet_state.model_copy(
+                update={
+                    "phase": FleetPhase.EXHAUSTED,
+                    "termination_reason": "fleet budget exhaustion",
+                }
+            )
+            self.commit_operation(
+                operation_id=f"fleet-budget-exhausted-{uuid4().hex}",
+                writes={self.paths.fleet_state: _model_bytes(after)},
+                event_type="phase_transition",
+                payload={
+                    "from_phase": before.value,
+                    "to_phase": FleetPhase.EXHAUSTED.value,
+                    "reason": "fleet budget exhaustion",
+                },
+            )
+            _replace_model(fleet_state, after)
+
     def persist_completion_state(
         self,
         target_spec: TargetTaskSpec,
@@ -794,6 +822,7 @@ class FleetRuntimeStore:
         payload: Mapping[str, object] | None = None,
         operation_id: str | None = None,
         phase: TargetPhase | None = None,
+        allow_budget_overage: bool = False,
     ) -> str:
         """Serialize and durably apply one target/fleet usage operation."""
         with self.state_locks(target_spec.target_task_id):
@@ -808,6 +837,7 @@ class FleetRuntimeStore:
                 payload=payload,
                 operation_id=operation_id,
                 phase=phase,
+                allow_budget_overage=allow_budget_overage,
             )
 
     def apply_fleet_usage_delta(
@@ -819,6 +849,7 @@ class FleetRuntimeStore:
         deletions: Iterable[Path] = (),
         payload: Mapping[str, object] | None = None,
         operation_id: str | None = None,
+        allow_budget_overage: bool = False,
     ) -> str:
         """Durably charge fleet-only work without attributing it to a target."""
         with self.state_locks():
@@ -840,11 +871,12 @@ class FleetRuntimeStore:
                     field_name,
                     getattr(after_fleet.usage, field_name) + amount,
                 )
-            self._require_within_budget(
-                self.fleet_spec.fleet_budget,
-                after_fleet.usage,
-                "fleet",
-            )
+            if not allow_budget_overage:
+                self._require_within_budget(
+                    self.fleet_spec.fleet_budget,
+                    after_fleet.usage,
+                    "fleet",
+                )
             resolved_operation_id = operation_id or f"operation-{uuid4().hex}"
             event_payload = dict(payload or {})
             event_payload["usage_delta"] = {
@@ -875,6 +907,7 @@ class FleetRuntimeStore:
         payload: Mapping[str, object] | None = None,
         operation_id: str | None = None,
         phase: TargetPhase | None = None,
+        allow_budget_overage: bool = False,
     ) -> str:
         """Durably apply one monotonic target/fleet usage operation."""
         self._validate_target_identity(target_spec, target_state)
@@ -900,10 +933,13 @@ class FleetRuntimeStore:
             )
         if phase is not None:
             after_target.phase = phase
-        self._require_within_budget(target_spec.budget, after_target.usage, "target")
-        self._require_within_budget(
-            self.fleet_spec.fleet_budget, after_fleet.usage, "fleet"
-        )
+        if not allow_budget_overage:
+            self._require_within_budget(
+                target_spec.budget, after_target.usage, "target"
+            )
+            self._require_within_budget(
+                self.fleet_spec.fleet_budget, after_fleet.usage, "fleet"
+            )
         resolved_operation_id = operation_id or f"operation-{uuid4().hex}"
         writes = {
             self.paths.target_state(target_spec): _model_bytes(after_target),
@@ -1043,6 +1079,8 @@ class FleetRuntimeStore:
         attempt_id: str,
         *,
         input_tokens: int = 0,
+        cached_input_tokens: int = 0,
+        cache_write_tokens: int = 0,
         output_tokens: int = 0,
         failed: bool = False,
     ) -> None:
@@ -1053,13 +1091,19 @@ class FleetRuntimeStore:
             fleet_state,
             target_spec,
             target_state,
-            {"input_tokens": input_tokens, "output_tokens": output_tokens},
+            {
+                "input_tokens": input_tokens,
+                "cached_input_tokens": cached_input_tokens,
+                "cache_write_tokens": cache_write_tokens,
+                "output_tokens": output_tokens,
+            },
             event_type=(
                 "model_attempt_failed" if failed else "model_attempt_completed"
             ),
             deletions=[reservation_path],
             payload={"attempt_id": reservation.attempt_id},
             operation_id=f"settle-{attempt_id}",
+            allow_budget_overage=True,
         )
 
     def settle_fleet_provider_attempt(
@@ -1068,6 +1112,8 @@ class FleetRuntimeStore:
         attempt_id: str,
         *,
         input_tokens: int = 0,
+        cached_input_tokens: int = 0,
+        cache_write_tokens: int = 0,
         output_tokens: int = 0,
         failed: bool = False,
     ) -> None:
@@ -1078,13 +1124,19 @@ class FleetRuntimeStore:
             raise ValueError("fleet provider reservation belongs to a target")
         self.apply_fleet_usage_delta(
             fleet_state,
-            {"input_tokens": input_tokens, "output_tokens": output_tokens},
+            {
+                "input_tokens": input_tokens,
+                "cached_input_tokens": cached_input_tokens,
+                "cache_write_tokens": cache_write_tokens,
+                "output_tokens": output_tokens,
+            },
             event_type=(
                 "model_attempt_failed" if failed else "model_attempt_completed"
             ),
             deletions=[reservation_path],
             payload={"attempt_id": reservation.attempt_id},
             operation_id=f"settle-{attempt_id}",
+            allow_budget_overage=True,
         )
 
     def provider_reservation_path(self, attempt_id: str) -> Path:
@@ -1341,7 +1393,7 @@ class FleetRuntimeStore:
         checks = (
             (
                 target_spec.budget.max_input_tokens,
-                target_state.usage.input_tokens,
+                budgeted_input_tokens(target_state.usage),
                 sum(item.input_token_reservation for item in target_reservations),
                 input_tokens,
                 "target input",
@@ -1355,7 +1407,7 @@ class FleetRuntimeStore:
             ),
             (
                 self.fleet_spec.fleet_budget.max_input_tokens,
-                fleet_state.usage.input_tokens,
+                budgeted_input_tokens(fleet_state.usage),
                 sum(item.input_token_reservation for item in reservations),
                 input_tokens,
                 "fleet input",
@@ -1382,7 +1434,7 @@ class FleetRuntimeStore:
         checks = (
             (
                 self.fleet_spec.fleet_budget.max_input_tokens,
-                fleet_state.usage.input_tokens,
+                budgeted_input_tokens(fleet_state.usage),
                 sum(item.input_token_reservation for item in reservations),
                 input_tokens,
                 "fleet input",
@@ -1414,7 +1466,12 @@ class FleetRuntimeStore:
             "output_tokens": budget.max_output_tokens,
         }
         for field_name, limit in limits.items():
-            if limit is not None and getattr(usage, field_name) > limit:
+            amount = (
+                budgeted_input_tokens(usage)
+                if field_name == "input_tokens"
+                else getattr(usage, field_name)
+            )
+            if limit is not None and amount > limit:
                 raise ValueError(f"{scope} usage exceeds {field_name} budget")
 
     @staticmethod

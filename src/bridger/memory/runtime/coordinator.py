@@ -31,6 +31,7 @@ from bridger.memory.errors import WorkerCyclePreflightError
 from bridger.memory.persistence.durability import FleetRuntimeStore
 from bridger.memory.persistence.recovery import (
     create_checkpoint,
+    normalize_target_for_fleet_budget_stop,
     record_runtime_error,
     recover_target,
 )
@@ -174,12 +175,17 @@ async def run_worker_cycle(
                 evidence,
                 questions,
             )
+        elif outcome is WorkerCycleOutcome.FLEET_BUDGET_STOP:
+            normalize_target_for_fleet_budget_stop(
+                persistence,
+                target_spec,
+                target_state,
+                completion_state,
+                evidence,
+                questions,
+            )
         elif (
-            outcome
-            in {
-                WorkerCycleOutcome.EXECUTION_INTERRUPTED,
-                WorkerCycleOutcome.FLEET_BUDGET_STOP,
-            }
+            outcome is WorkerCycleOutcome.EXECUTION_INTERRUPTED
             and target_state.phase is TargetPhase.WORKING
         ):
             if interruption is None:

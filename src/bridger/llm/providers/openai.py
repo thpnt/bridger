@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar, cast
 
 import openai
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from bridger.llm.errors import (
     LLMAuthenticationError,
@@ -204,8 +204,23 @@ class OpenAILLMClient:
         try:
             output = _compacted_output_to_input_items(_get(provider_response, "output"))
         except ValueError as error:
+            output_structure = _compact_output_structure(
+                _get(provider_response, "output")
+            )
+            logger.debug(
+                "llm.compact.output_conversion_failed",
+                extra={
+                    "operation": request.operation.value,
+                    "provider": self._profile.provider,
+                    "model": self._profile.model,
+                    "profile": self._profile.name,
+                    "error": str(error),
+                    "output_structure": output_structure,
+                },
+            )
             raise LLMProviderError(
-                "OpenAI compaction output could not be converted to response input",
+                "OpenAI compaction output could not be converted to response input: "
+                + str(error),
                 retryable=False,
                 provider=self._profile.provider,
                 model=self._profile.model,
@@ -214,7 +229,7 @@ class OpenAILLMClient:
         return LLMCompactionResult(
             context=LLMCompactedContext(
                 provider=self._profile.provider,
-                payload=output,
+                payload=cast(JsonValue, output),
             ),
             usage=_extract_usage(provider_response),
         )
@@ -587,12 +602,7 @@ def _messages_to_openai(messages: list[LLMMessage]) -> list[dict[str, Any]]:
 
 
 def _compacted_output_to_input_items(output: Any) -> list[dict[str, Any]]:
-    """Convert documented compact-output items to Responses input-item params.
-
-    The compact endpoint returns user message output items followed by one opaque
-    compaction item. Response metadata is not part of the corresponding input
-    schema, so rebuild each request-side item instead of replaying response JSON.
-    """
+    """Convert compact-output items to request-valid Responses input items."""
     if isinstance(output, BaseModel):
         output = output.model_dump(mode="json", exclude_none=True)
     normalized = dump_json_value(output if output is not None else [])
@@ -605,25 +615,29 @@ def _compacted_output_to_input_items(output: Any) -> list[dict[str, Any]]:
             raise ValueError("compaction output items must be objects")
         item_type = raw_item.get("type")
         if item_type == "message":
-            if index == len(normalized) - 1 or raw_item.get("role") != "user":
+            role = raw_item.get("role")
+            if index == len(normalized) - 1 or role not in {
+                "developer",
+                "system",
+                "user",
+            }:
                 raise ValueError(
-                    "compaction output messages must be prior user messages"
+                    "compaction output messages must use a request-valid role"
                 )
             content = raw_item.get("content")
             if not isinstance(content, (str, list)):
-                raise ValueError("compaction output user messages require content")
+                raise ValueError("compaction output messages require content")
             input_items.append(
                 {
                     "type": "message",
-                    "role": "user",
-                    "content": _compacted_user_content_to_input(content),
+                    "role": role,
+                    "content": _compacted_message_content_to_input(content),
                 }
             )
             continue
         if item_type != "compaction" or index != len(normalized) - 1:
             raise ValueError(
-                "compaction output must end with one compaction item "
-                "after user messages"
+                "compaction output must end with one compaction item " "after messages"
             )
         encrypted_content = raw_item.get("encrypted_content")
         if not isinstance(encrypted_content, str) or not encrypted_content:
@@ -640,10 +654,55 @@ def _compacted_output_to_input_items(output: Any) -> list[dict[str, Any]]:
     return input_items
 
 
-def _compacted_user_content_to_input(
+def _compact_output_structure(output: Any) -> dict[str, Any]:
+    """Return safe metadata for debugging compact-output conversion failures."""
+    if not isinstance(output, (list, tuple)):
+        return {
+            "python_type": type(output).__name__,
+            "item_count": None,
+        }
+
+    items: list[dict[str, Any]] = []
+    for item in output:
+        fields = _compact_output_field_names(item)
+        summary: dict[str, Any] = {
+            "python_type": type(item).__name__,
+            "type": _get(item, "type"),
+            "fields": fields,
+        }
+        role = _get(item, "role")
+        if role is not None:
+            summary["role"] = role
+        content = _get(item, "content")
+        if isinstance(content, (list, tuple)):
+            summary["content_types"] = [
+                (
+                    _get(block, "type")
+                    if isinstance(block, (BaseModel, dict))
+                    else type(block).__name__
+                )
+                for block in content
+            ]
+        items.append(summary)
+    return {
+        "python_type": type(output).__name__,
+        "item_count": len(output),
+        "items": items,
+    }
+
+
+def _compact_output_field_names(item: Any) -> list[str]:
+    if isinstance(item, BaseModel):
+        return sorted(type(item).model_fields)
+    if isinstance(item, dict):
+        return sorted(str(key) for key in item)
+    return []
+
+
+def _compacted_message_content_to_input(
     content: str | list[Any],
 ) -> str | list[dict[str, Any]]:
-    """Rebuild documented user content blocks as Responses input content params."""
+    """Rebuild compacted message content as Responses input content params."""
     if isinstance(content, str):
         return content
 
@@ -669,11 +728,11 @@ def _compacted_user_content_to_input(
     input_content: list[dict[str, Any]] = []
     for raw_block in content:
         if not isinstance(raw_block, dict):
-            raise ValueError("compaction output user content blocks must be objects")
+            raise ValueError("compaction output message content blocks must be objects")
         block_type = raw_block.get("type")
         if block_type not in allowed_fields:
             raise ValueError(
-                "compaction output contains an unsupported user content type"
+                "compaction output contains an unsupported message content type"
             )
         block = {
             key: value
