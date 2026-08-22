@@ -63,6 +63,9 @@ def test_review_passes_exact_checkpoint_and_awaits_acceptance(tmp_path: Path) ->
     assert fixture.fleet_state.usage.model_calls == fleet_usage_before.model_calls + 1
     assert client.requests[0].operation is LLMOperation.MEMORY_AGENT_REVIEW
     assert client.requests[0].tools == []
+    assert client.requests[0].reasoning is not None
+    assert client.requests[0].reasoning.effort == "xhigh"
+    assert client.requests[0].reasoning.context == "all_turns"
     assert "# Candidate" in (client.requests[0].messages[1].content or "")
     assert "ambient mutation after validation" not in (
         client.requests[0].messages[1].content or ""

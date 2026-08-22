@@ -5,6 +5,7 @@ from rich.console import Console
 
 from bridger.init_pipeline import (
     InitMode,
+    ReasoningEffort,
     RepositoryBrainBuildError,
     build_repository_brain,
     resolve_init_configuration,
@@ -31,9 +32,17 @@ def init(
             rich_help_panel="Execution",
         ),
     ] = InitMode.FULL,
+    reasoning: Annotated[
+        ReasoningEffort,
+        typer.Option(
+            "--reasoning",
+            help="Memory-agent reasoning effort.",
+            rich_help_panel="Execution",
+        ),
+    ] = ReasoningEffort.XHIGH,
 ) -> None:
     """Build the Repository Brain for the current Git repository."""
-    configuration = resolve_init_configuration(mode)
+    configuration = resolve_init_configuration(mode, reasoning_effort=reasoning)
     console.print(f"[cyan]Bridger[/cyan] building Repository Brain ({mode.value})")
     try:
         result = build_repository_brain(

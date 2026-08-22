@@ -71,6 +71,9 @@ def test_full_corpus_pass_charges_only_fleet_and_accepts_idempotently(
     assert [target.target_state.usage for target in fixture.targets] == target_usage
     assert client.requests[0].operation is LLMOperation.MEMORY_AGENT_RECONCILIATION
     assert client.requests[0].tools == []
+    assert client.requests[0].reasoning is not None
+    assert client.requests[0].reasoning.effort == "xhigh"
+    assert client.requests[0].reasoning.context == "all_turns"
     request_content = client.requests[0].messages[1].content or ""
     assert "architecture/runtime.md" in request_content
     assert "data-and-state/persistence.md" in request_content

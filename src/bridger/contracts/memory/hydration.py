@@ -67,9 +67,9 @@ class WorkerProfile(BaseModel):
     tokenizer_encoding: str = Field(min_length=1)
     model_context_window_tokens: PositiveInt
     reserved_response_tokens: int = Field(ge=0)
-    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] = (
-        "xhigh"
-    )
+    reasoning_effort: (
+        Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None
+    ) = "xhigh"
     reasoning_context: Literal["auto", "current_turn", "all_turns"] | None = "all_turns"
     initial_provider_input_hard_cap_tokens: int = Field(
         default=32_000,

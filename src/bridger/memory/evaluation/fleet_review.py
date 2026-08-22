@@ -39,6 +39,7 @@ from bridger.llm.errors import LLMError
 from bridger.llm.models import (
     LLMMessage,
     LLMOperation,
+    LLMReasoningConfig,
     LLMRequest,
     LLMResponse,
     LLMUsage,
@@ -506,6 +507,14 @@ def _build_review_request(
             ),
         ],
         max_output_tokens=reviewer_profile.reserved_response_tokens,
+        reasoning=(
+            LLMReasoningConfig(
+                effort=reviewer_profile.reasoning_effort,
+                context=reviewer_profile.reasoning_context,
+            )
+            if reviewer_profile.reasoning_effort is not None
+            else None
+        ),
         metadata={"run_id": fleet_spec.fleet_run_id},
     )
     serialized = orjson.dumps(

@@ -26,6 +26,16 @@ class InitMode(StrEnum):
     TEST = "test"
 
 
+class ReasoningEffort(StrEnum):
+    """Supported reasoning policy for memory-agent model calls."""
+
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+
+
 class RepositoryBrainBuildError(RuntimeError):
     """Raised when a Repository Brain build cannot complete."""
 
@@ -40,6 +50,7 @@ class InitRunConfiguration:
     model_profile_name: str
     enable_model_stages: bool
     test_budgets: bool
+    reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH
 
     @property
     def graph_root(self) -> Path:
@@ -61,6 +72,7 @@ def resolve_init_configuration(
     *,
     repository_root: Path | None = None,
     model_profile_name: str = "balanced",
+    reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH,
 ) -> InitRunConfiguration:
     """Resolve all mode-specific behavior at the CLI/application boundary."""
     root = (repository_root or Path.cwd()).resolve()
@@ -71,6 +83,7 @@ def resolve_init_configuration(
         model_profile_name=model_profile_name,
         enable_model_stages=mode is not InitMode.DETERMINISTIC,
         test_budgets=mode is InitMode.TEST,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -171,6 +184,7 @@ def _report_stage(callback: Callable[[str], None] | None, stage: str) -> None:
 __all__ = [
     "InitMode",
     "InitRunConfiguration",
+    "ReasoningEffort",
     "RepositoryBrainBuildError",
     "RepositoryBrainBuildResult",
     "build_repository_brain",
