@@ -5,7 +5,7 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
-from bridger.contracts.enrichment import EnrichmentTargetReference, EnrichmentTargetType
+from bridger.contracts.enrichment import EnrichmentTargetType
 from bridger.contracts.files import ContentType, ReadMode
 from bridger.contracts.navigation import GraphDirection, RepositorySearchKind
 from bridger.contracts.symbols import SymbolKind
@@ -67,9 +67,20 @@ class _SearchRepositoryArguments(_ToolArguments):
     min_score: float = Field(default=40, ge=0, le=100)
 
 
+class _EdgeTargetReference(_ToolArguments):
+    source_node_id: str = Field(min_length=1)
+    target_node_id: str = Field(min_length=1)
+    relation: str = Field(min_length=1)
+
+
+class _CommunityTargetReference(_ToolArguments):
+    community_id: int = Field(ge=0)
+    member_signature: str = Field(min_length=1)
+
+
 class _GetGraphEntityArguments(_ToolArguments):
     target_type: EnrichmentTargetType
-    target_ref: EnrichmentTargetReference = Field(
+    target_ref: str | _EdgeTargetReference | _CommunityTargetReference = Field(
         description="Existing target identity appropriate for target_type."
     )
     max_members: int = Field(default=DEFAULT_MAX_NODES, ge=1, le=MAX_GRAPH_NODES)
@@ -242,7 +253,11 @@ def build_navigation_tools(navigator: RepositoryNavigator) -> ToolExecutor:
             arguments_type=_GetGraphEntityArguments,
             handler=lambda value: navigator.get_graph_entity(
                 value.target_type,
-                value.target_ref,
+                (
+                    value.target_ref.model_dump()
+                    if isinstance(value.target_ref, BaseModel)
+                    else value.target_ref
+                ),
                 max_members=value.max_members,
             ),
         ),

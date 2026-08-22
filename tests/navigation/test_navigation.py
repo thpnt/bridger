@@ -414,6 +414,109 @@ def test_navigation_tool_set_is_explicit_schema_derived_and_authority_bound(
         assert internal_authority not in serialized_schemas
 
 
+def test_navigation_tool_schemas_are_openai_strict_compatible(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    executor = build_navigation_tools(
+        RepositoryNavigator(context, file_index, symbol_index, graph_build)
+    )
+    provider = _FakeOpenAI(
+        [{"id": "response-1", "status": "completed", "output_text": "ok"}]
+    )
+
+    asyncio.run(
+        _openai_client(provider).generate(
+            LLMRequest(
+                operation=LLMOperation.MEMORY_AGENT_WORKER,
+                messages=[LLMMessage.user("Inspect the repository graph.")],
+                tools=executor.definitions,
+            )
+        )
+    )
+
+    emitted_tools = provider.requests[0]["tools"]
+    assert all(tool["strict"] is True for tool in emitted_tools)
+    for tool in emitted_tools:
+        _assert_no_empty_schema_nodes(tool["parameters"])
+
+    graph_entity = next(
+        tool for tool in emitted_tools if tool["name"] == "get_graph_entity"
+    )
+    target_ref = graph_entity["parameters"]["properties"]["target_ref"]
+    assert target_ref["anyOf"]
+    assert all(
+        alternative.get("type") == "string" or "$ref" in alternative
+        for alternative in target_ref["anyOf"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("target_type", "target_ref"),
+    [
+        ("node", "service"),
+        ("hyperedge", "service-group"),
+        ("graph", "graph"),
+        (
+            "edge",
+            {"source_node_id": "run", "target_node_id": "helper", "relation": "calls"},
+        ),
+    ],
+)
+def test_get_graph_entity_tool_dispatches_supported_target_references(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+    target_type: str,
+    target_ref: object,
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    executor = build_navigation_tools(
+        RepositoryNavigator(context, file_index, symbol_index, graph_build)
+    )
+
+    result = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="call-graph-entity",
+                name="get_graph_entity",
+                arguments={"target_type": target_type, "target_ref": target_ref},
+            )
+        )
+    )
+
+    assert result.error is None
+    assert result.output["target_type"] == target_type
+
+
+def test_get_graph_entity_tool_dispatches_community_reference(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, structural = layer6_state
+    executor = build_navigation_tools(
+        RepositoryNavigator(context, file_index, symbol_index, graph_build)
+    )
+    community_id = min(structural["communities"])
+    result = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="call-community",
+                name="get_graph_entity",
+                arguments={
+                    "target_type": "community",
+                    "target_ref": {
+                        "community_id": community_id,
+                        "member_signature": structural["community_member_signatures"][
+                            community_id
+                        ],
+                    },
+                },
+            )
+        )
+    )
+
+    assert result.error is None
+    assert result.output["target_type"] == "community"
+
+
 def test_tool_executor_validates_before_dispatch_and_returns_ordinary_errors(
     layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
@@ -884,6 +987,24 @@ def _overlay(
         ),
         records=[record],
     )
+
+
+def _assert_no_empty_schema_nodes(value: object) -> None:
+    _assert_schema_node(value, is_schema_node=True)
+
+
+def _assert_schema_node(value: object, *, is_schema_node: bool) -> None:
+    if isinstance(value, dict):
+        if is_schema_node:
+            assert value, "OpenAI schema contains an unconstrained empty object"
+        for key, child in value.items():
+            _assert_schema_node(
+                child,
+                is_schema_node=key not in {"properties", "$defs"},
+            )
+    elif isinstance(value, list):
+        for child in value:
+            _assert_schema_node(child, is_schema_node=True)
 
 
 def _node(

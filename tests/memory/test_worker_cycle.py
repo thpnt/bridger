@@ -61,6 +61,7 @@ from bridger.llm.models import (
     LLMToolCall,
     LLMUsage,
 )
+from bridger.llm.providers.openai import _tool_to_openai
 from bridger.llm.testing import DummyLLMClient
 from bridger.memory import (
     CompletionStateUpdater,
@@ -76,6 +77,7 @@ from bridger.memory import (
     WorkerToolRuntime,
     run_worker_cycle,
 )
+from bridger.memory.runtime.worker_tools import WORKER_TOOL_IDS
 
 _SOURCE = SourceBinding(
     repository_id="repository-1",
@@ -93,6 +95,40 @@ _ALL_LOCAL_TOOLS = (
     "update_completion_item",
     "update_progress",
 )
+
+
+def test_complete_memory_worker_tool_surface_is_openai_strict_compatible(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path, allowed_tools=WORKER_TOOL_IDS)
+    runner = fixture.runner([])
+
+    emitted_tools = [
+        _tool_to_openai(definition) for definition in runner._tool_definitions
+    ]
+
+    assert {tool["name"] for tool in emitted_tools} >= set(WORKER_TOOL_IDS)
+    assert all(tool["strict"] is True for tool in emitted_tools)
+    for tool in emitted_tools:
+        _assert_no_empty_schema_nodes(tool["parameters"])
+
+
+def _assert_no_empty_schema_nodes(value: object) -> None:
+    _assert_schema_node(value, is_schema_node=True)
+
+
+def _assert_schema_node(value: object, *, is_schema_node: bool) -> None:
+    if isinstance(value, dict):
+        if is_schema_node:
+            assert value, "OpenAI schema contains an unconstrained empty object"
+        for key, child in value.items():
+            _assert_schema_node(
+                child,
+                is_schema_node=key not in {"properties", "$defs"},
+            )
+    elif isinstance(value, list):
+        for child in value:
+            _assert_schema_node(child, is_schema_node=True)
 
 
 class CountingContextWindowManager(ContextWindowManager):

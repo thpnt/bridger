@@ -11,6 +11,7 @@ from uuid import uuid4
 import orjson
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
+from bridger.contracts.enrichment import EnrichmentTargetType
 from bridger.contracts.memory.core import (
     CandidateArtifactRef,
     CompletionItemState,
@@ -771,9 +772,30 @@ class _MoveArtifactArguments(_Arguments):
     expected_revision: int = Field(ge=1)
 
 
+class _EdgeTargetReferenceArguments(_Arguments):
+    source_node_id: str = Field(min_length=1)
+    target_node_id: str = Field(min_length=1)
+    relation: str = Field(min_length=1)
+
+
+class _CommunityTargetReferenceArguments(_Arguments):
+    community_id: int = Field(ge=0)
+    member_signature: str = Field(min_length=1)
+
+
+class _GraphEntityEvidenceLocatorArguments(_Arguments):
+    target_type: EnrichmentTargetType
+    target_ref: str | _EdgeTargetReferenceArguments | _CommunityTargetReferenceArguments
+
+
 class _RecordEvidenceArguments(_Arguments):
     kind: EvidenceKind
-    locator: EvidenceLocator
+    locator: (
+        FileEvidenceLocator
+        | SourceRangeEvidenceLocator
+        | SymbolEvidenceLocator
+        | _GraphEntityEvidenceLocatorArguments
+    )
 
     @model_validator(mode="after")
     def validate_kind(self) -> _RecordEvidenceArguments:
@@ -781,11 +803,29 @@ class _RecordEvidenceArguments(_Arguments):
             EvidenceKind.FILE: FileEvidenceLocator,
             EvidenceKind.SOURCE_RANGE: SourceRangeEvidenceLocator,
             EvidenceKind.SYMBOL: SymbolEvidenceLocator,
-            EvidenceKind.GRAPH_ENTITY: GraphEntityEvidenceLocator,
+            EvidenceKind.GRAPH_ENTITY: _GraphEntityEvidenceLocatorArguments,
         }[self.kind]
         if not isinstance(self.locator, expected):
             raise ValueError("evidence kind does not match locator")
         return self
+
+
+def _persisted_evidence_locator(locator: object) -> EvidenceLocator:
+    if isinstance(locator, _GraphEntityEvidenceLocatorArguments):
+        target_ref = (
+            locator.target_ref.model_dump()
+            if isinstance(locator.target_ref, BaseModel)
+            else locator.target_ref
+        )
+        return GraphEntityEvidenceLocator(
+            target_type=locator.target_type,
+            target_ref=target_ref,
+        )
+    assert isinstance(
+        locator,
+        (FileEvidenceLocator, SourceRangeEvidenceLocator, SymbolEvidenceLocator),
+    )
+    return locator
 
 
 class _UpdateCompletionArguments(_Arguments):
@@ -935,7 +975,7 @@ def _build_local_tools(
             arguments_type=_RecordEvidenceArguments,
             handler=lambda value: evidence_recorder.record_evidence(
                 value.kind,
-                value.locator,
+                _persisted_evidence_locator(value.locator),
             ),
         ),
         LLMTool.bind(
