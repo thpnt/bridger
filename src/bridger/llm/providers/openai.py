@@ -201,11 +201,20 @@ class OpenAILLMClient:
                 "latency_ms": int((self._clock() - started) * 1000),
             },
         )
-        output = _get(provider_response, "output")
+        try:
+            output = _compacted_output_to_input_items(_get(provider_response, "output"))
+        except ValueError as error:
+            raise LLMProviderError(
+                "OpenAI compaction output could not be converted to response input",
+                retryable=False,
+                provider=self._profile.provider,
+                model=self._profile.model,
+                operation=request.operation,
+            ) from error
         return LLMCompactionResult(
             context=LLMCompactedContext(
                 provider=self._profile.provider,
-                payload=dump_json_value(output if output is not None else []),
+                payload=output,
             ),
             usage=_extract_usage(provider_response),
         )
@@ -575,6 +584,106 @@ def _messages_to_openai(messages: list[LLMMessage]) -> list[dict[str, Any]]:
     for message in messages:
         items.extend(_message_to_openai_items(message))
     return items
+
+
+def _compacted_output_to_input_items(output: Any) -> list[dict[str, Any]]:
+    """Convert documented compact-output items to Responses input-item params.
+
+    The compact endpoint returns user message output items followed by one opaque
+    compaction item. Response metadata is not part of the corresponding input
+    schema, so rebuild each request-side item instead of replaying response JSON.
+    """
+    if isinstance(output, BaseModel):
+        output = output.model_dump(mode="json", exclude_none=True)
+    normalized = dump_json_value(output if output is not None else [])
+    if not isinstance(normalized, list) or not normalized:
+        raise ValueError("compaction output must be a non-empty item list")
+
+    input_items: list[dict[str, Any]] = []
+    for index, raw_item in enumerate(normalized):
+        if not isinstance(raw_item, dict):
+            raise ValueError("compaction output items must be objects")
+        item_type = raw_item.get("type")
+        if item_type == "message":
+            if index == len(normalized) - 1 or raw_item.get("role") != "user":
+                raise ValueError(
+                    "compaction output messages must be prior user messages"
+                )
+            content = raw_item.get("content")
+            if not isinstance(content, (str, list)):
+                raise ValueError("compaction output user messages require content")
+            input_items.append(
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": _compacted_user_content_to_input(content),
+                }
+            )
+            continue
+        if item_type != "compaction" or index != len(normalized) - 1:
+            raise ValueError(
+                "compaction output must end with one compaction item "
+                "after user messages"
+            )
+        encrypted_content = raw_item.get("encrypted_content")
+        if not isinstance(encrypted_content, str) or not encrypted_content:
+            raise ValueError("compaction output requires encrypted content")
+        compaction_item: dict[str, Any] = {
+            "type": "compaction",
+            "encrypted_content": encrypted_content,
+        }
+        item_id = raw_item.get("id")
+        if isinstance(item_id, str) and item_id:
+            compaction_item["id"] = item_id
+        input_items.append(compaction_item)
+
+    return input_items
+
+
+def _compacted_user_content_to_input(
+    content: str | list[Any],
+) -> str | list[dict[str, Any]]:
+    """Rebuild documented user content blocks as Responses input content params."""
+    if isinstance(content, str):
+        return content
+
+    allowed_fields = {
+        "input_text": {"type", "text", "prompt_cache_breakpoint"},
+        "input_image": {
+            "type",
+            "detail",
+            "file_id",
+            "image_url",
+            "prompt_cache_breakpoint",
+        },
+        "input_file": {
+            "type",
+            "detail",
+            "file_data",
+            "file_id",
+            "file_url",
+            "filename",
+            "prompt_cache_breakpoint",
+        },
+    }
+    input_content: list[dict[str, Any]] = []
+    for raw_block in content:
+        if not isinstance(raw_block, dict):
+            raise ValueError("compaction output user content blocks must be objects")
+        block_type = raw_block.get("type")
+        if block_type not in allowed_fields:
+            raise ValueError(
+                "compaction output contains an unsupported user content type"
+            )
+        block = {
+            key: value
+            for key, value in raw_block.items()
+            if key in allowed_fields[block_type] and value is not None
+        }
+        if block_type == "input_text" and not isinstance(block.get("text"), str):
+            raise ValueError("compaction output input_text requires text")
+        input_content.append(block)
+    return input_content
 
 
 def _instructions_to_openai(request: LLMRequest) -> list[dict[str, Any]]:

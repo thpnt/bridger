@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from openai.types.responses import CompactedResponse
 from pydantic import BaseModel
 
 from bridger.contracts.enrichment import (
@@ -759,6 +760,159 @@ def test_openai_continuation_exact_instructions_storage_and_compaction_mapping()
         "content": "exact recent replay",
     }
     assert seeded.response_id == "response-c"
+
+
+def test_openai_compacted_response_round_trips_to_a_valid_continuation_request() -> (
+    None
+):
+    worker_instructions = "Bridger worker control instructions"
+    provider = _FakeOpenAI(
+        [
+            {
+                "id": "response-after-compaction",
+                "status": "completed",
+                "model": "gpt-5.6",
+                "output_text": "continued",
+                "output": [],
+            }
+        ],
+        compaction_outcomes=[
+            CompactedResponse.model_construct(
+                id="compact-response",
+                created_at=1,
+                object="response.compaction",
+                output=[
+                    {
+                        "id": "msg-prior-user",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "user",
+                        "phase": "final_answer",
+                        "content": [
+                            {"type": "input_text", "text": "prior worker input"}
+                        ],
+                    },
+                    {
+                        "id": "cmp-opaque",
+                        "type": "compaction",
+                        "encrypted_content": "opaque-encrypted-context",
+                        "created_by": "response-a",
+                    },
+                ],
+                usage={
+                    "input_tokens": 200,
+                    "output_tokens": 30,
+                    "total_tokens": 230,
+                },
+            )
+        ],
+    )
+    client = _openai_client(provider, model="gpt-5.6")
+    prompt_cache = LLMPromptCacheConfig(
+        key="worker-cache-key",
+        instruction_breakpoints=(7,),
+    )
+    tool = LLMToolDefinition(
+        name="search_repository",
+        description="Search the repository.",
+        input_schema={"type": "object", "properties": {}},
+    )
+    compacted = asyncio.run(
+        client.compact(
+            LLMCompactionRequest(
+                operation=LLMOperation.MEMORY_AGENT_WORKER,
+                messages=[LLMMessage.user("compaction request input")],
+                instructions=worker_instructions,
+                continuation_ref="response-before-compaction",
+            )
+        )
+    )
+    request = LLMRequest(
+        operation=LLMOperation.MEMORY_AGENT_WORKER,
+        messages=[
+            LLMMessage.tool_result_message(
+                tool_call_id="call-after-compaction",
+                tool_name="search_repository",
+                result={"matches": ["src/bridger/llm/providers/openai.py"]},
+            )
+        ],
+        instructions=worker_instructions,
+        compacted_context=compacted.context,
+        store=True,
+        prompt_cache=prompt_cache,
+        tools=[tool],
+        tool_choice="required",
+        reasoning=LLMReasoningConfig(effort="high", context="all_turns"),
+        max_output_tokens=321,
+        timeout_seconds=12,
+        metadata={"workflow_id": "workflow-1", "run_id": "run-1", "ignored": "x"},
+    )
+
+    asyncio.run(client.generate(request))
+
+    assert compacted.context.payload == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "prior worker input"}],
+        },
+        {
+            "type": "compaction",
+            "encrypted_content": "opaque-encrypted-context",
+            "id": "cmp-opaque",
+        },
+    ]
+    payload = provider.requests[0]
+    assert payload["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": worker_instructions[:7],
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                },
+                {"type": "input_text", "text": worker_instructions[7:]},
+            ],
+        },
+        *compacted.context.payload,
+        {
+            "type": "function_call_output",
+            "call_id": "call-after-compaction",
+            "output": json.dumps(
+                {
+                    "ok": True,
+                    "tool_name": "search_repository",
+                    "result": {"matches": ["src/bridger/llm/providers/openai.py"]},
+                }
+            ),
+        },
+    ]
+    assert "previous_response_id" not in payload
+    assert "instructions" not in payload
+    assert payload["model"] == "gpt-5.6"
+    assert payload["store"] is True
+    assert payload["tools"] == [
+        {
+            "type": "function",
+            "name": "search_repository",
+            "description": "Search the repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
+    ]
+    assert payload["tool_choice"] == "required"
+    assert payload["reasoning"] == {"effort": "high", "context": "all_turns"}
+    assert payload["metadata"] == {"workflow_id": "workflow-1", "run_id": "run-1"}
+    assert payload["max_output_tokens"] == 321
+    assert payload["timeout"] == 12
+    assert payload["prompt_cache_key"] == "worker-cache-key"
+    assert payload["prompt_cache_options"] == {"mode": "explicit"}
 
 
 def test_openai_explicit_prompt_cache_mapping_and_usage_are_semantic_noops() -> None:
