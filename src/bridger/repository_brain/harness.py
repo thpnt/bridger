@@ -52,7 +52,7 @@ from bridger.navigation.navigator import RepositoryNavigator
 from bridger.repository.reader import read_file
 from bridger.repository_brain.publication import publish_repository_brain
 
-_PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "prompts"
+_PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "prompts"
 _TARGETS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "default-targets"
 _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS = 32_000
 _FRONTEND_DEPENDENCY_SECTIONS = (
