@@ -13,6 +13,7 @@ import bridger.init_pipeline as init_pipeline
 from bridger.contracts.files import IntakeConfiguration
 from bridger.init_pipeline import (
     InitMode,
+    ReasoningEffort,
     RepositoryBrainBuildError,
     RepositoryBrainBuildResult,
     resolve_init_configuration,
@@ -71,6 +72,56 @@ def test_init_resolves_the_requested_mode(
     assert captured[0].mode is expected_mode  # type: ignore[union-attr]
 
 
+def test_init_defaults_memory_reasoning_to_xhigh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[object] = []
+
+    def build(configuration: object, **_: object) -> RepositoryBrainBuildResult:
+        captured.append(configuration)
+        return RepositoryBrainBuildResult(
+            mode=InitMode.FULL,
+            graph_build=SimpleNamespace(snapshot_root=Path("/tmp/graph")),
+            publication_path=Path("/tmp/repository-brain.json"),
+        )
+
+    monkeypatch.setattr(cli, "build_repository_brain", build)
+
+    result = runner.invoke(cli.app, ["init"])
+
+    assert result.exit_code == 0
+    assert captured[0].reasoning_effort is ReasoningEffort.XHIGH  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("value", list(ReasoningEffort))
+def test_init_propagates_reasoning_override(
+    monkeypatch: pytest.MonkeyPatch,
+    value: ReasoningEffort,
+) -> None:
+    captured: list[object] = []
+
+    def build(configuration: object, **_: object) -> RepositoryBrainBuildResult:
+        captured.append(configuration)
+        return RepositoryBrainBuildResult(
+            mode=InitMode.FULL,
+            graph_build=SimpleNamespace(snapshot_root=Path("/tmp/graph")),
+            publication_path=Path("/tmp/repository-brain.json"),
+        )
+
+    monkeypatch.setattr(cli, "build_repository_brain", build)
+
+    result = runner.invoke(cli.app, ["init", "--reasoning", value.value])
+
+    assert result.exit_code == 0
+    assert captured[0].reasoning_effort is value  # type: ignore[union-attr]
+
+
+def test_init_rejects_invalid_reasoning_effort() -> None:
+    result = runner.invoke(cli.app, ["init", "--reasoning", "invalid"])
+
+    assert result.exit_code != 0
+
+
 def test_deterministic_mode_disables_model_stages() -> None:
     configuration = resolve_init_configuration(InitMode.DETERMINISTIC)
 
@@ -105,12 +156,27 @@ def test_init_worker_profiles_keep_initial_input_within_v0_cap(
 
     assert worker.initial_provider_input_hard_cap_tokens <= 32_000
     assert reviewer.initial_provider_input_hard_cap_tokens <= 32_000
+    assert worker.reasoning_effort == reviewer.reasoning_effort == "xhigh"
     if test_budgets:
         assert worker.model_context_window_tokens == 32_000
         assert worker.initial_provider_input_hard_cap_tokens == 29_952
     else:
         assert worker.model_context_window_tokens == 128_000
         assert worker.initial_provider_input_hard_cap_tokens == 32_000
+
+
+@pytest.mark.parametrize("reasoning", list(ReasoningEffort))
+def test_init_worker_and_reviewer_profiles_share_reasoning_policy(
+    reasoning: ReasoningEffort,
+) -> None:
+    worker, reviewer = _profiles(
+        LLMProfile(name="balanced", provider="openai", model="test-model"),
+        False,
+        reasoning,
+    )
+
+    expected = None if reasoning is ReasoningEffort.NONE else reasoning.value
+    assert worker.reasoning_effort == reviewer.reasoning_effort == expected
 
 
 @pytest.mark.parametrize(

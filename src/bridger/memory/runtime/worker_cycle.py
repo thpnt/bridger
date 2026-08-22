@@ -1152,9 +1152,13 @@ class WorkerRunner:
                 tools=list(self._tool_definitions),
                 tool_choice="required",
                 max_output_tokens=max(1, self._profile.reserved_response_tokens),
-                reasoning=LLMReasoningConfig(
-                    effort=self._profile.reasoning_effort,
-                    context=self._profile.reasoning_context,
+                reasoning=(
+                    LLMReasoningConfig(
+                        effort=self._profile.reasoning_effort,
+                        context=self._profile.reasoning_context,
+                    )
+                    if self._profile.reasoning_effort is not None
+                    else None
                 ),
                 metadata={
                     "run_id": self._fleet_spec.fleet_run_id,

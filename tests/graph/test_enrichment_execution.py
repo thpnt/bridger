@@ -117,6 +117,7 @@ def test_successful_generation_uses_evidence_only_and_publishes(
     assert _record_community_ids(overlay) == [0, 1, 2]
     assert client.output_types == [CommunityNameBatch]
     request = client.requests[0]
+    assert request.reasoning is None
     assert len(request.messages) == 2
     supplied = orjson.loads(request.messages[1].content or "")
     assert supplied == [

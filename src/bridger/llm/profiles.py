@@ -22,7 +22,6 @@ class LLMProfile(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0)
     retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
-    reasoning: dict[str, str] | None = None
     temperature: float | None = Field(default=None, ge=0, le=2)
 
 

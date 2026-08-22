@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal, cast
 
 from bridger.contracts.enrichment import GraphEnrichmentConfig, GraphEnrichmentOverlay
 from bridger.contracts.files import FileIndex, SourceReadRequest
@@ -25,7 +26,11 @@ from bridger.contracts.memory.worker_cycle import EvidenceReference, OpenQuestio
 from bridger.contracts.repository import RepositoryContext
 from bridger.contracts.symbols import SymbolIndex
 from bridger.graph.enrichment import enrich_graph_snapshot
-from bridger.init_pipeline import InitRunConfiguration, RepositoryBrainBuildError
+from bridger.init_pipeline import (
+    InitRunConfiguration,
+    ReasoningEffort,
+    RepositoryBrainBuildError,
+)
 from bridger.llm.factory import create_llm_client_from_profile
 from bridger.llm.profiles import LLMProfile, resolve_llm_profile
 from bridger.memory import (
@@ -87,7 +92,9 @@ async def run_memory_harness(
 ) -> Path:
     """Run the existing Layer 5 and memory stages through publication."""
     catalog, definitions = load_target_artifacts(_TARGETS_ROOT)
-    worker_profile, reviewer_profile = _profiles(profile, configuration.test_budgets)
+    worker_profile, reviewer_profile = _profiles(
+        profile, configuration.test_budgets, configuration.reasoning_effort
+    )
     permissions = PermissionProfile(
         profile_id="bridger-memory-tools-v1",
         allowed_tool_ids=WORKER_TOOL_IDS,
@@ -307,12 +314,21 @@ def _resolve_model_profile(configuration: InitRunConfiguration) -> LLMProfile:
 def _profiles(
     profile: LLMProfile,
     test_budgets: bool,
+    reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH,
 ) -> tuple[WorkerProfile, WorkerProfile]:
     reserved = 2_048 if test_budgets else 8_192
     context_window = 32_000 if test_budgets else 128_000
     initial_input_cap = min(
         _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS,
         context_window - reserved,
+    )
+    resolved_reasoning_effort = (
+        None
+        if reasoning_effort is ReasoningEffort.NONE
+        else cast(
+            Literal["low", "medium", "high", "xhigh"],
+            reasoning_effort.value,
+        )
     )
     return (
         WorkerProfile(
@@ -322,6 +338,7 @@ def _profiles(
             model_context_window_tokens=context_window,
             reserved_response_tokens=reserved,
             initial_provider_input_hard_cap_tokens=initial_input_cap,
+            reasoning_effort=resolved_reasoning_effort,
         ),
         WorkerProfile(
             profile_id="bridger-reviewer-v1",
@@ -330,6 +347,7 @@ def _profiles(
             model_context_window_tokens=context_window,
             reserved_response_tokens=reserved,
             initial_provider_input_hard_cap_tokens=initial_input_cap,
+            reasoning_effort=resolved_reasoning_effort,
         ),
     )
 
