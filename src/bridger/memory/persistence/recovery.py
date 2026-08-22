@@ -407,7 +407,7 @@ def recover_target(
         _replace_model(target_state, after)
         return True
     if target_state.phase is TargetPhase.WORKING:
-        record_runtime_error(
+        error = record_runtime_error(
             store,
             None,
             category=error_category,
@@ -420,7 +420,12 @@ def recover_target(
         )
         store.append_event(
             "execution_interrupted",
-            {"reason": "process-or-provider-context-lost"},
+            {
+                "reason": error.category,
+                "operation": error.operation,
+                "retryable": error.retryable,
+                "error_id": error.error_id,
+            },
             target_task_id=target_spec.target_task_id,
         )
         create_checkpoint(

@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+import bridger.memory.runtime.worker_cycle as worker_cycle
 from bridger.contracts.files import (
     FileDisposition,
     FileRecord,
@@ -1094,6 +1095,52 @@ def test_exhausted_provider_retries_are_not_free_attempts(tmp_path: Path) -> Non
     assert outcome is WorkerCycleOutcome.EXECUTION_INTERRUPTED
     assert fixture.target_state.usage.model_calls == 3
     assert fixture.fleet_state.usage.model_calls == 3
+
+
+def test_missing_tool_calls_records_worker_protocol_interruption(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    runner = fixture.runner(
+        [
+            LLMResponse(
+                text="I cannot call a tool.",
+                provider="test",
+                model="gpt-test",
+            )
+        ]
+    )
+
+    outcome = asyncio.run(runner.run())
+
+    assert outcome is WorkerCycleOutcome.EXECUTION_INTERRUPTED
+    assert runner.last_interruption is not None
+    assert runner.last_interruption.category == "runtime"
+    assert runner.last_interruption.operation == "worker-protocol"
+    assert runner.last_interruption.message == "model response contained no tool calls"
+    assert runner.last_interruption.retryable is True
+
+
+def test_context_capacity_records_context_build_interruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path)
+    runner = fixture.runner([_response(_call("list", "list_target_artifacts", {}))])
+
+    def stop_for_capacity() -> tuple[LLMRequest, int, int]:
+        raise worker_cycle._ContextCapacityStop(
+            "minimum valid worker request cannot fit"
+        )
+
+    monkeypatch.setattr(runner, "_next_request", stop_for_capacity)
+    outcome = asyncio.run(runner.run())
+
+    assert outcome is WorkerCycleOutcome.EXECUTION_INTERRUPTED
+    assert runner.last_interruption is not None
+    assert runner.last_interruption.category == "context-capacity"
+    assert runner.last_interruption.operation == "context-build"
+    assert runner.last_interruption.message == "minimum valid worker request cannot fit"
 
 
 def test_fleet_budget_stop_does_not_relabel_target_exhausted(tmp_path: Path) -> None:

@@ -101,6 +101,7 @@ from bridger.memory.runtime.provider_recovery import (
 from bridger.memory.runtime.worker_cycle import (
     FleetExecutionCoordinator,
     WorkerCycleOutcome,
+    WorkerInterruption,
     WorkerRunner,
     WorkerRuntimeLimits,
 )
@@ -151,6 +152,7 @@ __all__ = [
     "WorkerContextInvocationError",
     "WorkerCycleInvocationError",
     "WorkerCycleOutcome",
+    "WorkerInterruption",
     "WorkerCyclePreflightError",
     "WorkerRunner",
     "WorkerRuntimeLimits",

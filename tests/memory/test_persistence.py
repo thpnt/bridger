@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import bridger.repository_brain.harness as harness
 from bridger.artifacts.writer import write_artifact
 from bridger.contracts.memory.core import (
     ActivationMode,
@@ -42,6 +43,7 @@ from bridger.memory import (
     initialize_persistence,
     record_runtime_error,
     recover_fleet,
+    recover_target,
     run_provider_with_retry,
     validate_checkpoint,
 )
@@ -216,6 +218,60 @@ def test_artifact_bytes_reference_and_checkpoint_restore_are_exact(
         assert state.last_checkpoint_ref == checkpoint.checkpoint_id
     finally:
         recovered.close()
+
+
+def test_recovery_event_retains_interruption_diagnostics(tmp_path: Path) -> None:
+    fixture = _runtime(tmp_path)
+    _enter_working(fixture)
+
+    assert recover_target(
+        fixture.store,
+        fixture.target_spec,
+        fixture.target_state,
+        fixture.completion_state,
+        {},
+        {},
+        error_category="context-capacity",
+        error_operation="context-build",
+        error_message="minimum valid worker request cannot fit",
+        error_retryable=True,
+    )
+
+    events = fixture.store.recover_event_tail()
+    error_event = next(
+        event for event in events if event.event_type == "runtime_error_recorded"
+    )
+    interrupted = next(
+        event for event in events if event.event_type == "execution_interrupted"
+    )
+    assert fixture.target_state.phase is TargetPhase.SCHEDULED
+    assert interrupted.payload == {
+        "reason": "context-capacity",
+        "operation": "context-build",
+        "retryable": True,
+        "error_id": error_event.payload["error_id"],
+    }
+
+
+def test_harness_resumes_scheduled_target_without_stage_two_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _runtime(tmp_path)
+    fixture.target_state.phase = TargetPhase.SCHEDULED
+
+    def fail_if_scheduled(*_: object, **__: object) -> list[str]:
+        raise AssertionError("Stage 2 must not re-admit scheduled work")
+
+    monkeypatch.setattr(harness, "schedule_runnable_targets", fail_if_scheduled)
+
+    assert harness._runnable_target_task_ids(
+        fixture.spec,
+        fixture.fleet_state,
+        [fixture.target_spec],
+        [fixture.target_state],
+        fixture.store,
+    ) == [fixture.target_spec.target_task_id]
 
 
 def test_finalization_persists_exact_fresh_candidate_and_is_idempotent(

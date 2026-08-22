@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, cast
 
@@ -12,6 +13,8 @@ from bridger.contracts.graph import GraphBuildResult
 from bridger.contracts.memory.core import (
     ExecutionBudget,
     FleetPhase,
+    FleetRunState,
+    MemoryFleetSpec,
     TargetPhase,
     TargetTaskSpec,
     TargetTaskState,
@@ -37,6 +40,7 @@ from bridger.memory import (
     ContextWindowManager,
     FleetExecutionCoordinator,
     FleetRuntimeStore,
+    WorkerCycleOutcome,
     WorkerRuntimeLimits,
     accept_fleet,
     accept_target,
@@ -151,14 +155,18 @@ async def run_memory_harness(
             state.target_task_id: state for state in completion_states
         }
         while fleet_state.phase is not FleetPhase.ACCEPTED:
-            scheduled = schedule_runnable_targets(
+            before_fleet_state = fleet_state.model_dump(mode="json")
+            before_target_states = [
+                state.model_dump(mode="json") for state in target_states
+            ]
+            runnable = _runnable_target_task_ids(
                 fleet_spec,
                 fleet_state,
                 target_specs,
                 target_states,
-                persistence=store,
+                store,
             )
-            for task_id in scheduled:
+            for task_id in runnable:
                 spec = specs_by_task[task_id]
                 state = states_by_task[task_id]
                 completion = completion_by_task[task_id]
@@ -204,7 +212,7 @@ async def run_memory_harness(
                     limits=WorkerRuntimeLimits(),
                     persistence=store,
                 )
-                if outcome.value != "finalization_requested":
+                if outcome is not WorkerCycleOutcome.FINALIZATION_REQUESTED:
                     continue
                 target_validation = validate_target_candidate(
                     store, spec, state, definition, navigator
@@ -275,8 +283,17 @@ async def run_memory_harness(
                 raise RepositoryBrainBuildError(
                     f"memory fleet stopped in {fleet_state.phase.value}"
                 )
-            if not scheduled and not all(
-                state.phase is TargetPhase.ACCEPTED for state in target_states
+            state_changed = (
+                fleet_state.model_dump(mode="json") != before_fleet_state
+                or [state.model_dump(mode="json") for state in target_states]
+                != before_target_states
+            )
+            if (
+                not runnable
+                and not state_changed
+                and not all(
+                    state.phase is TargetPhase.ACCEPTED for state in target_states
+                )
             ):
                 raise RepositoryBrainBuildError(
                     "memory fleet made no runnable progress"
@@ -302,6 +319,30 @@ def prepare_model_layers(
         ),
     )
     return profile, enrichment
+
+
+def _runnable_target_task_ids(
+    fleet_spec: MemoryFleetSpec,
+    fleet_state: FleetRunState,
+    target_specs: Sequence[TargetTaskSpec],
+    target_states: Sequence[TargetTaskState],
+    store: FleetRuntimeStore,
+) -> list[str]:
+    """Return admitted work first, scheduling only when none remains admitted."""
+    resumed = [
+        state.target_task_id
+        for state in target_states
+        if state.phase is TargetPhase.SCHEDULED
+    ]
+    if resumed:
+        return resumed
+    return schedule_runnable_targets(
+        fleet_spec,
+        fleet_state,
+        target_specs,
+        target_states,
+        persistence=store,
+    )
 
 
 def _resolve_model_profile(configuration: InitRunConfiguration) -> LLMProfile:

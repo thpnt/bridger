@@ -72,6 +72,16 @@ class WorkerCycleOutcome(StrEnum):
     EXECUTION_INTERRUPTED = "execution-interrupted"
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerInterruption:
+    """Persistable diagnostic summary for an interrupted worker trajectory."""
+
+    category: str
+    operation: str
+    message: str
+    retryable: bool
+
+
 class _BudgetScope(StrEnum):
     TARGET = "target"
     FLEET = "fleet"
@@ -814,6 +824,7 @@ class WorkerRunner:
         self._questions = questions
         self._coordinator = coordinator
         self._last_runtime_error: Exception | None = None
+        self._last_interruption: WorkerInterruption | None = None
         self._limits = limits or WorkerRuntimeLimits()
         self._canonical_sections = serialize_worker_context_sections(context)
         self._canonical_base = "".join(self._canonical_sections)
@@ -851,8 +862,15 @@ class WorkerRunner:
         """Return the transient failure that ended the current trajectory."""
         return self._last_runtime_error
 
+    @property
+    def last_interruption(self) -> WorkerInterruption | None:
+        """Return the diagnostic reason for the current interrupted trajectory."""
+        return self._last_interruption
+
     async def run(self) -> WorkerCycleOutcome:
         """Execute one cycle and discard every provider-local trajectory on exit."""
+        self._last_runtime_error = None
+        self._last_interruption = None
         try:
             return await self._run_cycle()
         finally:
@@ -867,6 +885,12 @@ class WorkerRunner:
             request, input_tokens, output_tokens = self._preflight()
         except _BudgetStop as stop:
             return self._outcome_for_budget_stop(stop.scope)
+        except _ContextCapacityStop as error:
+            return self._interrupt(
+                category="context-capacity",
+                operation="context-build",
+                message=str(error),
+            )
         repair = self._context.mode is WorkerContextMode.REPAIR
         try:
             model_reservation = (
@@ -909,7 +933,6 @@ class WorkerRunner:
                 )
                 return self._outcome_for_budget_stop(stop.scope)
             except Exception as error:
-                self._last_runtime_error = error
                 failed_usage = getattr(error, "usage", None)
                 await self._coordinator.finish_model_call(
                     reservation,
@@ -930,7 +953,7 @@ class WorkerRunner:
                         target_state=self._target_state,
                         target_spec=self._target_spec,
                     )
-                return WorkerCycleOutcome.EXECUTION_INTERRUPTED
+                return self._interrupt_from_error("model-invocation", error)
             await self._coordinator.finish_model_call(
                 reservation,
                 self._target_state.usage,
@@ -955,7 +978,11 @@ class WorkerRunner:
 
             calls = response.tool_calls
             if not calls:
-                return WorkerCycleOutcome.EXECUTION_INTERRUPTED
+                return self._interrupt(
+                    category="runtime",
+                    operation="worker-protocol",
+                    message="model response contained no tool calls",
+                )
             if self._is_valid_finalization(calls):
                 return WorkerCycleOutcome.FINALIZATION_REQUESTED
             if self._is_valid_yield(calls):
@@ -965,8 +992,7 @@ class WorkerRunner:
                         self._target_state,
                     )
                 except Exception as error:
-                    self._last_runtime_error = error
-                    return WorkerCycleOutcome.EXECUTION_INTERRUPTED
+                    return self._interrupt_from_error("cycle-yield", error)
                 return WorkerCycleOutcome.CYCLE_YIELDED
 
             operational = [call for call in calls if call.name not in _CONTROL_TOOL_IDS]
@@ -1011,10 +1037,10 @@ class WorkerRunner:
                             maximum_bytes=self._limits.tool_result_max_bytes,
                         )
                     )
-            except Exception:
+            except Exception as error:
                 if tool_reservation is not None:
                     await self._coordinator.release_tool_batch(tool_reservation)
-                return WorkerCycleOutcome.EXECUTION_INTERRUPTED
+                return self._interrupt_from_error("tool-dispatch", error)
             if tool_reservation is not None:
                 await self._coordinator.release_tool_batch(tool_reservation)
             self._working_set.add(_ToolBatch(calls=list(calls), results=results))
@@ -1022,14 +1048,28 @@ class WorkerRunner:
 
             try:
                 await self._compact_if_needed()
-                request, input_tokens, output_tokens = self._next_request()
-            except (_BudgetStop, _ContextCapacityStop) as error:
-                if isinstance(error, _BudgetStop):
-                    return self._outcome_for_budget_stop(error.scope)
-                return WorkerCycleOutcome.EXECUTION_INTERRUPTED
+            except _BudgetStop as stop:
+                return self._outcome_for_budget_stop(stop.scope)
+            except _ContextCapacityStop as error:
+                return self._interrupt(
+                    category="context-capacity",
+                    operation="compaction",
+                    message=str(error),
+                )
             except Exception as error:
-                self._last_runtime_error = error
-                return WorkerCycleOutcome.EXECUTION_INTERRUPTED
+                return self._interrupt_from_error("compaction", error)
+            try:
+                request, input_tokens, output_tokens = self._next_request()
+            except _BudgetStop as stop:
+                return self._outcome_for_budget_stop(stop.scope)
+            except _ContextCapacityStop as error:
+                return self._interrupt(
+                    category="context-capacity",
+                    operation="context-build",
+                    message=str(error),
+                )
+            except Exception as error:
+                return self._interrupt_from_error("context-build", error)
             try:
                 model_reservation = await self._coordinator.reserve_model_call(
                     self._fleet_spec.fleet_budget,
@@ -1043,8 +1083,54 @@ class WorkerRunner:
                 )
             except _BudgetStop as stop:
                 return self._outcome_for_budget_stop(stop.scope)
+            except Exception as error:
+                return self._interrupt_from_error("model-reservation", error)
 
+        return self._interrupt(
+            category="runtime",
+            operation="worker-cycle",
+            message=(
+                "worker exited active trajectory without a terminal control outcome"
+            ),
+        )
+
+    def _interrupt(
+        self,
+        *,
+        category: str,
+        operation: str,
+        message: str,
+        retryable: bool = True,
+        error: Exception | None = None,
+    ) -> WorkerCycleOutcome:
+        self._last_runtime_error = error
+        self._last_interruption = WorkerInterruption(
+            category=category,
+            operation=operation,
+            message=message,
+            retryable=retryable,
+        )
         return WorkerCycleOutcome.EXECUTION_INTERRUPTED
+
+    def _interrupt_from_error(
+        self,
+        operation: str,
+        error: Exception,
+    ) -> WorkerCycleOutcome:
+        if isinstance(error, LLMError):
+            return self._interrupt(
+                category="provider",
+                operation=operation,
+                message=error.safe_message,
+                retryable=error.retryable,
+                error=error,
+            )
+        return self._interrupt(
+            category="runtime",
+            operation=operation,
+            message=str(error),
+            error=error,
+        )
 
     async def _generate_with_retries(
         self,
@@ -1662,6 +1748,7 @@ def _json_default(value: object) -> object:
 __all__ = [
     "FleetExecutionCoordinator",
     "WorkerCycleOutcome",
+    "WorkerInterruption",
     "WorkerRunner",
     "WorkerRuntimeLimits",
 ]

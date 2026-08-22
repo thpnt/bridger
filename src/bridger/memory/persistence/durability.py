@@ -187,7 +187,9 @@ _EVENT_REQUIRED_KEYS: dict[str, frozenset[str]] = {
     ),
     "checkpoint_created": frozenset({"checkpoint_id"}),
     "retry_scheduled": frozenset({"attempt", "delay_seconds"}),
-    "execution_interrupted": frozenset({"reason"}),
+    "execution_interrupted": frozenset(
+        {"reason", "operation", "retryable", "error_id"}
+    ),
     "runtime_error_recorded": frozenset({"error_id"}),
     "recovery_reset": frozenset({"from_phase", "to_phase"}),
 }

@@ -139,6 +139,7 @@ async def run_worker_cycle(
     outcome = await runner.run()
     if persistence is not None:
         runtime_error = runner.last_runtime_error
+        interruption = runner.last_interruption
         if outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED:
             handle_finalization_request(
                 persistence,
@@ -181,6 +182,30 @@ async def run_worker_cycle(
             }
             and target_state.phase is TargetPhase.WORKING
         ):
+            if interruption is None:
+                interruption_category = (
+                    "provider" if isinstance(runtime_error, LLMError) else "runtime"
+                )
+                interruption_operation = (
+                    "model-invocation"
+                    if isinstance(runtime_error, LLMError)
+                    else "worker-cycle"
+                )
+                interruption_message = (
+                    runtime_error.safe_message
+                    if isinstance(runtime_error, LLMError)
+                    else "active worker trajectory was interrupted"
+                )
+                interruption_retryable = (
+                    runtime_error.retryable
+                    if isinstance(runtime_error, LLMError)
+                    else True
+                )
+            else:
+                interruption_category = interruption.category
+                interruption_operation = interruption.operation
+                interruption_message = interruption.message
+                interruption_retryable = interruption.retryable
             recover_target(
                 persistence,
                 target_spec,
@@ -188,24 +213,10 @@ async def run_worker_cycle(
                 completion_state,
                 evidence,
                 questions,
-                error_category=(
-                    "provider" if isinstance(runtime_error, LLMError) else "runtime"
-                ),
-                error_operation=(
-                    "model-invocation"
-                    if isinstance(runtime_error, LLMError)
-                    else "worker-cycle"
-                ),
-                error_message=(
-                    runtime_error.safe_message
-                    if isinstance(runtime_error, LLMError)
-                    else "active worker trajectory was interrupted"
-                ),
-                error_retryable=(
-                    runtime_error.retryable
-                    if isinstance(runtime_error, LLMError)
-                    else True
-                ),
+                error_category=interruption_category,
+                error_operation=interruption_operation,
+                error_message=interruption_message,
+                error_retryable=interruption_retryable,
             )
         else:
             create_checkpoint(
