@@ -1,19 +1,61 @@
 schema_version: 1
 target_id: design
-target_contract_version: v1
+target_contract_version: v2
 activation: {mode: conditional, rule_id: frontend_stack_present_v1}
 depends_on: []
-canonical_question: What user-facing visual system, interaction model, and UX or design decisions does the implemented product embody?
-purpose: Explain the implemented visual and interaction system when a frontend stack exists.
-expected_abstraction: Repository-level design and UX semantics.
-always_relevant_scope: [Visual language, interaction behavior, accessibility, and design-system semantics.]
-conditional_scope: []
-exclusions: [Frontend software architecture.]
-boundary_guidance: [Own user-facing design rather than implementation architecture.]
-investigation_expectations: [Inspect implemented interface evidence and design-system surfaces.]
-evidence_expectations: [Ground design claims in implemented UI and tests where available.]
+canonical_question: What user-facing design system, UX patterns, visual language, interaction model, and recurring design decisions does the implemented product embody?
+purpose: Explain the implemented product's visual language, design system, interaction model, and UX decisions when a frontend stack exists.
+expected_abstraction: Product and interface design reference, not frontend engineering architecture.
+always_relevant_scope:
+  - Visual language including color, typography, spacing, sizing, shape, elevation, tokens, theming, icons, assets, and motion.
+  - Reusable UI primitives, variants, composition, forms, actions, navigation, overlays, feedback, and data display.
+  - Layout, hierarchy, density, responsiveness, interaction, feedback, common states, keyboard and focus behavior, and accessibility.
+conditional_scope:
+  - Design-system tooling, themes, white-labeling, localization layout, visualization, editors, drag-and-drop, onboarding, and mobile navigation.
+  - Visual regression and design-token generation pipelines.
+exclusions:
+  - Frontend architecture, state management, routing, API implementation, product rules, backend behavior, naming, CSS conventions, and testing strategy.
+boundary_guidance:
+  - Own user-facing design meaning and recurring UX patterns rather than frontend implementation architecture or conventions.
+investigation_expectations:
+  - Sample tokens, themes, global styles, reusable components, representative screens and layouts, states, responsive behavior, and assets.
+  - Inspect Storybook, accessibility patterns, and visual or component tests when present; generalize only from representative evidence.
+evidence_expectations:
+  - Use styles, themes, tokens, components, and layouts as primary evidence, supported by stories, design docs, assets, and tests.
+  - Keep visual interpretations uncertain when static source cannot establish rendered fidelity.
 completion_obligations:
-  - obligation_id: user-experience
-    description: Resolve the implemented visual and interaction system.
+  - obligation_id: visual-language
+    description: Identify the core visual language.
     applicability: always
-output_quality_expectations: [Describe implemented UX rather than generic design advice.]
+  - obligation_id: tokens-themes
+    description: Explain the design-token and theme system when present.
+    applicability: conditional
+    condition_hint: The frontend implements shared design tokens, theme definitions, multiple themes, or white-label styling.
+  - obligation_id: component-design-patterns
+    description: Explain important reusable component and design patterns.
+    applicability: always
+  - obligation_id: layout-navigation
+    description: Explain major layout, hierarchy, and navigation patterns.
+    applicability: always
+  - obligation_id: responsive-behavior
+    description: Explain responsive and mobile adaptation when present.
+    applicability: conditional
+    condition_hint: The implemented UI contains responsive layouts, breakpoints, or mobile-specific behavior.
+  - obligation_id: interaction-feedback
+    description: Explain important interaction and feedback patterns.
+    applicability: always
+  - obligation_id: standardized-ui-states
+    description: Explain loading, empty, error, confirmation, and destructive states where materially standardized.
+    applicability: conditional
+    condition_hint: Common user-facing states or destructive interactions use recurring product patterns.
+  - obligation_id: accessibility-patterns
+    description: Explain accessibility patterns where implemented.
+    applicability: conditional
+    condition_hint: The frontend represents semantic markup, keyboard, focus, ARIA, contrast, motion, or screen-reader behavior.
+  - obligation_id: design-system-tooling
+    description: Explain design-system tooling and documentation when present.
+    applicability: conditional
+    condition_hint: Storybook, design documentation, visual regression, or token-generation tooling exists.
+output_quality_expectations:
+  - Enable new UI work to match established visual, interaction, responsive, state, and accessibility patterns.
+  - Avoid raw component inventories, frontend architecture, and overgeneralizing one-off visual choices.

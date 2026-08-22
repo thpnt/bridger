@@ -1,19 +1,64 @@
 schema_version: 1
 target_id: operations
-target_contract_version: v1
+target_contract_version: v2
 activation: {mode: always}
 depends_on: []
-canonical_question: How does source become a configured, deployed, observable, operable runtime or release?
-purpose: Explain build, configuration, delivery, deployment, and operations.
-expected_abstraction: Repository-level operational lifecycle.
-always_relevant_scope: [Build, configuration, release, deployment, and observability.]
-conditional_scope: []
-exclusions: [Internal runtime component design.]
-boundary_guidance: [Own source-to-runtime and operational lifecycle details.]
-investigation_expectations: [Inspect scripts, configuration, and delivery surfaces.]
-evidence_expectations: [Ground operational claims in repository configuration and automation.]
+canonical_question: How does this repository become a runnable or released system, how is that runtime configured, and how is it operated?
+purpose: Explain build, packaging, delivery, deployment, runtime configuration, observability, and operational lifecycle.
+expected_abstraction: Source-to-runtime operational model.
+always_relevant_scope:
+  - Build and package process, runtime prerequisites, important developer or operator commands, and configuration or environment model.
+conditional_scope:
+  - Containers, CI/CD, release, publishing, deployment, infrastructure, environments, secrets, topology, and deployment migrations.
+  - Operational jobs, rollouts, health, metrics, logs, tracing, alerts, recovery, rollback, scaling, and troubleshooting.
+exclusions:
+  - In-process architecture, product rules, product-facing integrations, application data, testing strategy, and coding conventions.
+boundary_guidance:
+  - Own the source-to-runtime and operational lifecycle rather than in-process component behavior.
+investigation_expectations:
+  - Trace source through build artifact, configuration, release, deployment, runtime topology, observability, and recovery where represented.
+  - Do not invent operational practices absent from repository evidence.
+evidence_expectations:
+  - Use scripts, manifests, workflows, containers, infrastructure, deployment files, environment templates, and observability configuration.
+  - Use source for health, configuration loading, lifecycle, telemetry, and runtime switches; executable evidence outranks conflicting docs.
 completion_obligations:
-  - obligation_id: operational-lifecycle
-    description: Resolve how the repository is built, configured, and operated.
+  - obligation_id: build-package-path
+    description: Identify the build and package path.
     applicability: always
-output_quality_expectations: [Make required configuration and operational paths explicit.]
+  - obligation_id: runtime-prerequisites-configuration
+    description: Explain runtime prerequisites and the principal configuration model.
+    applicability: always
+  - obligation_id: environments
+    description: Explain environment distinctions when present.
+    applicability: conditional
+    condition_hint: The repository represents distinct development, test, staging, production, or comparable environments.
+  - obligation_id: ci-cd-release
+    description: Explain CI/CD and release flow when present.
+    applicability: conditional
+    condition_hint: The repository contains delivery, release, publishing, or deployment automation.
+  - obligation_id: deployment-topology
+    description: Explain deployment and runtime topology when present.
+    applicability: conditional
+    condition_hint: Deployment manifests, containers, infrastructure, or multiple runtime processes are represented.
+  - obligation_id: secrets-config-injection
+    description: Explain secrets and configuration injection when present.
+    applicability: conditional
+    condition_hint: Runtime configuration or secrets are injected through explicit operational mechanisms.
+  - obligation_id: health-observability
+    description: Explain health and observability mechanisms when present.
+    applicability: conditional
+    condition_hint: The runtime exposes health checks, logs, metrics, tracing, alerts, or troubleshooting mechanisms.
+  - obligation_id: migrations-rollout-rollback
+    description: Explain deployment migrations, rollout, and rollback mechanisms when present.
+    applicability: conditional
+    condition_hint: The operational lifecycle includes migrations, staged rollout, recovery, or rollback.
+  - obligation_id: scaling-scheduled-operations
+    description: Explain scaling and scheduled operational mechanisms when present.
+    applicability: conditional
+    condition_hint: Scaling, scheduled jobs, or other operational automation is represented.
+  - obligation_id: operator-developer-commands
+    description: Ground important operator and developer commands.
+    applicability: always
+output_quality_expectations:
+  - Make checkout-to-runtime, configuration, release, and operational navigation explicit and repository-grounded.
+  - Keep unknown provider or platform behavior explicit rather than invented.

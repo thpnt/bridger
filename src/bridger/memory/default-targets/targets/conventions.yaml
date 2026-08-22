@@ -1,19 +1,51 @@
 schema_version: 1
 target_id: conventions
-target_contract_version: v1
+target_contract_version: v2
 activation: {mode: always}
 depends_on: []
-canonical_question: What recurring engineering rules and implementation patterns should contributors reproduce?
-purpose: Explain established, repeatable engineering conventions.
-expected_abstraction: Repository-level contributor conventions.
-always_relevant_scope: [Recurring patterns, style, and contributor rules.]
-conditional_scope: []
-exclusions: [One-off implementation choices and complete testing strategy.]
-boundary_guidance: [Describe recurring practice rather than isolated code details.]
-investigation_expectations: [Identify conventions evidenced by source and project configuration.]
-evidence_expectations: [Ground conventions in repeated implementation or enforcement.]
+canonical_question: What recurring engineering rules and implementation patterns should future contributors reproduce?
+purpose: Explain established, repeatable, and repository-grounded engineering conventions.
+expected_abstraction: Normative or recurring repository practice, not isolated architecture decisions.
+always_relevant_scope:
+  - Naming, layout, module organization, imports, dependencies, construction, types, schemas, errors, logging, and configuration.
+  - Async, data access, interfaces, frontend components, tests, formatting, linting, and static analysis where recurrent.
+conditional_scope:
+  - Area-specific conventions and conflicting conventions across legitimate repository regions.
+exclusions:
+  - One-off architecture, product rules, design semantics, testing strategy, and generic industry advice.
+boundary_guidance:
+  - Own repeatable implementation practice and scope local patterns explicitly rather than generalizing isolated examples.
+investigation_expectations:
+  - Inspect explicit instructions and tooling, then sample representative code across multiple important areas.
+  - Distinguish enforced rules, recurring observations, and local patterns, and surface legitimate conflicts.
+evidence_expectations:
+  - Use tooling and repository instructions for enforced conventions and repeated representative examples for observed conventions.
+  - Do not treat external best practices or a single example as repository-wide evidence.
 completion_obligations:
-  - obligation_id: engineering-conventions
-    description: Resolve recurring engineering rules contributors should reproduce.
+  - obligation_id: naming-layout
+    description: Identify major repository-wide naming and layout rules.
     applicability: always
-output_quality_expectations: [Distinguish enforced conventions from local coincidences.]
+  - obligation_id: structural-patterns
+    description: Identify recurring structural implementation patterns.
+    applicability: always
+  - obligation_id: error-logging-configuration
+    description: Explain error, logging, and configuration patterns where recurrent.
+    applicability: conditional
+    condition_hint: Representative code shows recurring error, logging, or configuration-access patterns.
+  - obligation_id: type-schema-patterns
+    description: Explain type and schema patterns where recurrent.
+    applicability: conditional
+    condition_hint: The repository uses recurring type, validation, or schema practices.
+  - obligation_id: specialist-implementation-conventions
+    description: Explain recurrent data, interface, test, and frontend implementation conventions where present.
+    applicability: conditional
+    condition_hint: Specialist areas expose repeated implementation conventions beyond repository-wide structure.
+  - obligation_id: enforced-vs-observed
+    description: Distinguish enforced conventions from observed recurring patterns.
+    applicability: always
+  - obligation_id: local-convention-scope
+    description: Scope local conventions accurately instead of generalizing them repository-wide.
+    applicability: always
+output_quality_expectations:
+  - Be concise, actionable, and evidence-backed while excluding unsupported generic advice.
+  - Distinguish repository-wide, enforced, observed, and area-specific practice with appropriate certainty.

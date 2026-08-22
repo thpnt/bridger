@@ -1,19 +1,68 @@
 schema_version: 1
 target_id: architecture
-target_contract_version: v1
+target_contract_version: v2
 activation: {mode: always}
 depends_on: []
-canonical_question: How is the running software structurally composed and how does execution move through its major components?
-purpose: Explain composition, responsibilities, and central runtime paths.
-expected_abstraction: Repository-level runtime architecture.
-always_relevant_scope: [Components, composition, control flow, and execution paths.]
-conditional_scope: []
-exclusions: [Detailed domain rules and state-representation ownership.]
-boundary_guidance: [Describe runtime structure without duplicating specialist ownership.]
-investigation_expectations: [Trace central execution paths across component boundaries.]
-evidence_expectations: [Ground architectural claims in implementation evidence.]
+canonical_question: How is the software structurally composed, and how does runtime execution move through its major components?
+purpose: Explain the system's structural composition, runtime responsibilities, and execution paths.
+expected_abstraction: Deep structural and runtime implementation understanding.
+always_relevant_scope:
+  - Applications, services, and packages with runtime significance.
+  - Runtime entrypoints, bootstrap, initialization, and composition.
+  - Major components, responsibilities, subsystem boundaries, dependencies, and internal interfaces.
+  - Main control paths, orchestration, synchronous and asynchronous execution, and component-level state ownership.
+  - Architectural patterns, extension points, and runtime error propagation and recovery.
+conditional_scope:
+  - Background workers, queues, events, schedulers, and multi-process or distributed boundaries.
+  - Frontend runtime architecture and concurrency or parallelism.
+  - Plugin systems, architectural caches, event-driven orchestration, and runtime feature composition.
+exclusions:
+  - Detailed domain rules, domain state semantics, and persistence lifecycle.
+  - External protocol mechanics, deployment topology, design, testing strategy, and contributor conventions.
+boundary_guidance:
+  - Own runtime structure and mechanics; leave product meaning and specialist implementation detail to their canonical targets.
+investigation_expectations:
+  - Identify entry surfaces, applications, processes, structurally important components, and their source-level responsibilities.
+  - Establish dependency direction and trace principal synchronous and asynchronous runtime paths.
+  - Establish component state responsibility, composition, extension mechanisms, patterns, and important failure or recovery behavior.
+evidence_expectations:
+  - Use graph and import relations for structure, manifests for entrypoints, and source inspection for responsibility and control flow.
+  - Use tests and documentation as supporting evidence while surfacing conflicts with implementation.
+  - Ground central execution paths across the meaningful component chain.
 completion_obligations:
-  - obligation_id: runtime-composition
-    description: Resolve major components and the central execution paths between them.
+  - obligation_id: runtime-entrypoints
+    description: Identify the principal runtime entrypoints.
     applicability: always
-output_quality_expectations: [Prefer explanatory flow over component inventories.]
+  - obligation_id: runtime-components
+    description: Identify the major runtime applications, processes, and components.
+    applicability: always
+  - obligation_id: component-responsibilities
+    description: Explain the responsibilities of major components.
+    applicability: always
+  - obligation_id: component-dependencies
+    description: Explain important dependencies and interactions between components.
+    applicability: always
+  - obligation_id: execution-paths
+    description: Explain the principal execution and control paths mechanically.
+    applicability: always
+  - obligation_id: bootstrap-composition
+    description: Explain initialization, bootstrap, and runtime composition.
+    applicability: always
+  - obligation_id: async-background-execution
+    description: Explain asynchronous and background execution when present.
+    applicability: conditional
+    condition_hint: Background workers, queues, events, schedulers, concurrency, or other asynchronous execution exists.
+  - obligation_id: component-state-ownership
+    description: Identify component-level state ownership.
+    applicability: always
+  - obligation_id: extension-mechanisms
+    description: Explain major extension and plugin mechanisms when present.
+    applicability: conditional
+    condition_hint: The runtime exposes plugin, extension, hook, or comparable composition mechanisms.
+  - obligation_id: runtime-error-recovery
+    description: Explain important runtime error propagation and recovery behavior when present.
+    applicability: conditional
+    condition_hint: The runtime implements material error propagation, retries, recovery, or fallback behavior.
+output_quality_expectations:
+  - Describe responsibilities and interactions rather than producing a file inventory or unsupported architecture labels.
+  - Make execution paths navigable and defer detailed product, persistence, interface, and operations ownership.

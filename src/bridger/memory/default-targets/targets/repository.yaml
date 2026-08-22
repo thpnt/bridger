@@ -1,19 +1,49 @@
 schema_version: 1
 target_id: repository
-target_contract_version: v1
+target_contract_version: v2
 activation: {mode: always}
 depends_on: []
-canonical_question: What is this repository, what are its major areas, and where should someone look next?
-purpose: Provide the Repository Brain orientation layer.
-expected_abstraction: Shallow repository-level orientation.
-always_relevant_scope: [Repository purpose, major areas, and navigation entry points.]
-conditional_scope: []
-exclusions: [Detailed specialist explanations owned by other targets.]
-boundary_guidance: [Keep this target an index rather than a generic wiki.]
-investigation_expectations: [Use deterministic inventory and source evidence to orient future readers.]
-evidence_expectations: [Ground structural claims in the pinned repository revision.]
+canonical_question: What is this repository, what major things does it contain, and where should someone go for deeper understanding?
+purpose: Provide the Repository Brain's canonical orientation and index layer.
+expected_abstraction: Deliberately shallow repository-level orientation and routing.
+always_relevant_scope:
+  - Repository purpose, languages, frameworks, toolchain, shape, applications, packages, workspaces, and major responsibilities.
+  - Top-level source, configuration, and documentation regions, entry surfaces, orientation commands, and specialist navigation.
+conditional_scope:
+  - Monorepos, multiple deployables, generated or vendored code, generated clients, unusual workspaces, multiple languages, and specialized regions.
+exclusions:
+  - Deep runtime, domain, persistence, interface, testing, convention, operations, and design explanations.
+boundary_guidance:
+  - Remain a shallow terrain map and route detailed questions to the canonical specialist targets.
+investigation_expectations:
+  - Establish terrain from FileIndex, manifests, top-level docs, graph structure, workspaces, and entry surfaces.
+  - Limit deep source tracing to what is needed to orient major areas correctly.
+evidence_expectations:
+  - Use deterministic inventory, manifests, and graph structure for terrain and source reads for unclear responsibilities or entrypoints.
+  - Use documentation for declared purpose while surfacing contradictions with actual structure.
 completion_obligations:
-  - obligation_id: repository-orientation
-    description: Resolve the repository purpose, major areas, and useful entry points.
+  - obligation_id: repository-purpose
+    description: Explain the repository's purpose and overall orientation.
     applicability: always
-output_quality_expectations: [Be concise, navigable, and repository-specific.]
+  - obligation_id: languages-frameworks-toolchain
+    description: Identify major languages, frameworks, and toolchain.
+    applicability: always
+  - obligation_id: applications-packages-workspaces
+    description: Identify major applications, packages, and workspaces.
+    applicability: always
+  - obligation_id: source-organization
+    description: Make top-level source organization navigable.
+    applicability: always
+  - obligation_id: entry-surfaces
+    description: Identify principal entry surfaces at a high level.
+    applicability: always
+  - obligation_id: generated-vendor-special-regions
+    description: Identify generated, vendored, or specialized regions when materially important.
+    applicability: conditional
+    condition_hint: Generated, vendored, unusual workspace, multi-language, or other special repository regions materially affect navigation.
+  - obligation_id: specialist-navigation
+    description: Point orientation toward deeper specialist knowledge targets.
+    applicability: always
+output_quality_expectations:
+  - Be concise, repository-specific, and navigable while avoiding duplicated specialist ownership.
+  - Align terminology with the fleet and make major code locations and next steps clear.
