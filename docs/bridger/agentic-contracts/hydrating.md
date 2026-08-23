@@ -788,16 +788,17 @@ context window       1,050,000 tokens
 maximum output         128,000 tokens
 ```
 
-For Bridger V0 the hard maximum **complete normal provider generation request
-input** is:
+For Bridger V0 the hard maximum **canonical ingress for a normal provider
+generation request** is:
 
 ```text
 32,000 tokens
 ```
 
 This is a shared runtime-profile limit, not a preferred fill target. Stage 3
-enforces it for the initial request and Stage 4 enforces it independently for
-each later normal generation request.
+enforces it for the complete initial request and Stage 4 enforces the same
+canonical-ingress boundary independently for each later normal generation
+request.
 
 Bridger should minimize initial model context rather than attempt to utilize the available model context window.
 
@@ -821,11 +822,14 @@ A future profile/model may select another hard limit.
 
 ## 17.3 Complete request budget
 
-The 32K hard limit applies to every complete normal provider input, not merely
-the serialized `WorkerContext` used for the first request. Stage 3 derives and
-reports the initial-request allowance from this shared profile policy; Stage 4
-enforces the same policy for later normal requests. Compaction is governed by
-actual provider context capacity instead.
+The 32K hard limit applies to complete initial provider input and to
+Bridger-owned canonical ingress on later normal requests, not merely the
+serialized `WorkerContext` used for the first request. Previous-response
+history, multi-turn worker/tool trajectory, and opaque provider compaction
+output are not canonical ingress. Stage 3 derives and reports the
+initial-request allowance from this shared profile policy; Stage 4 enforces the
+same policy for later normal requests. Complete request submissions remain
+subject to actual provider context capacity.
 
 Therefore the maximum `WorkerContext` payload allowance is derived after accounting for provider/request overhead such as:
 
@@ -1487,7 +1491,7 @@ Debug snapshots do not alter this rule.
 15. Fleet budget is not exposed as worker-owned headroom.
 16. Remaining target budget is derived, not authoritative.
 17. Execution budgets and model context-window capacity are separate mechanisms.
-18. The V0 normal provider-generation input hard cap is 32K tokens for every request.
+18. The V0 normal provider-generation canonical-ingress hard cap is 32K tokens for every request.
 19. The 32K cap is a maximum, not a target or fill level.
 20. Unused initial context capacity remains unused.
 21. `ContextWindowManager` observes both initial hydration and later accumulated Stage 4 context.

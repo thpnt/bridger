@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
@@ -15,11 +17,15 @@ from bridger.contracts.memory.core import (
     FleetPhase,
     FleetRunState,
     MemoryFleetSpec,
+    MemoryTargetCatalog,
+    TargetCompletionState,
+    TargetDefinition,
     TargetPhase,
     TargetTaskSpec,
     TargetTaskState,
 )
 from bridger.contracts.memory.hydration import (
+    GraphOverview,
     PermissionProfile,
     WorkerInstructions,
     WorkerProfile,
@@ -57,6 +63,7 @@ from bridger.memory import (
     validate_fleet,
     validate_target_candidate,
 )
+from bridger.memory.errors import TargetReviewBudgetError
 from bridger.memory.evaluation.review import review_target
 from bridger.memory.runtime.worker_tools import WORKER_TOOL_IDS
 from bridger.navigation.navigator import RepositoryNavigator
@@ -67,7 +74,10 @@ _PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "prompts"
 _TARGETS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "default-targets"
 _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS = 32_000
 _TEST_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS = 32_000
-_FULL_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS = 128_000
+_FULL_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS = 256_000
+_FULL_TARGET_INPUT_BUDGET_TOKENS = 2_000_000
+_FULL_FLEET_INPUT_OVERHEAD_NUMERATOR = 5
+_FULL_FLEET_INPUT_OVERHEAD_DENOMINATOR = 4
 _FRONTEND_DEPENDENCY_SECTIONS = (
     "dependencies",
     "devDependencies",
@@ -87,6 +97,26 @@ _FRONTEND_FRAMEWORK_PACKAGES = frozenset(
         "vue",
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _TargetStepRuntime:
+    configuration: InitRunConfiguration
+    fleet_spec: MemoryFleetSpec
+    fleet_state: FleetRunState
+    catalog: MemoryTargetCatalog
+    worker_profile: WorkerProfile
+    reviewer_profile: WorkerProfile
+    permissions: PermissionProfile
+    graph_overview: GraphOverview
+    client: LLMClient
+    navigator: RepositoryNavigator
+    coordinator: FleetExecutionCoordinator
+    store: FleetRuntimeStore
+    definitions_by_id: dict[str, TargetDefinition]
+    specs_by_task: dict[str, TargetTaskSpec]
+    states_by_task: dict[str, TargetTaskState]
+    completion_by_task: dict[str, TargetCompletionState]
 
 
 async def run_memory_harness(
@@ -128,7 +158,7 @@ async def run_memory_harness(
         default_target_budget=target_budget,
         runtime_root=configuration.bridger_root / "runtime",
         output_root=output_root,
-        max_concurrent_targets=1,
+        max_concurrent_targets=len(catalog.targets),
         enrichment_overlay=enrichment,
         activation_rules={"frontend_stack_present_v1": _frontend_stack_present},
     )
@@ -165,6 +195,24 @@ async def run_memory_harness(
         completion_by_task = {
             state.target_task_id: state for state in completion_states
         }
+        target_step_runtime = _TargetStepRuntime(
+            configuration=configuration,
+            fleet_spec=fleet_spec,
+            fleet_state=fleet_state,
+            catalog=catalog,
+            worker_profile=worker_profile,
+            reviewer_profile=reviewer_profile,
+            permissions=permissions,
+            graph_overview=graph_overview,
+            client=client,
+            navigator=navigator,
+            coordinator=coordinator,
+            store=store,
+            definitions_by_id=definitions_by_id,
+            specs_by_task=specs_by_task,
+            states_by_task=states_by_task,
+            completion_by_task=completion_by_task,
+        )
         while fleet_state.phase is not FleetPhase.ACCEPTED:
             before_fleet_state = fleet_state.model_dump(mode="json")
             before_target_states = [
@@ -177,90 +225,9 @@ async def run_memory_harness(
                 target_states,
                 store,
             )
-            for task_id in runnable:
-                spec = specs_by_task[task_id]
-                state = states_by_task[task_id]
-                completion = completion_by_task[task_id]
-                definition = definitions_by_id[spec.target_id]
-                worker_instructions = WorkerInstructions(
-                    worker_profile_id=worker_profile.profile_id,
-                    target_id=spec.target_id,
-                    target_contract_version=spec.target_contract_version,
-                    shared=_read_prompt(_PROMPTS_ROOT / "worker" / "system.md"),
-                    target_specific=_read_prompt(
-                        _PROMPTS_ROOT / "worker" / "targets" / f"{spec.target_id}.md"
-                    ),
-                )
-                worker_context = compile_worker_context(
-                    fleet_spec,
-                    spec,
-                    state,
-                    completion,
-                    catalog,
-                    definition,
-                    worker_profile,
-                    permissions,
-                    worker_instructions,
-                    context_window_manager=ContextWindowManager(worker_profile),
-                    graph_overview=graph_overview,
-                    persistence=store,
-                )
-                outcome = await run_worker_cycle(
-                    fleet_spec=fleet_spec,
-                    fleet_state=fleet_state,
-                    target_spec=spec,
-                    target_state=state,
-                    completion_state=completion,
-                    target_definition=definition,
-                    context=worker_context,
-                    worker_profile=worker_profile,
-                    permission_profile=permissions,
-                    context_window_manager=ContextWindowManager(worker_profile),
-                    llm_client=client,
-                    navigator=navigator,
-                    evidence=_load_evidence(store, spec, state),
-                    questions=_load_questions(store, spec, state),
-                    coordinator=coordinator,
-                    limits=_worker_runtime_limits(configuration.test_budgets),
-                    persistence=store,
-                )
-                if outcome is WorkerCycleOutcome.FLEET_BUDGET_STOP:
-                    store.exhaust_fleet_budget(fleet_state)
-                    break
-                if outcome is not WorkerCycleOutcome.FINALIZATION_REQUESTED:
-                    continue
-                target_validation = validate_target_candidate(
-                    store, spec, state, definition, navigator
-                )
-                if target_validation.verdict.value != "pass":
-                    continue
-                review = await review_target(
-                    fleet_spec=fleet_spec,
-                    fleet_state=fleet_state,
-                    target_spec=spec,
-                    target_state=state,
-                    catalog=catalog,
-                    target_definition=definition,
-                    reviewer_profile=reviewer_profile,
-                    reviewer_instructions=ReviewerInstructions(
-                        reviewer_profile_id=reviewer_profile.profile_id,
-                        target_id=spec.target_id,
-                        target_contract_version=spec.target_contract_version,
-                        shared=_read_prompt(_PROMPTS_ROOT / "reviewer" / "system.md"),
-                        target_specific=_read_prompt(
-                            _PROMPTS_ROOT
-                            / "reviewer"
-                            / "targets"
-                            / f"{spec.target_id}.md"
-                        ),
-                    ),
-                    context_window_manager=ContextWindowManager(reviewer_profile),
-                    llm_client=client,
-                    coordinator=coordinator,
-                    persistence=store,
-                )
-                if review.verdict is ReviewVerdict.PASS:
-                    accept_target(store, spec, state)
+            outcomes = await _run_target_batch(runnable, target_step_runtime)
+            if WorkerCycleOutcome.FLEET_BUDGET_STOP in outcomes:
+                store.exhaust_fleet_budget(fleet_state)
             if all(state.phase is TargetPhase.ACCEPTED for state in target_states):
                 fleet_validation = validate_fleet(store, fleet_state)
                 if fleet_validation.verdict.value == "pass":
@@ -330,6 +297,112 @@ async def run_memory_harness(
         finally:
             store.close()
     raise RepositoryBrainBuildError("memory fleet exited without publication")
+
+
+async def _run_target_batch(
+    runnable: Sequence[str],
+    runtime: _TargetStepRuntime,
+) -> list[WorkerCycleOutcome]:
+    """Run one structured concurrent batch and join every admitted target step."""
+    tasks: list[asyncio.Task[WorkerCycleOutcome]] = []
+    async with asyncio.TaskGroup() as task_group:
+        for task_id in runnable:
+            tasks.append(task_group.create_task(_run_target_step(task_id, runtime)))
+    return [task.result() for task in tasks]
+
+
+async def _run_target_step(
+    task_id: str,
+    runtime: _TargetStepRuntime,
+) -> WorkerCycleOutcome:
+    """Run one admitted target through its bounded lifecycle for this pass."""
+    spec = runtime.specs_by_task[task_id]
+    state = runtime.states_by_task[task_id]
+    completion = runtime.completion_by_task[task_id]
+    definition = runtime.definitions_by_id[spec.target_id]
+    worker_context = compile_worker_context(
+        runtime.fleet_spec,
+        spec,
+        state,
+        completion,
+        runtime.catalog,
+        definition,
+        runtime.worker_profile,
+        runtime.permissions,
+        WorkerInstructions(
+            worker_profile_id=runtime.worker_profile.profile_id,
+            target_id=spec.target_id,
+            target_contract_version=spec.target_contract_version,
+            shared=_read_prompt(_PROMPTS_ROOT / "worker" / "system.md"),
+            target_specific=_read_prompt(
+                _PROMPTS_ROOT / "worker" / "targets" / f"{spec.target_id}.md"
+            ),
+        ),
+        context_window_manager=ContextWindowManager(runtime.worker_profile),
+        graph_overview=runtime.graph_overview,
+        persistence=runtime.store,
+    )
+    outcome = await run_worker_cycle(
+        fleet_spec=runtime.fleet_spec,
+        fleet_state=runtime.fleet_state,
+        target_spec=spec,
+        target_state=state,
+        completion_state=completion,
+        target_definition=definition,
+        context=worker_context,
+        worker_profile=runtime.worker_profile,
+        permission_profile=runtime.permissions,
+        context_window_manager=ContextWindowManager(runtime.worker_profile),
+        llm_client=runtime.client,
+        navigator=runtime.navigator,
+        evidence=_load_evidence(runtime.store, spec, state),
+        questions=_load_questions(runtime.store, spec, state),
+        coordinator=runtime.coordinator,
+        limits=_worker_runtime_limits(runtime.configuration.test_budgets),
+        persistence=runtime.store,
+    )
+    if outcome is not WorkerCycleOutcome.FINALIZATION_REQUESTED:
+        return outcome
+
+    target_validation = validate_target_candidate(
+        runtime.store,
+        spec,
+        state,
+        definition,
+        runtime.navigator,
+    )
+    if target_validation.verdict.value != "pass":
+        return outcome
+    try:
+        review = await review_target(
+            fleet_spec=runtime.fleet_spec,
+            fleet_state=runtime.fleet_state,
+            target_spec=spec,
+            target_state=state,
+            catalog=runtime.catalog,
+            target_definition=definition,
+            reviewer_profile=runtime.reviewer_profile,
+            reviewer_instructions=ReviewerInstructions(
+                reviewer_profile_id=runtime.reviewer_profile.profile_id,
+                target_id=spec.target_id,
+                target_contract_version=spec.target_contract_version,
+                shared=_read_prompt(_PROMPTS_ROOT / "reviewer" / "system.md"),
+                target_specific=_read_prompt(
+                    _PROMPTS_ROOT / "reviewer" / "targets" / f"{spec.target_id}.md"
+                ),
+            ),
+            context_window_manager=ContextWindowManager(runtime.reviewer_profile),
+            llm_client=runtime.client,
+            coordinator=runtime.coordinator,
+            persistence=runtime.store,
+        )
+    except TargetReviewBudgetError as error:
+        if error.scope == "fleet":
+            return WorkerCycleOutcome.FLEET_BUDGET_STOP
+        return WorkerCycleOutcome.TARGET_BUDGET_EXHAUSTED
+    if review.verdict is ReviewVerdict.PASS:
+        accept_target(runtime.store, spec, state)
+    return outcome
 
 
 def prepare_model_layers(
@@ -445,7 +518,7 @@ def _target_budget_for(test_budgets: bool) -> ExecutionBudget:
         max_model_calls=240,
         max_tool_calls=960,
         max_repair_cycles=12,
-        max_input_tokens=None,
+        max_input_tokens=_FULL_TARGET_INPUT_BUDGET_TOKENS,
         max_output_tokens=200_000,
     )
 
@@ -460,7 +533,16 @@ def _fleet_budget_for(test_budgets: bool, *, target_capacity: int) -> ExecutionB
         max_model_calls=target_budget.max_model_calls * target_capacity,
         max_tool_calls=target_budget.max_tool_calls * target_capacity,
         max_repair_cycles=target_budget.max_repair_cycles * target_capacity,
-        max_input_tokens=250_000 if test_budgets else 1_000_000,
+        max_input_tokens=(
+            250_000
+            if test_budgets
+            else (
+                _FULL_TARGET_INPUT_BUDGET_TOKENS
+                * target_capacity
+                * _FULL_FLEET_INPUT_OVERHEAD_NUMERATOR
+                // _FULL_FLEET_INPUT_OVERHEAD_DENOMINATOR
+            )
+        ),
         max_output_tokens=(target_budget.max_output_tokens or 0) * target_capacity,
     )
 

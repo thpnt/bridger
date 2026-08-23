@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import NoReturn
 
 import orjson
 from pydantic import ValidationError
@@ -216,9 +217,13 @@ async def review_target(
             target_spec=target_spec,
         )
     except _BudgetStop as stop:
-        if stop.scope is _BudgetScope.TARGET:
-            _mark_target_exhausted(persistence, target_spec, target_state, request_id)
-        raise TargetReviewBudgetError(stop.scope.value) from stop
+        _raise_review_budget_error(
+            persistence,
+            target_spec,
+            target_state,
+            request_id,
+            stop,
+        )
 
     request = request.model_copy(
         update={"max_output_tokens": reservation.output_tokens}
@@ -242,6 +247,20 @@ async def review_target(
                 request,
                 output_type=TargetReviewModelResult,
             )
+    except _BudgetStop as stop:
+        await coordinator.finish_model_call(
+            reservation,
+            target_state.usage,
+            fleet_state.usage,
+            None,
+        )
+        _raise_review_budget_error(
+            persistence,
+            target_spec,
+            target_state,
+            request_id,
+            stop,
+        )
     except Exception as error:
         failed_usage = getattr(error, "usage", None)
         await coordinator.finish_model_call(
@@ -797,6 +816,23 @@ def _mark_target_exhausted(
         target_task_id=target_spec.target_task_id,
     )
     _replace_model(target_state, after_state)
+
+
+def _raise_review_budget_error(
+    store: FleetRuntimeStore,
+    target_spec: TargetTaskSpec,
+    target_state: TargetTaskState,
+    finalization_request_id: str,
+    stop: _BudgetStop,
+) -> NoReturn:
+    if stop.scope is _BudgetScope.TARGET:
+        _mark_target_exhausted(
+            store,
+            target_spec,
+            target_state,
+            finalization_request_id,
+        )
+    raise TargetReviewBudgetError(stop.scope.value) from stop
 
 
 def _review_verdict_id(finalization_request_id: str) -> str:

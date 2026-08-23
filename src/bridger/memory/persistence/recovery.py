@@ -463,6 +463,7 @@ def normalize_target_for_fleet_budget_stop(
     """Safely return an admitted target to SCHEDULED for fleet exhaustion."""
     if target_state.phase is TargetPhase.SCHEDULED:
         return True
+    before: TargetPhase
     if target_state.phase is TargetPhase.HYDRATING:
         before = target_state.phase
     elif target_state.phase is TargetPhase.WORKING:

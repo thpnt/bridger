@@ -632,6 +632,19 @@ def test_concurrent_shared_usage_mutations_cannot_drift(tmp_path: Path) -> None:
     )
     assert target.usage.tool_calls == 40
     assert fleet.usage.tool_calls == 40
+    events = fixture.store.recover_event_tail()
+    usage_events = [
+        event
+        for event in events
+        if event.payload.get("usage_delta") == {"tool_calls": 1}
+    ]
+    assert len(usage_events) == 40
+    assert all(
+        event.target_task_id == fixture.target_spec.target_task_id
+        for event in usage_events
+    )
+    assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    assert len({event.event_id for event in events}) == len(events)
 
 
 def test_recovery_rejects_target_fleet_usage_drift(tmp_path: Path) -> None:

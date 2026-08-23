@@ -74,6 +74,16 @@ class ToolExecutor:
 
     async def execute(self, call: LLMToolCall) -> LLMToolResult:
         """Execute one validated call and return a correlated structured result."""
+        if call.has_malformed_arguments:
+            return _failed_result(
+                call,
+                code="malformed_arguments",
+                message=(
+                    f"Invalid arguments for {call.name}: retry this call with a "
+                    "valid JSON object matching the tool schema."
+                ),
+            )
+
         tool = self._tools.get(call.name)
         if tool is None:
             return _failed_result(
@@ -115,7 +125,12 @@ class ToolExecutor:
 def _failed_result(
     call: LLMToolCall,
     *,
-    code: Literal["unknown_tool", "invalid_arguments", "tool_execution_error"],
+    code: Literal[
+        "unknown_tool",
+        "invalid_arguments",
+        "malformed_arguments",
+        "tool_execution_error",
+    ],
     message: str,
 ) -> LLMToolResult:
     return LLMToolResult(

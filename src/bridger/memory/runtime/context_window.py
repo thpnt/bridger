@@ -36,10 +36,7 @@ class ContextWindowManager:
         self._fixed_request_input_tokens = (
             self.count_text(fixed_request_input) + provider_framing_tokens
         )
-        if (
-            self._fixed_request_input_tokens
-            > profile.provider_input_hard_cap_tokens
-        ):
+        if self._fixed_request_input_tokens > profile.provider_input_hard_cap_tokens:
             raise ContextWindowConfigurationError(
                 "fixed request input exceeds the provider-input hard cap"
             )

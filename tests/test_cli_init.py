@@ -145,8 +145,9 @@ def test_test_mode_uses_full_topology_with_reduced_budgets() -> None:
     assert test_budget.max_cycles < full_budget.max_cycles
     assert test_budget.max_model_calls < full_budget.max_model_calls
     assert test_budget.max_input_tokens < full_budget.max_input_tokens
-    assert test_target_budget.max_input_tokens is None
+    assert _target_budget_for(False).max_input_tokens == 2_000_000
     assert test_budget.max_input_tokens == 250_000
+    assert full_budget.max_input_tokens == 2_000_000 * 4 * 5 // 4
     assert test_budget.max_cycles == test_target_budget.max_cycles * 4
 
 
@@ -170,9 +171,15 @@ def test_init_worker_profiles_keep_initial_input_within_v0_cap(
     assert reviewer.model_context_window_tokens == 1_050_000
     assert worker.provider_input_hard_cap_tokens == 32_000
     assert reviewer.provider_input_hard_cap_tokens == 32_000
-    assert _worker_runtime_limits(test_budgets).active_context_soft_limit_tokens == (
-        32_000 if test_budgets else 128_000
+    limits = _worker_runtime_limits(test_budgets)
+    assert limits.active_context_soft_limit_tokens == (
+        32_000 if test_budgets else 256_000
     )
+    if not test_budgets:
+        trigger = int(
+            limits.active_context_soft_limit_tokens * limits.compaction_trigger_ratio
+        )
+        assert trigger == 192_000
 
 
 @pytest.mark.parametrize("reasoning", list(ReasoningEffort))

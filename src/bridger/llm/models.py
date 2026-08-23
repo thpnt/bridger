@@ -36,12 +36,29 @@ class LLMOperation(StrEnum):
 
 
 class LLMToolCall(BaseModel):
+    """One provider tool request, including a recoverable malformed payload."""
+
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
     name: ToolName
-    arguments: dict[str, JsonValue]
-    raw_arguments: str | None = None
+    arguments: dict[str, JsonValue] | None = None
+    raw_arguments: JsonValue | None = None
+    argument_error: Literal["invalid_json", "not_json_object"] | None = None
+
+    @model_validator(mode="after")
+    def validate_arguments(self) -> "LLMToolCall":
+        """Require either an object payload or a preserved parse failure."""
+        if self.argument_error is None and self.arguments is None:
+            raise ValueError("tool calls require an arguments object")
+        if self.argument_error is not None and self.arguments is not None:
+            raise ValueError("malformed tool calls cannot contain parsed arguments")
+        return self
+
+    @property
+    def has_malformed_arguments(self) -> bool:
+        """Return whether this call could not form the required JSON object."""
+        return self.argument_error is not None
 
 
 class LLMToolError(BaseModel):
@@ -52,6 +69,7 @@ class LLMToolError(BaseModel):
     code: Literal[
         "unknown_tool",
         "invalid_arguments",
+        "malformed_arguments",
         "tool_execution_error",
         "permission_denied",
         "protocol_error",

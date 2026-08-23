@@ -388,6 +388,55 @@ def test_target_and_fleet_budget_stops_preserve_review_contract(tmp_path: Path) 
     )
 
 
+@pytest.mark.parametrize("scope", ["target", "fleet"])
+def test_retry_budget_stops_preserve_review_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str,
+) -> None:
+    fixture, request = _ready_for_review(tmp_path)
+    if scope == "target":
+        fixture.target_state.usage.model_calls = (
+            fixture.target_spec.budget.max_model_calls - 1
+        )
+    else:
+        fixture.fleet_state.usage.model_calls = (
+            fixture.spec.fleet_budget.max_model_calls - 1
+        )
+    client = DummyLLMClient([LLMConnectionError("temporary outage", retryable=True)])
+
+    async def retry_until_budget_stop(
+        operation: object,
+        *,
+        before_attempt: object,
+        on_retry: object,
+    ) -> object:
+        del on_retry
+        await before_attempt(1)  # type: ignore[operator]
+        with pytest.raises(LLMConnectionError):
+            await operation()  # type: ignore[operator]
+        return await before_attempt(2)  # type: ignore[operator, no-any-return]
+
+    monkeypatch.setattr(
+        review_module,
+        "run_provider_with_retry",
+        retry_until_budget_stop,
+    )
+
+    with pytest.raises(TargetReviewBudgetError) as error:
+        _run_review(fixture, client)
+
+    assert error.value.scope == scope
+    assert fixture.target_state.phase is (
+        TargetPhase.EXHAUSTED if scope == "target" else TargetPhase.REVIEWING
+    )
+    assert (
+        fixture.target_state.pending_finalization_request_ref
+        == request.finalization_request_id
+    )
+    assert fixture.store.provider_reservations() == []
+
+
 def _ready_for_review(
     tmp_path: Path,
 ) -> tuple[RuntimeFixture, object]:

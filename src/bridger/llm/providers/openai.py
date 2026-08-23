@@ -5,7 +5,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 import openai
 from pydantic import BaseModel, JsonValue, ValidationError
@@ -472,37 +472,37 @@ class OpenAILLMClient:
                     operation=request.operation,
                 )
             raw_arguments = _get(item, "arguments")
+            arguments: dict[str, JsonValue] | None = None
+            argument_error: Literal["invalid_json", "not_json_object"] | None = None
             if not isinstance(raw_arguments, str):
-                raise LLMInvalidResponseError(
-                    "Provider tool call did not include JSON arguments",
-                    provider=self._profile.provider,
-                    model=self._profile.model,
-                    operation=request.operation,
-                )
+                argument_error = "not_json_object"
+            else:
+                try:
+                    parsed_arguments = json.loads(raw_arguments)
+                except json.JSONDecodeError:
+                    argument_error = "invalid_json"
+                else:
+                    if isinstance(parsed_arguments, dict):
+                        arguments = parsed_arguments
+                    else:
+                        argument_error = "not_json_object"
             try:
-                arguments = json.loads(raw_arguments)
-            except json.JSONDecodeError as error:
+                tool_calls.append(
+                    LLMToolCall(
+                        id=call_id,
+                        name=name,
+                        arguments=arguments,
+                        raw_arguments=raw_arguments,
+                        argument_error=argument_error,
+                    )
+                )
+            except ValidationError as error:
                 raise LLMInvalidResponseError(
-                    "Provider tool call arguments were not valid JSON",
+                    "Provider tool call did not include usable call identity",
                     provider=self._profile.provider,
                     model=self._profile.model,
                     operation=request.operation,
                 ) from error
-            if not isinstance(arguments, dict):
-                raise LLMInvalidResponseError(
-                    "Provider tool call arguments must be a JSON object",
-                    provider=self._profile.provider,
-                    model=self._profile.model,
-                    operation=request.operation,
-                )
-            tool_calls.append(
-                LLMToolCall(
-                    id=call_id,
-                    name=name,
-                    arguments=arguments,
-                    raw_arguments=raw_arguments,
-                )
-            )
         return tool_calls
 
     def _map_openai_error(
@@ -781,7 +781,15 @@ def _message_to_openai_items(message: LLMMessage) -> list[dict[str, Any]]:
                 "type": "function_call",
                 "call_id": tool_call.id,
                 "name": tool_call.name,
-                "arguments": tool_call.raw_arguments or json.dumps(tool_call.arguments),
+                "arguments": (
+                    tool_call.raw_arguments
+                    if isinstance(tool_call.raw_arguments, str)
+                    else json.dumps(
+                        tool_call.raw_arguments
+                        if tool_call.raw_arguments is not None
+                        else tool_call.arguments
+                    )
+                ),
             }
             for tool_call in message.tool_calls
         ]

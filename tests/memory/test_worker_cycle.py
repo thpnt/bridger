@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -54,17 +55,19 @@ from bridger.contracts.memory.worker_cycle import (
     OpenQuestion,
 )
 from bridger.contracts.navigation import FileOverview
-from bridger.llm.errors import LLMConnectionError
+from bridger.llm.errors import LLMConnectionError, LLMInvalidResponseError
 from bridger.llm.models import (
     LLMCompactedContext,
     LLMCompactionResult,
+    LLMOperation,
     LLMRequest,
     LLMResponse,
     LLMToolCall,
     LLMToolResult,
     LLMUsage,
 )
-from bridger.llm.providers.openai import _tool_to_openai
+from bridger.llm.profiles import LLMProfile, RetryPolicy
+from bridger.llm.providers.openai import OpenAILLMClient, _tool_to_openai
 from bridger.llm.testing import DummyLLMClient
 from bridger.memory import (
     CompletionStateUpdater,
@@ -434,6 +437,258 @@ def test_yield_requires_no_arguments(tmp_path: Path) -> None:
     assert "yield_cycle must have no arguments" in client.requests[1].model_dump_json()
 
 
+@pytest.mark.parametrize("raw_arguments", ["{not-json", "[]"])
+def test_openai_malformed_arguments_are_corrected_in_band(
+    tmp_path: Path,
+    raw_arguments: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    provider = _WorkerOpenAI(
+        [
+            _function_call_response(
+                "response-malformed",
+                "call-malformed",
+                "write_target_artifact",
+                raw_arguments,
+            ),
+            _function_call_response(
+                "response-final",
+                "call-final",
+                "request_finalization",
+                "{}",
+            ),
+        ]
+    )
+
+    outcome = asyncio.run(
+        fixture.runner([], client=_openai_worker_client(provider)).run()
+    )
+
+    assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
+    assert fixture.target_state.usage.model_calls == 2
+    assert fixture.target_state.usage.tool_calls == 0
+    assert not (tmp_path / "workspace" / "architecture.md").exists()
+    continued_request = provider.responses.requests[1]
+    assert continued_request["previous_response_id"] == "response-malformed"
+    correction = json.loads(continued_request["input"][0]["output"])
+    assert correction["ok"] is False
+    assert correction["tool_name"] == "write_target_artifact"
+    assert correction["result"]["error"]["code"] == "malformed_arguments"
+    assert (
+        "valid JSON object matching the tool schema"
+        in correction["result"]["error"]["message"]
+    )
+
+
+def test_openai_schema_validation_errors_keep_existing_dispatch_behavior(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    provider = _WorkerOpenAI(
+        [
+            _function_call_response(
+                "response-schema-error",
+                "call-schema-error",
+                "write_target_artifact",
+                json.dumps({"path": "architecture.md"}),
+            ),
+            _function_call_response(
+                "response-final",
+                "call-final",
+                "request_finalization",
+                "{}",
+            ),
+        ]
+    )
+
+    outcome = asyncio.run(
+        fixture.runner([], client=_openai_worker_client(provider)).run()
+    )
+
+    assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
+    assert fixture.target_state.usage.tool_calls == 1
+    correction = json.loads(provider.responses.requests[1]["input"][0]["output"])
+    assert correction["result"]["error"]["code"] == "invalid_arguments"
+
+
+def test_openai_adapter_preserves_a_correlatable_malformed_payload() -> None:
+    provider = _WorkerOpenAI(
+        [
+            _function_call_response(
+                "response-malformed",
+                "call-malformed",
+                "list_target_artifacts",
+                "{not-json",
+            )
+        ]
+    )
+
+    response = asyncio.run(
+        _openai_worker_client(provider).generate(
+            LLMRequest(operation=LLMOperation.MEMORY_AGENT_WORKER)
+        )
+    )
+
+    assert response.response_id == "response-malformed"
+    assert response.tool_calls == [
+        LLMToolCall(
+            id="call-malformed",
+            name="list_target_artifacts",
+            raw_arguments="{not-json",
+            argument_error="invalid_json",
+        )
+    ]
+
+
+def test_malformed_call_preserves_valid_sibling_dispatches(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    provider = _WorkerOpenAI(
+        [
+            {
+                "id": "response-mixed",
+                "status": "completed",
+                "model": "test-model",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call-list",
+                        "name": "list_target_artifacts",
+                        "arguments": "{}",
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call-malformed",
+                        "name": "write_target_artifact",
+                        "arguments": "{not-json",
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call-progress",
+                        "name": "update_progress",
+                        "arguments": json.dumps(
+                            {"working_summary": "Continue with finalization."}
+                        ),
+                    },
+                ],
+            },
+            _function_call_response(
+                "response-final",
+                "call-final",
+                "request_finalization",
+                "{}",
+            ),
+        ]
+    )
+
+    outcome = asyncio.run(
+        fixture.runner([], client=_openai_worker_client(provider)).run()
+    )
+
+    assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
+    assert fixture.target_state.usage.tool_calls == 2
+    assert fixture.target_state.working_summary == "Continue with finalization."
+    outputs = [
+        json.loads(item["output"]) for item in provider.responses.requests[1]["input"]
+    ]
+    assert [item["tool_name"] for item in outputs] == [
+        "list_target_artifacts",
+        "write_target_artifact",
+        "update_progress",
+    ]
+    assert outputs[1]["result"]["error"]["code"] == "malformed_arguments"
+
+
+def test_malformed_control_call_does_not_trigger_a_lifecycle_transition(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    provider = _WorkerOpenAI(
+        [
+            _function_call_response(
+                "response-malformed-yield",
+                "call-malformed-yield",
+                "yield_cycle",
+                "{not-json",
+            ),
+            _function_call_response(
+                "response-yield",
+                "call-yield",
+                "yield_cycle",
+                "{}",
+            ),
+        ]
+    )
+
+    outcome = asyncio.run(
+        fixture.runner([], client=_openai_worker_client(provider)).run()
+    )
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert fixture.target_state.usage.model_calls == 2
+    assert fixture.target_state.usage.tool_calls == 0
+    correction = json.loads(provider.responses.requests[1]["input"][0]["output"])
+    assert correction["result"]["error"]["code"] == "malformed_arguments"
+
+
+def test_malformed_argument_corrections_are_bounded_per_trajectory(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    provider = _WorkerOpenAI(
+        [
+            _function_call_response(
+                f"response-{index}",
+                f"call-{index}",
+                "list_target_artifacts",
+                "{not-json",
+            )
+            for index in range(4)
+        ]
+    )
+    runner = fixture.runner([], client=_openai_worker_client(provider))
+
+    outcome = asyncio.run(runner.run())
+
+    assert outcome is WorkerCycleOutcome.EXECUTION_INTERRUPTED
+    assert fixture.target_state.usage.model_calls == 4
+    assert fixture.target_state.usage.tool_calls == 0
+    assert runner.last_interruption is not None
+    assert runner.last_interruption.operation == "tool-arguments"
+    assert len(provider.responses.requests) == 4
+
+
+@pytest.mark.parametrize(
+    ("call_id", "name"),
+    [("", "list_target_artifacts"), ("call-unnamed", "")],
+)
+def test_uncorrelatable_openai_tool_call_remains_fatal(
+    tmp_path: Path,
+    call_id: str,
+    name: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    provider = _WorkerOpenAI(
+        [
+            _function_call_response(
+                "response-uncorrelatable",
+                call_id,
+                name,
+                "{not-json",
+            )
+        ]
+    )
+    runner = fixture.runner([], client=_openai_worker_client(provider))
+
+    outcome = asyncio.run(runner.run())
+
+    assert outcome is WorkerCycleOutcome.EXECUTION_INTERRUPTED
+    assert fixture.target_state.usage.model_calls == 1
+    assert fixture.target_state.usage.tool_calls == 0
+    assert isinstance(runner.last_runtime_error, LLMInvalidResponseError)
+    assert runner.last_interruption is not None
+    assert runner.last_interruption.category == "provider"
+
+
 def test_yield_preserves_all_durable_progress_domains(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     runner = fixture.runner(
@@ -736,6 +991,102 @@ def test_compaction_resets_the_chain_and_can_repeat_with_exact_recent_replay(
     assert fixture.target_state.usage.output_tokens == 2_230
     assert runner._continuation_ref is None
     assert runner._compacted_context is None
+
+
+def test_compacted_provider_trajectory_does_not_exceed_canonical_ingress_cap(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.profile = fixture.profile.model_copy(
+        update={"model_context_window_tokens": 400_000}
+    )
+    fixture.manager = CountingContextWindowManager(fixture.profile)
+    fixture.target_spec = fixture.target_spec.model_copy(
+        update={
+            "budget": fixture.target_spec.budget.model_copy(
+                update={"max_input_tokens": 1_000_000}
+            )
+        }
+    )
+    fixture.fleet_spec = fixture.fleet_spec.model_copy(
+        update={
+            "fleet_budget": fixture.fleet_spec.fleet_budget.model_copy(
+                update={"max_input_tokens": 1_000_000}
+            )
+        }
+    )
+    compacted_context = LLMCompactedContext(
+        provider="openai",
+        payload=[
+            {
+                "type": "compaction",
+                "encrypted_content": _large_provider_trajectory(),
+            }
+        ],
+    )
+    client = DummyLLMClient(
+        [
+            _response(
+                _call("list", "list_target_artifacts", {}),
+                usage=LLMUsage(input_tokens=192_000, output_tokens=1_000),
+            ).model_copy(update={"response_id": "response-a"}),
+            _response(_call("yield", "yield_cycle", {})),
+        ],
+        compaction_outcomes=[
+            LLMCompactionResult(
+                context=compacted_context,
+                usage=LLMUsage(input_tokens=100, output_tokens=10),
+            )
+        ],
+    )
+
+    outcome = asyncio.run(
+        fixture.runner(
+            [],
+            client=client,
+            limits=WorkerRuntimeLimits(active_context_soft_limit_tokens=256_000),
+        ).run()
+    )
+
+    assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
+    assert len(client.compaction_requests) == 1
+    post_compaction_request = client.requests[1]
+    assert post_compaction_request.compacted_context == compacted_context
+    assert (
+        fixture.manager.count_text(
+            worker_cycle._serialize_request(post_compaction_request)
+        )
+        > fixture.profile.provider_input_hard_cap_tokens
+    )
+    assert (
+        fixture.manager.count_text(
+            worker_cycle._serialize_canonical_ingress(post_compaction_request)
+        )
+        <= fixture.profile.provider_input_hard_cap_tokens
+    )
+
+
+def test_compacted_provider_trajectory_still_respects_model_context_capacity(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.profile = fixture.profile.model_copy(
+        update={"model_context_window_tokens": 40_000}
+    )
+    fixture.manager = CountingContextWindowManager(fixture.profile)
+    runner = fixture.runner([])
+    runner._compacted_context = LLMCompactedContext(
+        provider="openai",
+        payload=[
+            {
+                "type": "compaction",
+                "encrypted_content": _large_provider_trajectory(),
+            }
+        ],
+    )
+
+    with pytest.raises(worker_cycle._ContextCapacityStop, match="response capacity"):
+        runner._next_request()
 
 
 def test_compaction_failure_interrupts_without_discarding_the_chain(
@@ -1545,6 +1896,54 @@ def _finding() -> Any:
     )
 
 
+class _WorkerResponses:
+    def __init__(self, outcomes: list[dict[str, Any]]) -> None:
+        self._outcomes = list(outcomes)
+        self.requests: list[dict[str, Any]] = []
+
+    async def create(self, **payload: Any) -> dict[str, Any]:
+        self.requests.append(payload)
+        return self._outcomes.pop(0)
+
+
+class _WorkerOpenAI:
+    def __init__(self, outcomes: list[dict[str, Any]]) -> None:
+        self.responses = _WorkerResponses(outcomes)
+
+
+def _openai_worker_client(provider: _WorkerOpenAI) -> OpenAILLMClient:
+    return OpenAILLMClient(
+        openai_client=provider,
+        profile=LLMProfile(
+            name="test",
+            provider="openai",
+            model="test-model",
+            retry_policy=RetryPolicy(max_attempts=1),
+        ),
+    )
+
+
+def _function_call_response(
+    response_id: str,
+    call_id: str,
+    name: str,
+    arguments: str,
+) -> dict[str, Any]:
+    return {
+        "id": response_id,
+        "status": "completed",
+        "model": "test-model",
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": call_id,
+                "name": name,
+                "arguments": arguments,
+            }
+        ],
+    }
+
+
 def _call(call_id: str, name: str, arguments: dict[str, Any]) -> LLMToolCall:
     return LLMToolCall(id=call_id, name=name, arguments=arguments)
 
@@ -1559,3 +1958,8 @@ def _response(
         provider="test",
         model="gpt-test",
     )
+
+
+def _large_provider_trajectory() -> str:
+    """Return opaque provider state that is larger than the canonical cap."""
+    return "\n".join(f"{value:08x}" for value in range(12_000))

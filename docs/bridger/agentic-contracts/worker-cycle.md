@@ -1077,11 +1077,17 @@ The first two segments remain exact and are never replaced by compaction. Only
 the provider trajectory is lossy-compacted. The protected recent batches remain
 as a bounded exact replay anchor after compaction and a provider-neutral fallback.
 
-The profile's 32K hard cap applies to the complete Bridger-constructed input of
-every normal provider generation request, including the initial request and all
-later requests. Stage 4 uses the existing deterministic working-set eviction
-machinery when removable material causes a later request to exceed that cap.
-The actual model context window remains a separate capacity limit.
+The profile's 32K hard cap applies to Bridger-owned canonical ingress: the
+exact Stage 3 base context, current execution-state overlay, and request-owned
+control surface. It applies to the complete initial request and is retained for
+every later normal generation request without counting transient provider-owned
+trajectory state. Previous-response history, multi-turn worker/tool trajectory,
+and opaque provider compaction output are not canonical ingress.
+
+The complete request submission, including any locally visible transient
+material, must still fit the actual model context window. Stage 4 uses the
+existing deterministic working-set eviction machinery when removable material
+causes that real capacity check to fail.
 
 The runtime owns a separate active working-context soft limit. It determines when
 Bridger compacts, while the resolved model profile determines whether the
@@ -1951,7 +1957,7 @@ new usage contract
 31. No LLM-based context summarizer/relevance classifier is introduced; native provider compaction may compact only the transient provider trajectory.
 32. Tool outputs are bounded at the tool boundary before entering model context.
 33. The existing `ContextWindowManager` is consulted before every model request.
-34. The 32K normal provider-generation limit applies to every complete Bridger-constructed worker request; compaction uses actual model capacity plus Stage 4 working-set controls.
+34. The 32K normal provider-generation limit applies to Bridger-owned canonical ingress; transient provider trajectory remains subject to actual model capacity plus Stage 4 working-set controls.
 35. Mandatory Stage 3 context and current authoritative-state corrections are never silently discarded.
 36. `cycles` increments once on `HYDRATING → WORKING`.
 37. `repair_cycles` increments at the same boundary only for `REPAIR` mode.

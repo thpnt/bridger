@@ -61,6 +61,10 @@ DEFAULT_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS = 128_000
 DEFAULT_COMPACTION_TRIGGER_RATIO = 0.75
 COMPACTION_INGRESS_SAFETY_TOKENS = 256
 PROTECTED_TOOL_BATCHES = 3
+MAX_MALFORMED_ARGUMENT_CORRECTION_TURNS = 3
+_MALFORMED_ARGUMENT_CORRECTION_LIMIT_MESSAGE = (
+    "malformed tool arguments exceeded the correction limit"
+)
 _CONTROL_TOOL_IDS = {FINALIZATION_TOOL_ID, YIELD_CYCLE_TOOL_ID}
 
 
@@ -409,8 +413,8 @@ class FleetExecutionCoordinator:
                     reservation.attempt_id,
                     input_tokens=(usage.input_tokens or 0) if usage else 0,
                     cached_input_tokens=(
-                        usage.cached_input_tokens or 0
-                    ) if usage else 0,
+                        (usage.cached_input_tokens or 0) if usage else 0
+                    ),
                     cache_write_tokens=(usage.cache_write_tokens or 0) if usage else 0,
                     output_tokens=(usage.output_tokens or 0) if usage else 0,
                     failed=usage is None,
@@ -446,8 +450,8 @@ class FleetExecutionCoordinator:
                     reservation.attempt_id,
                     input_tokens=(usage.input_tokens or 0) if usage else 0,
                     cached_input_tokens=(
-                        usage.cached_input_tokens or 0
-                    ) if usage else 0,
+                        (usage.cached_input_tokens or 0) if usage else 0
+                    ),
                     cache_write_tokens=(usage.cache_write_tokens or 0) if usage else 0,
                     output_tokens=(usage.output_tokens or 0) if usage else 0,
                     failed=usage is None,
@@ -697,13 +701,20 @@ class FleetExecutionCoordinator:
         tool: str,
         *,
         failed: bool,
+        error_code: str | None = None,
     ) -> None:
         """Append compact tool completion metadata when persistence is active."""
         if self._persistence is None:
             return
+        payload: dict[str, str] = {
+            "tool": tool,
+            "status": "error" if failed else "ok",
+        }
+        if error_code is not None:
+            payload["error_code"] = error_code
         self._persistence.append_event(
             "tool_dispatch_rejected" if failed else "tool_dispatch_completed",
-            {"tool": tool, "status": "error" if failed else "ok"},
+            payload,
             target_task_id=target_task_id,
         )
 
@@ -936,6 +947,7 @@ class WorkerRunner:
         self._compacted_context: LLMCompactedContext | None = None
         self._pending_messages: list[LLMMessage] = []
         self._latest_usage = LLMUsage()
+        self._malformed_argument_correction_turns = 0
 
     @property
     def last_runtime_error(self) -> Exception | None:
@@ -951,6 +963,7 @@ class WorkerRunner:
         """Execute one cycle and discard every provider-local trajectory on exit."""
         self._last_runtime_error = None
         self._last_interruption = None
+        self._malformed_argument_correction_turns = 0
         try:
             return await self._run_cycle()
         finally:
@@ -1063,6 +1076,25 @@ class WorkerRunner:
                     operation="worker-protocol",
                     message="model response contained no tool calls",
                 )
+            malformed_calls = [call for call in calls if call.has_malformed_arguments]
+            if malformed_calls:
+                self._malformed_argument_correction_turns += 1
+                if (
+                    self._malformed_argument_correction_turns
+                    > MAX_MALFORMED_ARGUMENT_CORRECTION_TURNS
+                ):
+                    for call in malformed_calls:
+                        self._coordinator.record_tool_result(
+                            self._target_spec.target_task_id,
+                            call.name,
+                            failed=True,
+                            error_code="malformed_arguments",
+                        )
+                    return self._interrupt(
+                        category="runtime",
+                        operation="tool-arguments",
+                        message=_MALFORMED_ARGUMENT_CORRECTION_LIMIT_MESSAGE,
+                    )
             if self._is_valid_finalization(calls):
                 return WorkerCycleOutcome.FINALIZATION_REQUESTED
             if self._is_valid_yield(calls):
@@ -1075,7 +1107,14 @@ class WorkerRunner:
                     return self._interrupt_from_error("cycle-yield", error)
                 return WorkerCycleOutcome.CYCLE_YIELDED
 
-            operational = [call for call in calls if call.name not in _CONTROL_TOOL_IDS]
+            operational = [
+                call
+                for call in calls
+                if (
+                    call.name not in _CONTROL_TOOL_IDS
+                    and not call.has_malformed_arguments
+                )
+            ]
             tool_reservation: _ToolReservation | None = None
             if operational:
                 try:
@@ -1092,6 +1131,16 @@ class WorkerRunner:
             results: list[LLMToolResult] = []
             try:
                 for call in calls:
+                    if call.has_malformed_arguments:
+                        result = _malformed_arguments_result(call)
+                        self._coordinator.record_tool_result(
+                            self._target_spec.target_task_id,
+                            call.name,
+                            failed=True,
+                            error_code=result.error.code if result.error else None,
+                        )
+                        results.append(result)
+                        continue
                     if call.name in _CONTROL_TOOL_IDS:
                         results.append(_control_protocol_error(call, calls))
                         continue
@@ -1110,6 +1159,7 @@ class WorkerRunner:
                         self._target_spec.target_task_id,
                         call.name,
                         failed=result.error is not None,
+                        error_code=result.error.code if result.error else None,
                     )
                     results.append(
                         _bound_tool_result(
@@ -1336,6 +1386,9 @@ class WorkerRunner:
                 },
             )
             serialized = _serialize_request(request)
+            canonical_ingress_tokens = self._manager.count_text(
+                _serialize_canonical_ingress(request)
+            )
             input_tokens = self._manager.count_text(serialized)
             output_tokens = self._maximum_output_tokens(input_tokens)
             diagnostics = self._manager.inspect_request(
@@ -1343,7 +1396,7 @@ class WorkerRunner:
                 reserved_response_tokens=output_tokens,
             )
             if (
-                input_tokens <= self._profile.provider_input_hard_cap_tokens
+                canonical_ingress_tokens <= self._profile.provider_input_hard_cap_tokens
                 and diagnostics.within_context_limit
             ):
                 return (
@@ -1351,11 +1404,9 @@ class WorkerRunner:
                     diagnostics.current_request_input_tokens,
                     output_tokens,
                 )
-            if input_tokens > self._profile.provider_input_hard_cap_tokens:
-                if not initial and self._working_set.evict_one_for_context_pressure():
-                    continue
+            if canonical_ingress_tokens > self._profile.provider_input_hard_cap_tokens:
                 raise WorkerCyclePreflightError(
-                    "minimum valid normal worker request exceeds the "
+                    "minimum valid canonical worker ingress exceeds the "
                     "provider-input hard cap"
                 )
             if initial or not self._working_set.evict_one_for_context_pressure():
@@ -1754,6 +1805,7 @@ class WorkerRunner:
         return (
             len(calls) == 1
             and calls[0].name == FINALIZATION_TOOL_ID
+            and not calls[0].has_malformed_arguments
             and not calls[0].arguments
         )
 
@@ -1762,6 +1814,7 @@ class WorkerRunner:
         return (
             len(calls) == 1
             and calls[0].name == YIELD_CYCLE_TOOL_ID
+            and not calls[0].has_malformed_arguments
             and not calls[0].arguments
         )
 
@@ -1839,6 +1892,21 @@ def _control_protocol_error(
         call_id=call.id,
         name=call.name,
         error=LLMToolError(code="protocol_error", message=reason),
+    )
+
+
+def _malformed_arguments_result(call: LLMToolCall) -> LLMToolResult:
+    """Return a correlated correction request without dispatching the tool."""
+    return LLMToolResult(
+        call_id=call.id,
+        name=call.name,
+        error=LLMToolError(
+            code="malformed_arguments",
+            message=(
+                f"Invalid arguments for {call.name}: retry this call with a valid "
+                "JSON object matching the tool schema."
+            ),
+        ),
     )
 
 
@@ -1931,6 +1999,18 @@ def _serialize_request(request: LLMRequest) -> str:
         request.model_dump(mode="json"),
         option=orjson.OPT_SORT_KEYS,
     ).decode()
+
+
+def _serialize_canonical_ingress(request: LLMRequest) -> str:
+    """Serialize only the request material owned by Bridger's canonical context."""
+    canonical_request = request.model_copy(
+        update={
+            "messages": [],
+            "continuation_ref": None,
+            "compacted_context": None,
+        }
+    )
+    return _serialize_request(canonical_request)
 
 
 def _serialize_compaction_request(request: LLMCompactionRequest) -> str:

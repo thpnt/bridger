@@ -264,13 +264,16 @@ def test_fleet_cycle_headroom_caps_one_pass_without_charging_usage() -> None:
 
 
 def test_scheduler_does_not_predict_unknown_per_cycle_consumption() -> None:
+    fleet_budget = _BUDGET.model_copy(update={"max_input_tokens": 4})
     fleet_spec, fleet_state, specs, states = _fleet(
         ["a", "b"],
+        fleet_budget=fleet_budget,
         max_concurrent_targets=2,
         fleet_phase=FleetPhase.RUNNING,
     )
     fleet_state.usage.model_calls = fleet_spec.fleet_budget.max_model_calls - 1
     fleet_state.usage.tool_calls = fleet_spec.fleet_budget.max_tool_calls - 1
+    fleet_state.usage.input_tokens = fleet_budget.max_input_tokens - 1
 
     assert schedule_runnable_targets(fleet_spec, fleet_state, specs, states) == [
         "task-a",
@@ -278,6 +281,7 @@ def test_scheduler_does_not_predict_unknown_per_cycle_consumption() -> None:
     ]
     assert fleet_state.usage.model_calls == fleet_spec.fleet_budget.max_model_calls - 1
     assert fleet_state.usage.tool_calls == fleet_spec.fleet_budget.max_tool_calls - 1
+    assert fleet_state.usage.input_tokens == fleet_budget.max_input_tokens - 1
 
 
 def test_fleet_exhaustion_does_not_exhaust_targets_and_waits_for_active_work() -> None:
