@@ -38,7 +38,9 @@ from bridger.llm.models import (
 )
 from bridger.llm.profiles import LLMProfile, RetryPolicy
 from bridger.llm.providers.openai import OpenAILLMClient
+from bridger.memory import build_graph_overview
 from bridger.navigation import RepositoryNavigator, build_navigation_tools
+from bridger.navigation.tools import NAVIGATION_TOOL_IDS
 from bridger.repository.errors import SourceReadDeniedError
 from bridger.repository.service import prepare_repository
 
@@ -375,27 +377,9 @@ def test_navigation_tool_set_is_explicit_schema_derived_and_authority_bound(
         RepositoryNavigator(context, file_index, symbol_index, graph_build)
     )
 
-    assert [definition.name for definition in executor.definitions] == [
-        "search_repository",
-        "get_graph_entity",
-        "get_graph_neighbors",
-        "get_graph_path",
-        "get_graph_subgraph",
-        "get_graph_community",
-        "get_graph_central_nodes",
-        "graph_to_file",
-        "graph_to_symbols",
-        "file_to_graph",
-        "symbol_to_graph",
-        "list_files",
-        "get_file_overview",
-        "list_symbols",
-        "search_symbols",
-        "search_source_content",
-        "read_symbol_excerpt",
-        "read_file_ranges",
-        "read_around_match",
-    ]
+    assert tuple(definition.name for definition in executor.definitions) == (
+        NAVIGATION_TOOL_IDS
+    )
     for definition in executor.definitions:
         assert definition.input_schema["type"] == "object"
         assert definition.input_schema["additionalProperties"] is False
@@ -414,6 +398,24 @@ def test_navigation_tool_set_is_explicit_schema_derived_and_authority_bound(
         "overlay",
     ):
         assert internal_authority not in serialized_schemas
+
+
+def test_graph_overview_reuses_the_persisted_graph_snapshot(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    _context, _file_index, _symbol_index, graph_build, structural = layer6_state
+
+    overview = build_graph_overview(graph_build)
+
+    assert overview.graph_snapshot_id == graph_build.manifest.snapshot_id
+    assert overview.node_count == graph_build.graph.number_of_nodes()
+    assert overview.edge_count == graph_build.graph.number_of_edges()
+    assert overview.community_count == len(structural["communities"])
+    assert [node.node_id for node in overview.central_nodes] == [
+        node["id"] for node in structural["god_nodes"][:10]
+    ]
+    assert len(overview.surprising_connections) <= 5
+    assert len(overview.suggested_questions) <= 7
 
 
 def test_navigation_tool_schemas_are_openai_strict_compatible(

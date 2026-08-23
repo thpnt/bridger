@@ -30,6 +30,28 @@ from bridger.navigation.navigator import (
 )
 from bridger.repository.errors import RepositoryError
 
+NAVIGATION_TOOL_IDS = (
+    "search_repository",
+    "get_graph_entity",
+    "get_graph_neighbors",
+    "get_graph_path",
+    "get_graph_subgraph",
+    "get_graph_community",
+    "get_graph_central_nodes",
+    "graph_to_file",
+    "graph_to_symbols",
+    "file_to_graph",
+    "symbol_to_graph",
+    "list_files",
+    "get_file_overview",
+    "list_symbols",
+    "search_symbols",
+    "search_source_content",
+    "read_symbol_excerpt",
+    "read_file_ranges",
+    "read_around_match",
+)
+
 
 def _repository_relative_path(value: str) -> str:
     if (
@@ -459,4 +481,4 @@ def build_navigation_tools(navigator: RepositoryNavigator) -> ToolExecutor:
     )
 
 
-__all__ = ["build_navigation_tools"]
+__all__ = ["NAVIGATION_TOOL_IDS", "build_navigation_tools"]

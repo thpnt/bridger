@@ -120,6 +120,59 @@ class WorkerInstructions(BaseModel):
     target_specific: str = Field(min_length=1)
 
 
+class GraphOverviewCentralNode(BaseModel):
+    """One persisted central graph node selected for worker orientation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    node_id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    degree: int = Field(ge=0)
+
+
+class GraphOverviewConnection(BaseModel):
+    """One persisted surprising graph connection selected for orientation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: str = Field(min_length=1)
+    target: str = Field(min_length=1)
+    source_paths: tuple[str, ...]
+    confidence: str = Field(min_length=1)
+    relation: str = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+
+
+class GraphOverviewQuestion(BaseModel):
+    """One persisted graph-guided investigation question."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: str = Field(min_length=1)
+    question: str | None = Field(default=None, min_length=1)
+    rationale: str = Field(min_length=1)
+
+
+class GraphOverview(BaseModel):
+    """Bounded immutable repository graph projection for worker orientation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    graph_snapshot_id: str = Field(min_length=1)
+    graph_contract_version: str = Field(min_length=1)
+    build_mode: str = Field(min_length=1)
+    node_count: int = Field(ge=0)
+    edge_count: int = Field(ge=0)
+    hyperedge_count: int = Field(ge=0)
+    community_count: int = Field(ge=0)
+    central_nodes: tuple[GraphOverviewCentralNode, ...]
+    central_nodes_truncated: bool
+    surprising_connections: tuple[GraphOverviewConnection, ...]
+    surprising_connections_truncated: bool
+    suggested_questions: tuple[GraphOverviewQuestion, ...]
+    suggested_questions_truncated: bool
+
+
 class TargetContractView(BaseModel):
     """Worker-facing projection of immutable target semantics."""
 
@@ -201,6 +254,7 @@ class WorkerContext(BaseModel):
     permission_profile_id: str = Field(min_length=1)
     allowed_tool_ids: tuple[str, ...]
     source: SourceBinding
+    graph_overview: GraphOverview
     shared_worker_instructions: str = Field(min_length=1)
     global_ownership_guidance: tuple[str, ...]
     target_worker_instructions: str = Field(min_length=1)
@@ -277,6 +331,10 @@ class RequestContextWindowDiagnostics(BaseModel):
 __all__ = [
     "CompletionObligationView",
     "ContextWindowDiagnostics",
+    "GraphOverview",
+    "GraphOverviewCentralNode",
+    "GraphOverviewConnection",
+    "GraphOverviewQuestion",
     "OpenQuestion",
     "PermissionProfile",
     "RequestContextWindowDiagnostics",

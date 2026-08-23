@@ -11,7 +11,7 @@ from bridger.contracts.navigation import (
     SourceContentMatch,
 )
 from bridger.navigation.navigator import RepositoryNavigator
-from bridger.navigation.tools import build_navigation_tools
+from bridger.navigation.tools import NAVIGATION_TOOL_IDS, build_navigation_tools
 
 __all__ = [
     "CompositeEntityView",
@@ -19,6 +19,7 @@ __all__ = [
     "GraphCommunityView",
     "GraphDirection",
     "GraphTraversalView",
+    "NAVIGATION_TOOL_IDS",
     "RepositoryNavigator",
     "RepositorySearchHit",
     "RepositorySearchKind",

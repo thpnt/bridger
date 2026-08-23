@@ -33,6 +33,7 @@ from bridger.contracts.memory.core import (
     TargetTaskState,
 )
 from bridger.contracts.memory.hydration import (
+    GraphOverview,
     PermissionProfile,
     WorkerContext,
     WorkerContextMode,
@@ -54,6 +55,7 @@ from bridger.memory import (
     compile_worker_context,
     load_target_artifacts,
     serialize_worker_context,
+    serialize_worker_context_sections,
 )
 from bridger.repository_brain.harness import _profiles
 
@@ -76,6 +78,21 @@ _DEFAULT_TARGETS_ROOT = (
     / "bridger"
     / "memory"
     / "default-targets"
+)
+_GRAPH_OVERVIEW = GraphOverview(
+    graph_snapshot_id="snapshot-1",
+    graph_contract_version="bridger.graph.v1",
+    build_mode="full",
+    node_count=12,
+    edge_count=18,
+    hyperedge_count=2,
+    community_count=3,
+    central_nodes=(),
+    central_nodes_truncated=False,
+    surprising_connections=(),
+    surprising_connections_truncated=False,
+    suggested_questions=(),
+    suggested_questions_truncated=False,
 )
 
 
@@ -129,6 +146,7 @@ class HydrationFixture:
             self.permission_profile,
             self.worker_instructions,
             self.state_reader,
+            graph_overview=_GRAPH_OVERVIEW,
             **kwargs,
         )
 
@@ -177,6 +195,7 @@ def test_initial_hydration_projects_only_complete_authoritative_execution_view()
     assert context.remaining_target_budget.input_tokens == 49_000
     assert context.remaining_target_budget.output_tokens is None
     assert context.allowed_tool_ids == ("repository_search", "workspace_read")
+    assert context.graph_overview == _GRAPH_OVERVIEW
 
     fields = type(context).model_fields
     assert "evidence_refs" not in fields
@@ -185,6 +204,12 @@ def test_initial_hydration_projects_only_complete_authoritative_execution_view()
     assert "stall_count" not in fields
     assert "transcript" not in fields
     serialized = serialize_worker_context(context)
+    stable_context, _target_context, cycle_context = serialize_worker_context_sections(
+        context
+    )
+    assert "Repository graph overview" in stable_context
+    assert '"node_count":12' in stable_context
+    assert "Repository graph overview" not in cycle_context
     assert "evidence-completion" in serialized
     assert "evidence-state-only" not in serialized
     assert "artifact contents" not in serialized.lower()
@@ -504,11 +529,7 @@ def test_complete_request_hard_cap_includes_fixed_request_overhead() -> None:
 
     over = _fixture()
     over.worker_profile = over.worker_profile.model_copy(
-        update={
-            "provider_input_hard_cap_tokens": (
-                context_tokens + fixed_tokens - 1
-            )
-        }
+        update={"provider_input_hard_cap_tokens": (context_tokens + fixed_tokens - 1)}
     )
     with pytest.raises(WorkerContextHydrationError, match="exceeds the hard cap"):
         over.compile(

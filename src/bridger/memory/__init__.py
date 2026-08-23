@@ -92,7 +92,9 @@ from bridger.memory.runtime.hydration import (
     OpenQuestionRecord,
     WorkerContextDebugSnapshot,
     WorkerContextDebugWriter,
+    build_graph_overview,
     serialize_worker_context,
+    serialize_worker_context_sections,
 )
 from bridger.memory.runtime.provider_recovery import (
     retry_read_only_tool_once,
@@ -165,6 +167,7 @@ __all__ = [
     "RecoveredFleet",
     "RuntimePaths",
     "bind_memory_run",
+    "build_graph_overview",
     "accept_target",
     "accept_fleet",
     "compile_fleet_review_context",
@@ -199,6 +202,7 @@ __all__ = [
     "resume_fleet_review_routing",
     "schedule_runnable_targets",
     "serialize_worker_context",
+    "serialize_worker_context_sections",
     "validate_checkpoint",
     "validate_fleet",
     "validate_target_candidate",

@@ -44,6 +44,7 @@ from bridger.llm.tools import LLMTool, ToolExecutor
 from bridger.memory.persistence.durability import FleetRuntimeStore
 from bridger.navigation.navigator import MAX_RANGE_LINES, RepositoryNavigator
 from bridger.navigation.tools import (
+    NAVIGATION_TOOL_IDS,
     _CommunityTargetReference,
     _EdgeTargetReference,
     build_navigation_tools,
@@ -57,19 +58,7 @@ MAX_QUESTION_CHARS = 1_000
 MAX_OPEN_QUESTIONS = 20
 MAX_RESOLUTION_NOTE_CHARS = 4_000
 
-REPOSITORY_TOOL_IDS = (
-    "search_repository",
-    "get_graph_entity",
-    "get_graph_neighbors",
-    "get_graph_path",
-    "get_graph_community",
-    "list_files",
-    "get_file_overview",
-    "search_symbols",
-    "search_source_content",
-    "read_symbol_excerpt",
-    "read_file_ranges",
-)
+REPOSITORY_TOOL_IDS = NAVIGATION_TOOL_IDS
 TARGET_TOOL_IDS = (
     "list_target_artifacts",
     "read_target_artifact",

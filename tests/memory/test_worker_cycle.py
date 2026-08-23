@@ -37,6 +37,7 @@ from bridger.contracts.memory.core import (
 )
 from bridger.contracts.memory.hydration import (
     CompletionObligationView,
+    GraphOverview,
     PermissionProfile,
     RemainingExecutionBudget,
     TargetContractView,
@@ -79,7 +80,11 @@ from bridger.memory import (
     WorkerToolRuntime,
     run_worker_cycle,
 )
-from bridger.memory.runtime.worker_tools import WORKER_TOOL_IDS
+from bridger.memory.runtime.worker_tools import (
+    REPOSITORY_TOOL_IDS,
+    WORKER_TOOL_IDS,
+)
+from bridger.navigation.tools import NAVIGATION_TOOL_IDS
 
 _SOURCE = SourceBinding(
     repository_id="repository-1",
@@ -97,6 +102,21 @@ _ALL_LOCAL_TOOLS = (
     "update_completion_item",
     "update_progress",
 )
+_GRAPH_OVERVIEW = GraphOverview(
+    graph_snapshot_id="snapshot-1",
+    graph_contract_version="bridger.graph.v1",
+    build_mode="full",
+    node_count=1,
+    edge_count=0,
+    hyperedge_count=0,
+    community_count=1,
+    central_nodes=(),
+    central_nodes_truncated=False,
+    surprising_connections=(),
+    surprising_connections_truncated=False,
+    suggested_questions=(),
+    suggested_questions_truncated=False,
+)
 
 
 def test_complete_memory_worker_tool_surface_is_openai_strict_compatible(
@@ -110,6 +130,8 @@ def test_complete_memory_worker_tool_surface_is_openai_strict_compatible(
     ]
 
     assert {tool["name"] for tool in emitted_tools} >= set(WORKER_TOOL_IDS)
+    assert REPOSITORY_TOOL_IDS == NAVIGATION_TOOL_IDS
+    assert {tool["name"] for tool in emitted_tools} >= set(NAVIGATION_TOOL_IDS)
     assert all(tool["strict"] is True for tool in emitted_tools)
     for tool in emitted_tools:
         _assert_no_empty_schema_nodes(tool["parameters"])
@@ -131,6 +153,35 @@ def _assert_schema_node(value: object, *, is_schema_node: bool) -> None:
     elif isinstance(value, list):
         for child in value:
             _assert_schema_node(child, is_schema_node=True)
+
+
+def test_assembled_worker_request_combines_graph_strategy_context_and_tools(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path, allowed_tools=WORKER_TOOL_IDS)
+    shared_instructions = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "bridger"
+        / "memory"
+        / "prompts"
+        / "worker"
+        / "system.md"
+    ).read_text(encoding="utf-8")
+    fixture.context = fixture.context.model_copy(
+        update={"shared_worker_instructions": shared_instructions}
+    )
+    client = DummyLLMClient([_response(_call("finalize", "request_finalization", {}))])
+
+    outcome = asyncio.run(fixture.runner([], client=client).run())
+
+    assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
+    request = client.requests[0]
+    assert request.instructions is not None
+    assert "Graph-guided navigation" in request.instructions
+    assert "Repository graph overview" in request.instructions
+    assert '"node_count":1' in request.instructions
+    assert {tool.name for tool in request.tools} >= set(NAVIGATION_TOOL_IDS)
 
 
 class CountingContextWindowManager(ContextWindowManager):
@@ -1406,6 +1457,7 @@ def _fixture(
         permission_profile_id="permissions-v1",
         allowed_tool_ids=allowed_tools,
         source=_SOURCE,
+        graph_overview=_GRAPH_OVERVIEW,
         shared_worker_instructions="Use controlled tools for every action.",
         global_ownership_guidance=("Stay inside the assigned target.",),
         target_worker_instructions="Investigate and document the runtime.",

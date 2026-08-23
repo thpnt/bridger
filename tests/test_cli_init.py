@@ -515,6 +515,7 @@ def test_memory_harness_closes_client_before_store_on_exception(
         lambda *_args: Store(),
     )
     monkeypatch.setattr(harness, "RepositoryNavigator", lambda *_args: object())
+    monkeypatch.setattr(harness, "build_graph_overview", lambda *_args: object())
 
     def create_client(_profile: LLMProfile) -> Client:
         nonlocal created_loop

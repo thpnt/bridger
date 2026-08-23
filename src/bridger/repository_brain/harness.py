@@ -46,6 +46,7 @@ from bridger.memory import (
     accept_fleet,
     accept_target,
     bind_memory_run,
+    build_graph_overview,
     compile_worker_context,
     initialize_fleet,
     initialize_persistence,
@@ -153,6 +154,7 @@ async def run_memory_harness(
             graph_build,
             enrichment,
         )
+        graph_overview = build_graph_overview(graph_build)
         coordinator = FleetExecutionCoordinator()
         client = create_llm_client_from_profile(profile)
         definitions_by_id = {
@@ -200,6 +202,7 @@ async def run_memory_harness(
                     permissions,
                     worker_instructions,
                     context_window_manager=ContextWindowManager(worker_profile),
+                    graph_overview=graph_overview,
                     persistence=store,
                 )
                 outcome = await run_worker_cycle(

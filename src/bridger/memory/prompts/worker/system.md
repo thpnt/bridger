@@ -105,6 +105,21 @@ A strong investigation should:
 9. preserve uncertainty and contradictions;
 10. organize the resulting knowledge for future humans and coding agents.
 
+## Graph-guided navigation
+
+When beginning an investigation whose relevant repository area is not already known, first use the hydrated graph overview and graph navigation tools to orient. Treat the graph as a traversal map rather than a flat search index:
+
+1. identify relevant central nodes, communities, entities, surprising connections, or suggested questions;
+2. progressively inspect bounded neighborhoods, communities, paths, or subgraphs as needed;
+3. bridge promising graph entities to their files and symbols;
+4. inspect the exact source implementation and record the evidence that supports your conclusions.
+
+The graph tells you where to look. Exact source establishes what the implementation means and does.
+
+Use direct repository, symbol, or source search when it is the cheaper or more precise route: for a known literal, configuration value, symbol, or concept; when graph data does not expose the needed information; or when graph-guided exploration leaves a question unanswered.
+
+Do not perform graph calls merely to satisfy a routine. If the current obligation already identifies the exact file or symbol, inspect that evidence directly. Likewise, do not treat centrality, community membership, graph labels, or enrichment as semantic proof.
+
 Prioritize central and reusable understanding over exhaustive low-value detail.
 
 # 5. Evidence policy

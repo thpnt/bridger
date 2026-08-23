@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_core import to_jsonable_python
 
 from bridger.artifacts.writer import write_artifact
+from bridger.contracts.graph import GraphBuildResult
 from bridger.contracts.memory.core import (
     CandidateArtifactRef,
     CompletionStatus,
@@ -30,6 +31,10 @@ from bridger.contracts.memory.fleet_validation import FleetValidationFinding
 from bridger.contracts.memory.hydration import (
     CompletionObligationView,
     ContextWindowDiagnostics,
+    GraphOverview,
+    GraphOverviewCentralNode,
+    GraphOverviewConnection,
+    GraphOverviewQuestion,
     OpenQuestion,
     PermissionProfile,
     RemainingExecutionBudget,
@@ -46,6 +51,7 @@ from bridger.contracts.memory.review import ReviewFinding
 from bridger.contracts.memory.validation import ValidationFinding
 from bridger.contracts.memory.worker_cycle import EvidenceReference
 from bridger.contracts.memory.worker_cycle import OpenQuestion as DurableOpenQuestion
+from bridger.graph.lifecycle import load_graph_snapshot_structural_state
 from bridger.memory.errors import (
     InvalidTargetArtifacts,
     WorkerContextHydrationError,
@@ -59,6 +65,9 @@ from bridger.memory.targets import _resolve_catalog_definitions
 
 _LOGGER = logging.getLogger(__name__)
 _HYDRATION_ERROR_REF = "stage-3-context-hydration"
+_GRAPH_OVERVIEW_CENTRAL_NODE_LIMIT = 10
+_GRAPH_OVERVIEW_CONNECTION_LIMIT = 5
+_GRAPH_OVERVIEW_QUESTION_LIMIT = 7
 
 
 class CandidateArtifactRecord(BaseModel):
@@ -290,7 +299,7 @@ class _PersistedHydrationStateReader:
             target_task_id=finding.target_task_id,
             origin=FindingOrigin.TARGET_REVIEW,
             content=(
-                f"{finding.message}\n\nRequired outcome: " f"{finding.required_outcome}"
+                f"{finding.message}\n\nRequired outcome: {finding.required_outcome}"
             ),
             affected_artifact_refs=tuple(finding.affected_artifact_refs),
             affected_obligation_ids=tuple(finding.affected_obligation_ids),
@@ -342,7 +351,7 @@ class _PersistedHydrationStateReader:
             target_task_id=self._target_spec.target_task_id,
             origin=FindingOrigin.FLEET_REVIEW,
             content=(
-                f"{finding.message}\n\nRequired outcome: " f"{finding.required_outcome}"
+                f"{finding.message}\n\nRequired outcome: {finding.required_outcome}"
             ),
             affected_artifact_refs=tuple(finding.affected_artifact_paths),
         )
@@ -383,6 +392,57 @@ class WorkerContextDebugWriter:
         write_artifact(destination, snapshot)
 
 
+def build_graph_overview(graph_build: GraphBuildResult) -> GraphOverview:
+    """Project the persisted graph snapshot into bounded worker orientation data."""
+    structural = load_graph_snapshot_structural_state(graph_build)
+    central_nodes = structural["god_nodes"]
+    connections = structural["surprising_connections"]
+    questions = structural["suggested_questions"]
+    return GraphOverview(
+        graph_snapshot_id=graph_build.manifest.snapshot_id,
+        graph_contract_version=graph_build.manifest.graph_contract_version,
+        build_mode=graph_build.operation_mode,
+        node_count=graph_build.graph.number_of_nodes(),
+        edge_count=graph_build.graph.number_of_edges(),
+        hyperedge_count=len(graph_build.graph.graph.get("hyperedges", [])),
+        community_count=len(structural["communities"]),
+        central_nodes=tuple(
+            GraphOverviewCentralNode(
+                node_id=record["id"],
+                label=record["label"],
+                degree=record["degree"],
+            )
+            for record in central_nodes[:_GRAPH_OVERVIEW_CENTRAL_NODE_LIMIT]
+        ),
+        central_nodes_truncated=(
+            len(central_nodes) > _GRAPH_OVERVIEW_CENTRAL_NODE_LIMIT
+        ),
+        surprising_connections=tuple(
+            GraphOverviewConnection(
+                source=record["source"],
+                target=record["target"],
+                source_paths=tuple(record["source_files"]),
+                confidence=record["confidence"],
+                relation=record["relation"],
+                rationale=record.get("why", record.get("note", "")),
+            )
+            for record in connections[:_GRAPH_OVERVIEW_CONNECTION_LIMIT]
+        ),
+        surprising_connections_truncated=(
+            len(connections) > _GRAPH_OVERVIEW_CONNECTION_LIMIT
+        ),
+        suggested_questions=tuple(
+            GraphOverviewQuestion(
+                kind=record["type"],
+                question=record["question"],
+                rationale=record["why"],
+            )
+            for record in questions[:_GRAPH_OVERVIEW_QUESTION_LIMIT]
+        ),
+        suggested_questions_truncated=(len(questions) > _GRAPH_OVERVIEW_QUESTION_LIMIT),
+    )
+
+
 def compile_worker_context(
     fleet_spec: MemoryFleetSpec,
     target_spec: TargetTaskSpec,
@@ -395,6 +455,7 @@ def compile_worker_context(
     worker_instructions: WorkerInstructions | None,
     state_reader: HydrationStateReader | None = None,
     *,
+    graph_overview: GraphOverview,
     context_window_manager: ContextWindowManager | None = None,
     fixed_request_input: str = "",
     provider_framing_tokens: int = 0,
@@ -441,6 +502,7 @@ def compile_worker_context(
             permission_profile,
             worker_instructions,
             state_reader,
+            graph_overview,
             context_window_manager=context_window_manager,
             fixed_request_input=fixed_request_input,
             provider_framing_tokens=provider_framing_tokens,
@@ -523,6 +585,7 @@ def serialize_worker_context_sections(
                 }
             ),
         ),
+        _section("Repository graph overview", _canonical_json(context.graph_overview)),
     ]
     target_sections = [
         _section(
@@ -613,6 +676,7 @@ def _compile_hydrating_context(
     permission_profile: PermissionProfile | None,
     worker_instructions: WorkerInstructions | None,
     state_reader: HydrationStateReader,
+    graph_overview: GraphOverview,
     *,
     context_window_manager: ContextWindowManager | None,
     fixed_request_input: str,
@@ -638,6 +702,7 @@ def _compile_hydrating_context(
         permission_profile=permission_profile,
         worker_instructions=worker_instructions,
     )
+    overview = _validate_graph_overview(target_spec, graph_overview)
     manager = context_window_manager or ContextWindowManager(
         profile,
         fixed_request_input=fixed_request_input,
@@ -691,6 +756,7 @@ def _compile_hydrating_context(
         permission_profile_id=permissions.profile_id,
         allowed_tool_ids=permissions.allowed_tool_ids,
         source=target_spec.source,
+        graph_overview=overview,
         shared_worker_instructions=instructions.shared,
         global_ownership_guidance=tuple(catalog.cross_target_ownership_rules),
         target_worker_instructions=instructions.target_specific,
@@ -714,6 +780,22 @@ def _compile_hydrating_context(
             "complete mandatory request exceeds the model context window"
         )
     return context, serialized, diagnostics
+
+
+def _validate_graph_overview(
+    target_spec: TargetTaskSpec,
+    graph_overview: GraphOverview,
+) -> GraphOverview:
+    """Validate the immutable graph projection against the target source binding."""
+    try:
+        overview = GraphOverview.model_validate(graph_overview.model_dump())
+    except (AttributeError, TypeError, ValidationError, ValueError) as error:
+        raise WorkerContextHydrationError("graph overview is malformed") from error
+    if overview.graph_snapshot_id != target_spec.source.graph_snapshot_id:
+        raise WorkerContextHydrationError(
+            "graph overview does not match the target source binding"
+        )
+    return overview
 
 
 def _select_cycle_focus(
@@ -1137,6 +1219,7 @@ __all__ = [
     "OpenQuestionRecord",
     "WorkerContextDebugSnapshot",
     "WorkerContextDebugWriter",
+    "build_graph_overview",
     "compile_worker_context",
     "serialize_worker_context",
 ]

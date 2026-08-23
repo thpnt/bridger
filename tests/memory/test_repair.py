@@ -13,6 +13,7 @@ from test_worker_cycle import FakeNavigator as WorkerNavigator
 
 from bridger.contracts.memory.core import CompletionStatus, FindingOrigin, TargetPhase
 from bridger.contracts.memory.hydration import (
+    GraphOverview,
     PermissionProfile,
     WorkerContext,
     WorkerContextMode,
@@ -43,6 +44,21 @@ from bridger.memory import (
 )
 
 _WORKER_TOOLS = ("write_target_artifact", "update_completion_item")
+_GRAPH_OVERVIEW = GraphOverview(
+    graph_snapshot_id="snapshot-1",
+    graph_contract_version="bridger.graph.v1",
+    build_mode="full",
+    node_count=0,
+    edge_count=0,
+    hyperedge_count=0,
+    community_count=0,
+    central_nodes=(),
+    central_nodes_truncated=False,
+    surprising_connections=(),
+    surprising_connections_truncated=False,
+    suggested_questions=(),
+    suggested_questions_truncated=False,
+)
 
 
 def test_persisted_yield_rehydrates_directly_to_the_next_focus(tmp_path: Path) -> None:
@@ -77,6 +93,7 @@ def test_persisted_yield_rehydrates_directly_to_the_next_focus(tmp_path: Path) -
         worker_profile=profile,
         permission_profile=permissions,
         worker_instructions=instructions,
+        graph_overview=_GRAPH_OVERVIEW,
         persistence=fixture.store,
     )
     assert context.cycle_focus.kind is WorkerCycleFocusKind.OBLIGATION
@@ -132,6 +149,7 @@ def test_persisted_yield_rehydrates_directly_to_the_next_focus(tmp_path: Path) -
         worker_profile=profile,
         permission_profile=permissions,
         worker_instructions=instructions,
+        graph_overview=_GRAPH_OVERVIEW,
         persistence=fixture.store,
     )
 
@@ -410,6 +428,7 @@ def _run_repair_worker(
             shared="Use controlled tools for every mutation.",
             target_specific="Repair the current candidate findings.",
         ),
+        graph_overview=_GRAPH_OVERVIEW,
         persistence=fixture.store,
     )
     client = DummyLLMClient(
