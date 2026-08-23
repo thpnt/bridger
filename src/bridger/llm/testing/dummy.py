@@ -83,3 +83,6 @@ class DummyLLMClient:
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
+
+    async def close(self) -> None:
+        """Close the dummy client without performing resource cleanup."""

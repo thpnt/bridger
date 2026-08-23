@@ -28,3 +28,6 @@ class LLMClient(Protocol):
         request: LLMCompactionRequest,
     ) -> LLMCompactionResult:
         """Compact one active provider trajectory into opaque transient context."""
+
+    async def close(self) -> None:
+        """Close provider resources owned by this client."""

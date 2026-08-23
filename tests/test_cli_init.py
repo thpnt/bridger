@@ -13,6 +13,7 @@ import bridger.cli as cli
 import bridger.init_pipeline as init_pipeline
 import bridger.repository_brain.harness as harness
 from bridger.contracts.files import IntakeConfiguration
+from bridger.contracts.memory.core import FleetPhase
 from bridger.init_pipeline import (
     InitMode,
     ReasoningEffort,
@@ -468,6 +469,86 @@ def test_model_pipeline_prepares_enrichment_before_entering_memory_loop(
 
     assert result.publication_path == tmp_path / "published" / "repository-brain.json"
     assert events == ["enrichment", "memory"]
+
+
+def test_memory_harness_closes_client_before_store_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    created_loop: asyncio.AbstractEventLoop | None = None
+    closed_loop: asyncio.AbstractEventLoop | None = None
+
+    class Client:
+        async def close(self) -> None:
+            nonlocal closed_loop
+            closed_loop = asyncio.get_running_loop()
+            events.append("client")
+
+    class Store:
+        def close(self) -> None:
+            events.append("store")
+
+    fleet_state = SimpleNamespace(phase=FleetPhase.ACCEPTED)
+    monkeypatch.setattr(
+        harness,
+        "load_target_artifacts",
+        lambda _root: (SimpleNamespace(targets=[object()]), []),
+    )
+    monkeypatch.setattr(
+        harness,
+        "_profiles",
+        lambda *_args: (
+            SimpleNamespace(profile_id="worker"),
+            SimpleNamespace(profile_id="reviewer"),
+        ),
+    )
+    monkeypatch.setattr(harness, "bind_memory_run", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        harness,
+        "initialize_fleet",
+        lambda *_args: (fleet_state, [], [], []),
+    )
+    monkeypatch.setattr(
+        harness,
+        "initialize_persistence",
+        lambda *_args: Store(),
+    )
+    monkeypatch.setattr(harness, "RepositoryNavigator", lambda *_args: object())
+
+    def create_client(_profile: LLMProfile) -> Client:
+        nonlocal created_loop
+        created_loop = asyncio.get_running_loop()
+        return Client()
+
+    monkeypatch.setattr(harness, "create_llm_client_from_profile", create_client)
+    configuration = resolve_init_configuration(
+        InitMode.FULL,
+        repository_root=tmp_path,
+    )
+    profile = LLMProfile(
+        name="test",
+        provider="openai",
+        model="test-model",
+    )
+
+    with pytest.raises(RepositoryBrainBuildError, match="without publication"):
+        asyncio.run(
+            harness.run_memory_harness(
+                configuration,
+                SimpleNamespace(),
+                SimpleNamespace(),
+                SimpleNamespace(),
+                SimpleNamespace(),
+                profile,
+                SimpleNamespace(),
+            )
+        )
+
+    assert events == ["client", "store"]
+    assert created_loop is closed_loop
+    assert closed_loop is not None
+    assert closed_loop.is_closed()
 
 
 def test_init_surfaces_pipeline_failures(monkeypatch: pytest.MonkeyPatch) -> None:

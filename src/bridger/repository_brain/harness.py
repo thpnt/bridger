@@ -34,6 +34,7 @@ from bridger.init_pipeline import (
     ReasoningEffort,
     RepositoryBrainBuildError,
 )
+from bridger.llm.client import LLMClient
 from bridger.llm.factory import create_llm_client_from_profile
 from bridger.llm.profiles import LLMProfile, resolve_llm_profile
 from bridger.memory import (
@@ -142,6 +143,8 @@ async def run_memory_harness(
         target_states,
         completion_states,
     )
+    client: LLMClient | None = None
+    active_error: BaseException | None = None
     try:
         navigator = RepositoryNavigator(
             context,
@@ -307,8 +310,22 @@ async def run_memory_harness(
                 raise RepositoryBrainBuildError(
                     "memory fleet made no runnable progress"
                 )
+    except BaseException as error:
+        active_error = error
+        raise
     finally:
-        store.close()
+        try:
+            if client is not None:
+                try:
+                    await client.close()
+                except BaseException as close_error:
+                    if active_error is None:
+                        raise
+                    active_error.add_note(
+                        f"LLM client cleanup also failed: {close_error!r}"
+                    )
+        finally:
+            store.close()
     raise RepositoryBrainBuildError("memory fleet exited without publication")
 
 

@@ -80,9 +80,8 @@ def enrich_graph_snapshot(
     batches = build_community_name_batches(generation_targets)
     batch_results: list[CommunityNameBatchResult] = []
     if batches:
-        client = _create_community_name_client(validated_config)
         batch_results = _run_batch_execution(
-            client,
+            validated_config,
             batches,
             profile_version=validated_config.profile_version,
             max_concurrency=validated_config.max_concurrency,
@@ -136,7 +135,7 @@ def _create_community_name_client(config: GraphEnrichmentConfig) -> LLMClient:
 
 
 def _run_batch_execution(
-    client: LLMClient,
+    config: GraphEnrichmentConfig,
     batches: list[CommunityNameBatchRequest],
     *,
     profile_version: str,
@@ -146,14 +145,42 @@ def _run_batch_execution(
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(
-            execute_community_name_batches(
-                client,
+            _run_batch_execution_async(
+                config,
                 batches,
                 profile_version=profile_version,
                 max_concurrency=max_concurrency,
             )
         )
     raise RuntimeError("enrich_graph_snapshot cannot run inside an active event loop")
+
+
+async def _run_batch_execution_async(
+    config: GraphEnrichmentConfig,
+    batches: list[CommunityNameBatchRequest],
+    *,
+    profile_version: str,
+    max_concurrency: int,
+) -> list[CommunityNameBatchResult]:
+    client = _create_community_name_client(config)
+    active_error: BaseException | None = None
+    try:
+        return await execute_community_name_batches(
+            client,
+            batches,
+            profile_version=profile_version,
+            max_concurrency=max_concurrency,
+        )
+    except BaseException as error:
+        active_error = error
+        raise
+    finally:
+        try:
+            await client.close()
+        except BaseException as close_error:
+            if active_error is None:
+                raise
+            active_error.add_note(f"LLM client cleanup also failed: {close_error!r}")
 
 
 def _generated_names(results: list[CommunityNameBatchResult]) -> dict[int, str]:

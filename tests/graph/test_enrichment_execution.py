@@ -55,13 +55,22 @@ Behavior = Callable[[tuple[int, ...], int], Awaitable[CommunityNameBatch]]
 class FakeCommunityLLMClient:
     """Typed concurrent fake that records batch calls and active-call counts."""
 
-    def __init__(self, behavior: Behavior) -> None:
+    def __init__(
+        self,
+        behavior: Behavior,
+        *,
+        close_error: BaseException | None = None,
+    ) -> None:
         self._behavior = behavior
+        self._close_error = close_error
         self.requests: list[LLMRequest] = []
         self.output_types: list[type[BaseModel] | None] = []
         self.calls: Counter[tuple[int, ...]] = Counter()
         self.active_calls = 0
         self.max_active_calls = 0
+        self.created_loop: asyncio.AbstractEventLoop | None = None
+        self.used_loop: asyncio.AbstractEventLoop | None = None
+        self.closed_loop: asyncio.AbstractEventLoop | None = None
 
     async def generate(
         self,
@@ -69,6 +78,7 @@ class FakeCommunityLLMClient:
         *,
         output_type: type[StructuredOutputT] | None = None,
     ) -> LLMResponse[StructuredOutputT]:
+        self.used_loop = asyncio.get_running_loop()
         community_ids = _request_community_ids(request)
         self.requests.append(request)
         self.output_types.append(output_type)
@@ -86,6 +96,11 @@ class FakeCommunityLLMClient:
             model="dummy-model",
         )
         return cast(LLMResponse[StructuredOutputT], response)
+
+    async def close(self) -> None:
+        self.closed_loop = asyncio.get_running_loop()
+        if self._close_error is not None:
+            raise self._close_error
 
 
 def test_successful_generation_uses_evidence_only_and_publishes(
@@ -120,6 +135,9 @@ def test_successful_generation_uses_evidence_only_and_publishes(
     }
     assert _record_community_ids(overlay) == [0, 1, 2]
     assert client.output_types == [CommunityNameBatch]
+    assert client.created_loop is client.used_loop is client.closed_loop
+    assert client.closed_loop is not None
+    assert client.closed_loop.is_closed()
     request = client.requests[0]
     assert request.reasoning is None
     assert len(request.messages) == 2
@@ -356,13 +374,48 @@ def test_layer5_sync_entrypoint_rejects_an_active_event_loop() -> None:
             match="enrich_graph_snapshot cannot run inside an active event loop",
         ):
             _run_batch_execution(
-                cast(LLMClient, object()),
+                _config(),
                 [batch],
                 profile_version="test-v1",
                 max_concurrency=1,
             )
 
     asyncio.run(invoke())
+
+
+def test_layer5_closes_client_and_preserves_batch_error_when_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail(
+        _community_ids: tuple[int, ...],
+        _attempt: int,
+    ) -> CommunityNameBatch:
+        raise RuntimeError("batch failed")
+
+    client = FakeCommunityLLMClient(
+        fail,
+        close_error=RuntimeError("close failed"),
+    )
+    _use_client(monkeypatch, client)
+    batch = CommunityNameBatchRequest(
+        batch_id="community-names-0000",
+        evidence=(CommunityEvidence(community_id=0),),
+    )
+
+    with pytest.raises(RuntimeError, match="batch failed") as raised:
+        _run_batch_execution(
+            _config(),
+            [batch],
+            profile_version="test-v1",
+            max_concurrency=1,
+        )
+
+    assert raised.value.__notes__ == [
+        "LLM client cleanup also failed: RuntimeError('close failed')"
+    ]
+    assert client.created_loop is client.used_loop is client.closed_loop
+    assert client.closed_loop is not None
+    assert client.closed_loop.is_closed()
 
 
 def _graph_state(
@@ -457,9 +510,13 @@ def _use_client(
     monkeypatch: pytest.MonkeyPatch,
     client: FakeCommunityLLMClient,
 ) -> None:
+    def create(_config: GraphEnrichmentConfig) -> FakeCommunityLLMClient:
+        client.created_loop = asyncio.get_running_loop()
+        return client
+
     monkeypatch.setattr(
         "bridger.graph.enrichment.service._create_community_name_client",
-        lambda _config: client,
+        create,
     )
 
 

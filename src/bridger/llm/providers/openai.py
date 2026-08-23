@@ -60,6 +60,10 @@ class OpenAILLMClient:
         self._sleep = sleep
         self._clock = clock
 
+    async def close(self) -> None:
+        """Close the underlying asynchronous OpenAI client."""
+        await self._client.close()
+
     async def generate(
         self,
         request: LLMRequest,
