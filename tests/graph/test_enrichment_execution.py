@@ -26,6 +26,7 @@ from bridger.contracts.enrichment import (
     GraphEnrichmentOverlay,
 )
 from bridger.contracts.graph import GraphBuildResult, GraphSnapshotManifest
+from bridger.contracts.token_usage import TokenUsage
 from bridger.graph.enrichment import (
     build_all_community_evidence,
     create_community_name_record,
@@ -44,8 +45,8 @@ from bridger.graph.enrichment.service import (
     _run_batch_execution,
 )
 from bridger.llm.client import LLMClient
-from bridger.llm.errors import LLMProviderError
-from bridger.llm.models import LLMRequest, LLMResponse
+from bridger.llm.errors import LLMProviderError, LLMStructuredOutputError
+from bridger.llm.models import LLMRequest, LLMResponse, LLMUsage
 from bridger.llm.profiles import LLMProfile
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
@@ -60,9 +61,11 @@ class FakeCommunityLLMClient:
         behavior: Behavior,
         *,
         close_error: BaseException | None = None,
+        usage_by_call: dict[tuple[int, ...], list[LLMUsage]] | None = None,
     ) -> None:
         self._behavior = behavior
         self._close_error = close_error
+        self._usage_by_call = usage_by_call or {}
         self.requests: list[LLMRequest] = []
         self.output_types: list[type[BaseModel] | None] = []
         self.calls: Counter[tuple[int, ...]] = Counter()
@@ -90,10 +93,13 @@ class FakeCommunityLLMClient:
             batch = await self._behavior(community_ids, attempt)
         finally:
             self.active_calls -= 1
+        usages = self._usage_by_call.get(community_ids, [])
+        usage = usages[attempt - 1] if attempt <= len(usages) else LLMUsage()
         response = LLMResponse[CommunityNameBatch](
             structured_output=batch,
             provider="dummy",
             model="dummy-model",
+            usage=usage,
         )
         return cast(LLMResponse[StructuredOutputT], response)
 
@@ -124,7 +130,7 @@ def test_successful_generation_uses_evidence_only_and_publishes(
 
     summary = overlay.generation_summary.features["community_names"]
     assert summary.status == "complete"
-    assert summary.model_dump(exclude={"failed_batches"}) == {
+    assert summary.model_dump(exclude={"failed_batches", "usage"}) == {
         "status": "complete",
         "target_count": 3,
         "generated_count": 3,
@@ -163,6 +169,135 @@ def test_successful_generation_uses_evidence_only_and_publishes(
     assert structural["community_labels"] == {
         community_id: f"Node {community_id}" for community_id in range(3)
     }
+
+
+def test_successful_generation_persists_reported_token_usage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_build, _ = _graph_state(tmp_path, monkeypatch, community_count=1)
+
+    async def succeed(
+        community_ids: tuple[int, ...],
+        _attempt: int,
+    ) -> CommunityNameBatch:
+        return _valid_batch(community_ids)
+
+    client = FakeCommunityLLMClient(
+        succeed,
+        usage_by_call={
+            (0,): [
+                LLMUsage(
+                    input_tokens=100,
+                    cached_input_tokens=25,
+                    cache_write_tokens=7,
+                    output_tokens=12,
+                )
+            ]
+        },
+    )
+    _use_client(monkeypatch, client)
+
+    overlay = enrich_graph_snapshot(graph_build, _config())
+
+    usage = overlay.generation_summary.features["community_names"].usage
+    assert usage.input_tokens == 100
+    assert usage.cached_input_tokens == 25
+    assert usage.cache_write_tokens == 7
+    assert usage.output_tokens == 12
+    assert (
+        load_graph_enrichment(
+            _artifact_path(tmp_path, graph_build, overlay),
+            graph_build.manifest.snapshot_id,
+        )
+        .generation_summary.features["community_names"]
+        .usage
+        == usage
+    )
+
+
+def test_retry_usage_accumulates_even_when_response_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_build, _ = _graph_state(tmp_path, monkeypatch, community_count=1)
+
+    async def reject_once(
+        community_ids: tuple[int, ...],
+        attempt: int,
+    ) -> CommunityNameBatch:
+        if attempt == 1:
+            return CommunityNameBatch(
+                communities=[
+                    CommunityName(
+                        community_id=community_ids[0],
+                        name="Single",
+                    )
+                ]
+            )
+        return _valid_batch(community_ids)
+
+    client = FakeCommunityLLMClient(
+        reject_once,
+        usage_by_call={
+            (0,): [
+                LLMUsage(input_tokens=100, cached_input_tokens=40, output_tokens=10),
+                LLMUsage(input_tokens=80, cached_input_tokens=20, output_tokens=8),
+            ]
+        },
+    )
+    _use_client(monkeypatch, client)
+
+    overlay = enrich_graph_snapshot(graph_build, _config())
+
+    assert client.calls[(0,)] == 2
+    usage = overlay.generation_summary.features["community_names"].usage
+    assert usage.input_tokens == 180
+    assert usage.cached_input_tokens == 60
+    assert usage.output_tokens == 18
+
+
+def test_failed_attempt_usage_is_retained_before_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_build, _ = _graph_state(tmp_path, monkeypatch, community_count=1)
+
+    async def fail_once(
+        community_ids: tuple[int, ...],
+        attempt: int,
+    ) -> CommunityNameBatch:
+        if attempt == 1:
+            raise LLMStructuredOutputError(
+                "invalid structured output",
+                usage=LLMUsage(
+                    input_tokens=55,
+                    cached_input_tokens=5,
+                    cache_write_tokens=3,
+                    output_tokens=6,
+                ),
+            )
+        return _valid_batch(community_ids)
+
+    client = FakeCommunityLLMClient(
+        fail_once,
+        usage_by_call={
+            (0,): [
+                LLMUsage(),
+                LLMUsage(input_tokens=70, output_tokens=9),
+            ]
+        },
+    )
+    _use_client(monkeypatch, client)
+
+    overlay = enrich_graph_snapshot(graph_build, _config())
+
+    assert client.calls[(0,)] == 2
+    usage = overlay.generation_summary.features["community_names"].usage
+    assert usage.input_tokens == 125
+    assert usage.cached_input_tokens == 5
+    assert usage.cache_write_tokens == 3
+    assert usage.output_tokens == 15
 
 
 def test_mixed_reuse_generates_only_unmatched_target_and_materializes_new_record(
@@ -208,6 +343,7 @@ def test_mixed_reuse_generates_only_unmatched_target_and_materializes_new_record
     assert {record.enrichment_id for record in all_reused.records}.isdisjoint(
         {record.enrichment_id for record in overlay.records}
     )
+    assert reused_summary.usage == TokenUsage()
 
     changed_client = FakeCommunityLLMClient(succeed)
     _use_client(monkeypatch, changed_client)
@@ -559,10 +695,10 @@ def _partial_previous_overlay(
         "member_signature": signatures[1],
     }
     return GraphEnrichmentOverlay(
-        schema_version="1",
+        schema_version="2",
         overlay_id="previous-overlay",
         graph_snapshot_id=graph_build.manifest.snapshot_id,
-        generator_version="bridger.layer5.v1",
+        generator_version="bridger.layer5.v2",
         provider="openai",
         model="gpt-test",
         profile_version="community-names-v1",

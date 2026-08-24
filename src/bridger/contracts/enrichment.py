@@ -12,6 +12,8 @@ from pydantic import (
     model_validator,
 )
 
+from bridger.contracts.token_usage import TokenUsage
+
 EnabledEnrichmentFeature = Literal["community_names"]
 EnrichmentTargetType = Literal["node", "edge", "hyperedge", "community", "graph"]
 EnrichmentTargetReference = str | dict[str, JsonValue]
@@ -124,6 +126,7 @@ class FeatureGenerationSummary(BaseModel):
     batch_count: int = Field(ge=0)
     failed_batch_count: int = Field(ge=0)
     failed_batches: list[FailedEnrichmentBatch] = Field(default_factory=list)
+    usage: TokenUsage = Field(default_factory=TokenUsage)
 
     @model_validator(mode="after")
     def validate_counts(self) -> "FeatureGenerationSummary":

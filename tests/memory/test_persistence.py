@@ -16,6 +16,7 @@ from bridger.contracts.memory.core import (
     ActivationMode,
     CompletionItemState,
     CompletionObligationDefinition,
+    CompletionStatus,
     ExecutionBudget,
     FleetPhase,
     FleetRunState,
@@ -75,6 +76,113 @@ class RuntimeFixture:
     catalog: MemoryTargetCatalog
     definition: TargetDefinition
     store: FleetRuntimeStore
+
+
+def test_completion_update_event_includes_resulting_status(tmp_path: Path) -> None:
+    fixture = _runtime(tmp_path)
+    fixture.target_state.phase = TargetPhase.WORKING
+    after = fixture.completion_state.model_copy(deep=True)
+    after.items = [
+        CompletionItemState(
+            obligation_id="describe-architecture",
+            status=CompletionStatus.COVERED,
+            resolution_note="Architecture is documented.",
+        )
+    ]
+
+    fixture.store.persist_completion_state(
+        fixture.target_spec,
+        fixture.target_state,
+        after,
+        obligation_id="describe-architecture",
+    )
+
+    event = fixture.store.recover_event_tail()[-1]
+    assert event.event_type == "completion_updated"
+    assert event.payload == {
+        "obligation_id": "describe-architecture",
+        "status": "covered",
+    }
+
+
+def test_historical_completion_update_without_status_remains_valid(
+    tmp_path: Path,
+) -> None:
+    fixture = _runtime(tmp_path)
+
+    event = fixture.store.append_event(
+        "completion_updated",
+        {"obligation_id": "describe-architecture"},
+        target_task_id=fixture.target_spec.target_task_id,
+    )
+
+    assert fixture.store.recover_event_tail()[-1] == event
+
+
+def test_cycle_start_event_exposes_the_persisted_working_transition(
+    tmp_path: Path,
+) -> None:
+    fixture = _runtime(tmp_path)
+    fixture.fleet_state.phase = FleetPhase.RUNNING
+    fixture.target_state.phase = TargetPhase.HYDRATING
+
+    fixture.store.apply_usage_delta(
+        fixture.fleet_state,
+        fixture.target_spec,
+        fixture.target_state,
+        {"cycles": 1},
+        event_type="cycle_started",
+        phase=TargetPhase.WORKING,
+    )
+
+    event = fixture.store.recover_event_tail()[-1]
+    assert event.payload["from_phase"] == "hydrating"
+    assert event.payload["to_phase"] == "working"
+
+
+def test_event_observer_runs_only_after_durable_append(tmp_path: Path) -> None:
+    fixture = _runtime(tmp_path)
+    fixture.store.close()
+    observed: list[object] = []
+    observing_store: FleetRuntimeStore
+
+    def observe(event: object) -> None:
+        assert observing_store.recover_event_tail()[-1] == event
+        observed.append(event)
+
+    observing_store = FleetRuntimeStore(fixture.spec, event_observer=observe)
+    event = observing_store.append_event("progress_updated", {})
+
+    assert observed == [event]
+
+
+def test_event_observer_exception_does_not_prevent_persistence(
+    tmp_path: Path,
+) -> None:
+    fixture = _runtime(tmp_path)
+    fixture.store.close()
+
+    def fail(_: object) -> None:
+        raise RuntimeError("presentation failed")
+
+    store = FleetRuntimeStore(fixture.spec, event_observer=fail)
+
+    event = store.append_event("progress_updated", {})
+
+    assert store.recover_event_tail()[-1] == event
+
+
+def test_idempotent_event_append_does_not_notify_twice(tmp_path: Path) -> None:
+    fixture = _runtime(tmp_path)
+    fixture.store.close()
+    observed: list[object] = []
+    store = FleetRuntimeStore(fixture.spec, event_observer=observed.append)
+
+    first = store.append_event("progress_updated", {}, event_id="event-stable")
+    second = store.append_event("progress_updated", {}, event_id="event-stable")
+
+    assert second == first
+    assert observed == [first]
 
 
 def test_trace_sequence_and_torn_tail_recovery(tmp_path: Path) -> None:

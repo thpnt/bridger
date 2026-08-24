@@ -1,8 +1,11 @@
+from collections.abc import Callable
+from functools import partial
 from typing import Annotated
 
 import typer
 from rich.console import Console
 
+from bridger.cli_progress import RichInitProgressPresenter
 from bridger.init_pipeline import (
     InitMode,
     ReasoningEffort,
@@ -43,32 +46,35 @@ def init(
 ) -> None:
     """Build the Repository Brain for the current Git repository."""
     configuration = resolve_init_configuration(mode, reasoning_effort=reasoning)
-    console.print(f"[cyan]Bridger[/cyan] building Repository Brain ({mode.value})")
+    presenter = RichInitProgressPresenter(
+        console=console,
+        mode=mode,
+        reasoning=reasoning,
+    )
+    _present(presenter.start)
     try:
         result = build_repository_brain(
             configuration,
-            on_stage=lambda stage: console.print(
-                f"[cyan]:hourglass_flowing_sand:[/cyan] {stage}"
-            ),
+            progress=presenter,
         )
     except RepositoryBrainBuildError as error:
-        console.print(f"[red]:x:[/red] Repository Brain build failed: {error}")
+        _present(partial(presenter.failed, error))
         raise typer.Exit(code=1) from error
     except Exception as error:
-        console.print(f"[red]:x:[/red] Repository Brain build failed: {error}")
+        _present(partial(presenter.failed, error))
         raise typer.Exit(code=1) from error
+    else:
+        _present(lambda: presenter.succeeded(result))
+    finally:
+        _present(presenter.close)
 
-    if result.publication_path is None:
-        console.print(
-            "[green]:white_check_mark:[/green] "
-            "Deterministic graph snapshot published at "
-            f"{result.graph_build.snapshot_root}"
-        )
-        return
-    console.print(
-        "[green]:white_check_mark:[/green] Repository Brain published at "
-        f"{result.publication_path}"
-    )
+
+def _present(action: Callable[[], None]) -> None:
+    """Keep best-effort presentation failures outside command authority."""
+    try:
+        action()
+    except Exception:
+        pass
 
 
 @app.command()

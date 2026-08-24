@@ -119,7 +119,7 @@ def layer6_state(
         ),
     ]
     symbol_index = SymbolIndex(
-        schema_version="1",
+        schema_version="2",
         repository_id=context.repository_id,
         revision=context.revision,
         scope_path=context.scope_path,

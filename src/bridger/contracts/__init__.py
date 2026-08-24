@@ -139,6 +139,7 @@ from bridger.contracts.symbols import (
     SymbolKind,
     SymbolRecord,
 )
+from bridger.contracts.token_usage import TokenUsage, TokenUsageReport, TokenUsageTarget
 
 __all__ = [
     "BOUNDED_READ_MAX_BYTES",
@@ -245,6 +246,9 @@ __all__ = [
     "TargetValidationReport",
     "TaskCheckpoint",
     "TaskEvent",
+    "TokenUsage",
+    "TokenUsageReport",
+    "TokenUsageTarget",
     "ValidationFinding",
     "ValidationVerdict",
     "WorkerContext",

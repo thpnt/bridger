@@ -127,6 +127,11 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
         "publish_repository_brain",
         lambda *_args: expected,
     )
+    monkeypatch.setattr(
+        harness,
+        "persist_token_usage_report",
+        lambda *_args: tmp_path / "token-usage.json",
+    )
 
     result = asyncio.run(
         asyncio.wait_for(
@@ -143,7 +148,7 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
         )
     )
 
-    assert result == expected
+    assert result.publication_path == expected
     assert bound_concurrency == [len(task_ids)]
     assert first_batch_entered == set(task_ids)
     assert calls == Counter({task_id: 2 for task_id in task_ids})
@@ -199,7 +204,10 @@ def test_target_batch_overlaps_shared_client_model_execution(
     }
     runtime = SimpleNamespace(
         specs_by_task=specs,
-        states_by_task={task_id: object() for task_id in task_ids},
+        states_by_task={
+            task_id: SimpleNamespace(phase=TargetPhase.SCHEDULED)
+            for task_id in task_ids
+        },
         completion_by_task={task_id: object() for task_id in task_ids},
         definitions_by_id={spec.target_id: object() for spec in specs.values()},
         fleet_spec=object(),
@@ -307,7 +315,9 @@ def test_target_step_reports_review_budget_stops_as_expected_outcomes(
     )
     runtime = SimpleNamespace(
         specs_by_task={spec.target_task_id: spec},
-        states_by_task={spec.target_task_id: object()},
+        states_by_task={
+            spec.target_task_id: SimpleNamespace(phase=TargetPhase.SCHEDULED)
+        },
         completion_by_task={spec.target_task_id: object()},
         definitions_by_id={spec.target_id: object()},
         fleet_spec=object(),
@@ -324,7 +334,8 @@ def test_target_step_reports_review_budget_stops_as_expected_outcomes(
         configuration=SimpleNamespace(test_budgets=True),
     )
 
-    async def run_worker(**_kwargs: object) -> WorkerCycleOutcome:
+    async def run_worker(**kwargs: object) -> WorkerCycleOutcome:
+        kwargs["target_state"].phase = TargetPhase.FINALIZING  # type: ignore[union-attr]
         return WorkerCycleOutcome.FINALIZATION_REQUESTED
 
     async def review(**_kwargs: object) -> object:

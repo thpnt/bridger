@@ -63,6 +63,10 @@ You do not own:
 
 Write only inside your assigned target workspace.
 
+Artifact tool paths are already relative to that assigned workspace. Do not repeat
+the current target ID as the first path segment: use `overview.md` or
+`runtime/execution.md`, not `architecture/overview.md` for the `architecture` target.
+
 # 3. Cross-target ownership
 
 Each memory target has one canonical semantic responsibility.

@@ -355,6 +355,7 @@ class OpenAILLMClient:
                 provider=self._profile.provider,
                 model=self._profile.model,
                 operation=request.operation,
+                usage=usage,
             )
         if output_type is not None and status == "incomplete":
             raise LLMStructuredOutputError(
@@ -379,13 +380,18 @@ class OpenAILLMClient:
                 operation=request.operation,
             )
 
-        tool_calls = self._extract_tool_calls(provider_response, request)
+        tool_calls = self._extract_tool_calls(
+            provider_response,
+            request,
+            usage=usage,
+        )
         if output_type is None and not text and not tool_calls and refusal is None:
             raise LLMInvalidResponseError(
                 "Provider response did not contain text, tool calls, or a refusal",
                 provider=self._profile.provider,
                 model=self._profile.model,
                 operation=request.operation,
+                usage=usage,
             )
         structured_output: StructuredOutputT | None = None
         if output_type is not None and not tool_calls:
@@ -449,7 +455,11 @@ class OpenAILLMClient:
         return await self._generate_once(request, output_type=output_type)
 
     def _extract_tool_calls(
-        self, provider_response: Any, request: LLMRequest
+        self,
+        provider_response: Any,
+        request: LLMRequest,
+        *,
+        usage: LLMUsage,
     ) -> list[LLMToolCall]:
         tool_calls: list[LLMToolCall] = []
         for item in _iter_output(provider_response):
@@ -463,6 +473,7 @@ class OpenAILLMClient:
                     provider=self._profile.provider,
                     model=self._profile.model,
                     operation=request.operation,
+                    usage=usage,
                 )
             if not isinstance(name, str) or not name:
                 raise LLMInvalidResponseError(
@@ -470,6 +481,7 @@ class OpenAILLMClient:
                     provider=self._profile.provider,
                     model=self._profile.model,
                     operation=request.operation,
+                    usage=usage,
                 )
             raw_arguments = _get(item, "arguments")
             arguments: dict[str, JsonValue] | None = None
@@ -502,6 +514,7 @@ class OpenAILLMClient:
                     provider=self._profile.provider,
                     model=self._profile.model,
                     operation=request.operation,
+                    usage=usage,
                 ) from error
         return tool_calls
 
@@ -641,7 +654,7 @@ def _compacted_output_to_input_items(output: Any) -> list[dict[str, Any]]:
             continue
         if item_type != "compaction" or index != len(normalized) - 1:
             raise ValueError(
-                "compaction output must end with one compaction item " "after messages"
+                "compaction output must end with one compaction item after messages"
             )
         encrypted_content = raw_item.get("encrypted_content")
         if not isinstance(encrypted_content, str) or not encrypted_content:

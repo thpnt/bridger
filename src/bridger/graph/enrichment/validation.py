@@ -15,7 +15,7 @@ from bridger.graph.enrichment.evidence import (
 )
 from bridger.graph.lifecycle import load_graph_snapshot_structural_state
 
-ENRICHMENT_SCHEMA_VERSION = "1"
+ENRICHMENT_SCHEMA_VERSION = "2"
 _V0_FEATURE = "community_names"
 
 

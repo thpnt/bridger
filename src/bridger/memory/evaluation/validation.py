@@ -471,7 +471,10 @@ def _validate_artifacts(
             )
         relative_paths.add(reference.relative_path)
 
-        path_rule = _artifact_path_failure(reference.relative_path)
+        path_rule = _artifact_path_failure(
+            reference.relative_path,
+            target_id=target_spec.target_id,
+        )
         if path_rule is not None:
             rule_id, message = path_rule
             findings.append(
@@ -531,7 +534,11 @@ def _validate_artifacts(
     return findings
 
 
-def _artifact_path_failure(relative_path: str) -> tuple[str, str] | None:
+def _artifact_path_failure(
+    relative_path: str,
+    *,
+    target_id: str,
+) -> tuple[str, str] | None:
     path = PurePosixPath(relative_path)
     if path.is_absolute() or relative_path in {"", ".", ".."} or ".." in path.parts:
         return (
@@ -553,6 +560,12 @@ def _artifact_path_failure(relative_path: str) -> tuple[str, str] | None:
         return (
             "artifact.invalid_type",
             "Candidate artifacts must be Markdown files.",
+        )
+    if path.parts and path.parts[0] == target_id:
+        return (
+            "artifact.redundant_target_prefix",
+            f"Artifact paths are already relative to the {target_id} target "
+            f"workspace; remove the redundant '{target_id}/' prefix.",
         )
     return None
 

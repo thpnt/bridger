@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from test_persistence import (
 
 import bridger.memory.evaluation.validation as validation_module
 from bridger.contracts.memory.core import (
+    CandidateArtifactRef,
     CompletionStatus,
     FindingOrigin,
     FindingRef,
@@ -199,6 +201,74 @@ def test_validation_failures_persist_findings_and_route_to_repair(
         )
         == report
     )
+
+
+def test_validation_rejects_redundant_target_prefix_in_candidate(
+    tmp_path: Path,
+) -> None:
+    fixture = _passing_fixture(tmp_path)
+    content = b"# Legacy duplicate\n"
+    relative_path = "architecture/foo.md"
+    path = Path(fixture.target_spec.target_workspace) / relative_path
+    path.parent.mkdir()
+    path.write_bytes(content)
+    fixture.target_state.artifact_refs = [
+        *fixture.target_state.artifact_refs,
+        CandidateArtifactRef(
+            artifact_id="artifact-legacy-duplicate",
+            relative_path=relative_path,
+            revision=1,
+            digest=hashlib.sha256(content).hexdigest(),
+        ),
+    ]
+    request = handle_finalization_request(
+        fixture.store,
+        fixture.target_spec,
+        fixture.target_state,
+        fixture.completion_state,
+        {},
+        {},
+    )
+
+    report = validate_target_candidate(
+        fixture.store,
+        fixture.target_spec,
+        fixture.target_state,
+        fixture.definition,
+        FakeNavigator(fixture),  # type: ignore[arg-type]
+    )
+
+    assert report.verdict is ValidationVerdict.FAIL
+    assert _report_rules(fixture, report) == {"artifact.redundant_target_prefix"}
+    assert request.candidate_checkpoint_ref == report.candidate_checkpoint_ref
+
+
+def test_validation_allows_legitimate_nested_artifact_path(tmp_path: Path) -> None:
+    fixture = _passing_fixture(tmp_path)
+    TargetWorkspace(
+        fixture.target_spec,
+        fixture.target_state,
+        fixture.store,
+    ).write_target_artifact("runtime/foo.md", "# Runtime\n")
+    request = handle_finalization_request(
+        fixture.store,
+        fixture.target_spec,
+        fixture.target_state,
+        fixture.completion_state,
+        {},
+        {},
+    )
+
+    report = validate_target_candidate(
+        fixture.store,
+        fixture.target_spec,
+        fixture.target_state,
+        fixture.definition,
+        FakeNavigator(fixture),  # type: ignore[arg-type]
+    )
+
+    assert report.verdict is ValidationVerdict.PASS
+    assert report.candidate_checkpoint_ref == request.candidate_checkpoint_ref
 
 
 def test_uninvestigated_and_missing_artifact_are_candidate_failures(

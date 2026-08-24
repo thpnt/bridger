@@ -8,7 +8,7 @@ import os
 import shutil
 import tempfile
 import threading
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +34,8 @@ from bridger.contracts.memory.core import (
 from bridger.contracts.memory.persistence import TaskEvent
 from bridger.contracts.memory.worker_cycle import EvidenceReference, OpenQuestion
 from bridger.memory.persistence.store import require_path_segment
+
+EventObserver = Callable[[TaskEvent], None]
 
 _EVENTS_FILE = "events.jsonl"
 _INITIALIZATION_DIRECTORY = "initialization"
@@ -493,17 +495,27 @@ def _runtime_locks(run_root: Path) -> _RuntimeLocks:
 class FleetRuntimeStore:
     """Explicit Stage 5 durability boundary for one bound fleet run."""
 
-    def __init__(self, fleet_spec: MemoryFleetSpec) -> None:
+    def __init__(
+        self,
+        fleet_spec: MemoryFleetSpec,
+        *,
+        event_observer: EventObserver | None = None,
+    ) -> None:
         self.fleet_spec = MemoryFleetSpec.model_validate(
             fleet_spec.model_dump(mode="python")
         )
         self.paths = RuntimePaths(self.fleet_spec)
         self._locks = _runtime_locks(self.paths.run_root)
         self._ownership_lock: FleetRunLock | None = None
+        self._event_observer = event_observer
 
     def run_lock(self) -> FleetRunLock:
         """Return the process-ownership lock for this fleet run."""
         return FleetRunLock(self.paths.run_root)
+
+    def set_event_observer(self, observer: EventObserver | None) -> None:
+        """Attach best-effort observation after an authoritative snapshot is seeded."""
+        self._event_observer = observer
 
     def acquire_ownership(self) -> None:
         """Hold process ownership for the lifetime of a fresh fleet runtime."""
@@ -568,7 +580,17 @@ class FleetRuntimeStore:
                 os.fsync(stream.fileno())
             if created:
                 _fsync_directory(self.paths.events.parent)
+            self._notify_event_observer(event)
             return event
+
+    def _notify_event_observer(self, event: TaskEvent) -> None:
+        observer = self._event_observer
+        if observer is None:
+            return
+        try:
+            observer(event)
+        except Exception:
+            pass
 
     def recover_event_tail(self) -> list[TaskEvent]:
         """Validate the trace and truncate only an invalid torn final record."""
@@ -770,12 +792,25 @@ class FleetRuntimeStore:
             self._require_worker_mutation_phase(target_state)
             if completion_state.target_task_id != target_spec.target_task_id:
                 raise ValueError("completion state belongs to another target")
+            status = next(
+                (
+                    item.status
+                    for item in completion_state.items
+                    if item.obligation_id == obligation_id
+                ),
+                None,
+            )
+            if status is None:
+                raise ValueError("completion state is missing the updated obligation")
             _atomic_write_model(
                 self.paths.completion_state(target_spec), completion_state
             )
             self.append_event(
                 "completion_updated",
-                {"obligation_id": obligation_id},
+                {
+                    "obligation_id": obligation_id,
+                    "status": status.value,
+                },
                 target_task_id=target_spec.target_task_id,
             )
 
@@ -951,6 +986,9 @@ class FleetRuntimeStore:
         event_payload["usage_delta"] = {
             field_name: amount for field_name, amount in normalized.items() if amount
         }
+        if phase is not None and target_state.phase is not phase:
+            event_payload["from_phase"] = target_state.phase.value
+            event_payload["to_phase"] = phase.value
         self.commit_operation(
             operation_id=resolved_operation_id,
             writes=writes,

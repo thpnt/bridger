@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 
 from bridger.contracts.enrichment import CommunityEvidence, CommunityNameBatch
+from bridger.contracts.token_usage import TokenUsage
 from bridger.graph.enrichment.naming import (
     COMMUNITY_NAME_BATCH_SIZE,
     COMMUNITY_NAME_MAX_ATTEMPTS,
@@ -13,6 +14,7 @@ from bridger.graph.enrichment.naming import (
 )
 from bridger.llm.client import LLMClient
 from bridger.llm.errors import LLMError, LLMStructuredOutputError
+from bridger.llm.models import LLMUsage
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,7 @@ class CommunityNameBatchResult:
     attempts: int
     names: dict[int, str] | None = None
     error_category: str | None = None
+    usage: TokenUsage = TokenUsage()
 
 
 def build_community_name_batches(
@@ -82,6 +85,7 @@ async def _execute_community_name_batch(
     semaphore: asyncio.Semaphore,
 ) -> CommunityNameBatchResult:
     error_category = "provider_error"
+    usage = TokenUsage()
     for attempts in range(1, COMMUNITY_NAME_MAX_ATTEMPTS + 1):
         try:
             request = build_community_name_request(
@@ -93,6 +97,7 @@ async def _execute_community_name_batch(
                     request,
                     output_type=CommunityNameBatch,
                 )
+            usage = usage.add(_token_usage(response.usage))
             if response.structured_output is None:
                 error_category = "structured_output_error"
                 continue
@@ -100,9 +105,11 @@ async def _execute_community_name_batch(
                 response.structured_output,
                 batch.evidence,
             )
-        except LLMStructuredOutputError:
+        except LLMStructuredOutputError as error:
+            usage = usage.add(_token_usage(error.usage))
             error_category = "structured_output_error"
-        except LLMError:
+        except LLMError as error:
+            usage = usage.add(_token_usage(getattr(error, "usage", None)))
             error_category = "provider_error"
         except InvalidCommunityNameBatch:
             error_category = "response_validation_error"
@@ -111,11 +118,25 @@ async def _execute_community_name_batch(
                 batch=batch,
                 attempts=attempts,
                 names=names,
+                usage=usage,
             )
     return CommunityNameBatchResult(
         batch=batch,
         attempts=COMMUNITY_NAME_MAX_ATTEMPTS,
         error_category=error_category,
+        usage=usage,
+    )
+
+
+def _token_usage(usage: LLMUsage | None) -> TokenUsage:
+    """Convert reported provider usage without estimating missing fields."""
+    if usage is None:
+        return TokenUsage()
+    return TokenUsage(
+        input_tokens=usage.input_tokens or 0,
+        cached_input_tokens=usage.cached_input_tokens or 0,
+        cache_write_tokens=usage.cache_write_tokens or 0,
+        output_tokens=usage.output_tokens or 0,
     )
 
 

@@ -15,6 +15,7 @@ from bridger.contracts.enrichment import (
     GraphEnrichmentOverlay,
 )
 from bridger.contracts.graph import GraphBuildResult
+from bridger.contracts.token_usage import TokenUsage
 from bridger.graph.enrichment.errors import InvalidGraphEnrichment
 from bridger.graph.enrichment.evidence import build_all_community_evidence
 from bridger.graph.enrichment.execution import (
@@ -41,7 +42,7 @@ from bridger.llm.client import LLMClient
 from bridger.llm.factory import create_llm_client_from_profile
 from bridger.llm.profiles import LLMProfile, RetryPolicy
 
-LAYER5_GENERATOR_VERSION = "bridger.layer5.v1"
+LAYER5_GENERATOR_VERSION = "bridger.layer5.v2"
 _FEATURE_ID = "community_names"
 
 
@@ -96,6 +97,7 @@ def enrich_graph_snapshot(
     )
     failed_batches = _failed_batches(batch_results, signatures)
     failed_target_count = sum(len(batch.target_refs) for batch in failed_batches)
+    generation_usage = _generation_usage(batch_results)
     summary = FeatureGenerationSummary(
         status="partial" if failed_target_count else "complete",
         target_count=len(evidence),
@@ -105,6 +107,7 @@ def enrich_graph_snapshot(
         batch_count=len(batches),
         failed_batch_count=len(failed_batches),
         failed_batches=failed_batches,
+        usage=generation_usage,
     )
     overlay = GraphEnrichmentOverlay(
         schema_version=ENRICHMENT_SCHEMA_VERSION,
@@ -189,6 +192,14 @@ def _generated_names(results: list[CommunityNameBatchResult]) -> dict[int, str]:
         if result.names is not None:
             generated.update(result.names)
     return generated
+
+
+def _generation_usage(results: list[CommunityNameBatchResult]) -> TokenUsage:
+    """Aggregate all provider-reported usage from every naming batch attempt."""
+    usage = TokenUsage()
+    for result in results:
+        usage = usage.add(result.usage)
+    return usage
 
 
 def _build_records(

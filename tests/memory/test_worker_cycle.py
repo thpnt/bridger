@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from bridger.contracts.files import (
 )
 from bridger.contracts.memory.core import (
     ActivationMode,
+    CandidateArtifactRef,
     CompletionItemState,
     CompletionObligationDefinition,
     CompletionStatus,
@@ -509,6 +511,46 @@ def test_openai_schema_validation_errors_keep_existing_dispatch_behavior(
     assert fixture.target_state.usage.tool_calls == 1
     correction = json.loads(provider.responses.requests[1]["input"][0]["output"])
     assert correction["result"]["error"]["code"] == "invalid_arguments"
+
+
+def test_redundant_target_prefix_returns_in_band_error_and_worker_continues(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    client = DummyLLMClient(
+        [
+            _response(
+                _call(
+                    "bad-write",
+                    "write_target_artifact",
+                    {
+                        "path": "architecture/runtime.md",
+                        "content": "# Runtime\n",
+                    },
+                )
+            ),
+            _response(
+                _call(
+                    "corrected-write",
+                    "write_target_artifact",
+                    {"path": "runtime.md", "content": "# Runtime\n"},
+                )
+            ),
+            _response(_call("final", "request_finalization", {})),
+        ]
+    )
+
+    outcome = asyncio.run(fixture.runner([], client=client).run())
+
+    assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
+    assert fixture.target_state.usage.tool_calls == 2
+    assert len(fixture.target_state.artifact_refs) == 1
+    assert (tmp_path / "workspace" / "runtime.md").is_file()
+    assert not (tmp_path / "workspace" / "architecture").exists()
+    assert "tool_execution_error" in client.requests[1].model_dump_json()
+    assert "already relative to the architecture target workspace" in (
+        client.requests[1].model_dump_json()
+    )
 
 
 def test_openai_adapter_preserves_a_correlatable_malformed_payload() -> None:
@@ -1459,6 +1501,12 @@ def test_workspace_confinement_and_optimistic_revisions(tmp_path: Path) -> None:
     assert second.revision == 2
     assert second.artifact_id == first.artifact_id
     assert (tmp_path / "workspace" / "notes.md").read_text() == "one\nchanged\n"
+    nested = workspace.write_target_artifact(
+        "runtime/execution.md",
+        "nested",
+    )
+    assert nested.relative_path == "runtime/execution.md"
+    assert (tmp_path / "workspace" / "runtime" / "execution.md").is_file()
     with pytest.raises(ValueError, match="stale expected_revision"):
         workspace.write_target_artifact(
             "notes.md", "stale", expected_revision=first.revision
@@ -1472,6 +1520,90 @@ def test_workspace_confinement_and_optimistic_revisions(tmp_path: Path) -> None:
     (tmp_path / "workspace" / "linked.md").symlink_to(outside)
     with pytest.raises(ValueError, match="symlink"):
         workspace.write_target_artifact("linked.md", "no")
+
+
+@pytest.mark.parametrize(
+    ("target_id", "path"),
+    [
+        ("architecture", "architecture/overview.md"),
+        ("business-logic", "business-logic/rules.md"),
+    ],
+)
+def test_new_artifact_rejects_redundant_target_prefix(
+    tmp_path: Path,
+    target_id: str,
+    path: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    target_spec = fixture.target_spec.model_copy(update={"target_id": target_id})
+    fixture.target_state.phase = TargetPhase.WORKING
+    workspace = TargetWorkspace(target_spec, fixture.target_state)
+
+    with pytest.raises(ValueError, match="already relative"):
+        workspace.write_target_artifact(path, "# Invalid\n")
+
+    assert fixture.target_state.artifact_refs == []
+    assert not (tmp_path / "workspace" / target_id).exists()
+
+
+def test_redundant_move_destination_is_rejected(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.target_state.phase = TargetPhase.WORKING
+    workspace = TargetWorkspace(fixture.target_spec, fixture.target_state)
+    reference = workspace.write_target_artifact("foo.md", "# Foo\n")
+
+    with pytest.raises(ValueError, match="already relative"):
+        workspace.move_target_artifact(
+            "foo.md",
+            "architecture/foo.md",
+            expected_revision=reference.revision,
+        )
+
+    assert workspace.list_target_artifacts() == [reference]
+    assert (tmp_path / "workspace" / "foo.md").read_text() == "# Foo\n"
+    assert not (tmp_path / "workspace" / "architecture").exists()
+
+
+def test_existing_redundant_artifact_path_remains_repairable(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.target_state.phase = TargetPhase.WORKING
+    content = b"# Legacy\n"
+    legacy_path = "architecture/foo.md"
+    legacy_file = tmp_path / "workspace" / legacy_path
+    legacy_file.parent.mkdir()
+    legacy_file.write_bytes(content)
+    legacy_reference = CandidateArtifactRef(
+        artifact_id="artifact-legacy",
+        relative_path=legacy_path,
+        revision=1,
+        digest=hashlib.sha256(content).hexdigest(),
+    )
+    fixture.target_state.artifact_refs = [legacy_reference]
+    workspace = TargetWorkspace(fixture.target_spec, fixture.target_state)
+
+    assert workspace.read_target_artifact(legacy_path)["content"] == "# Legacy\n"
+    edited = workspace.edit_target_artifact_range(
+        legacy_path,
+        expected_revision=legacy_reference.revision,
+        start_line=1,
+        end_line=1,
+        replacement="# Repaired\n",
+    )
+    moved = workspace.move_target_artifact(
+        legacy_path,
+        "foo.md",
+        expected_revision=edited.revision,
+    )
+    deleted = workspace.delete_target_artifact(
+        "foo.md",
+        expected_revision=moved.revision,
+    )
+
+    assert moved.artifact_id == legacy_reference.artifact_id
+    assert deleted.artifact_id == legacy_reference.artifact_id
+    assert fixture.target_state.artifact_refs == []
+    assert not legacy_file.exists()
+    assert not (tmp_path / "workspace" / "foo.md").exists()
 
 
 def test_evidence_completion_and_progress_services_keep_authority_local(

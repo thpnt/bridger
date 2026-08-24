@@ -175,11 +175,13 @@ class TargetWorkspace:
     ) -> CandidateArtifactRef:
         """Create or whole-file replace one candidate artifact."""
         _require_working_phase(self._state)
+        existing = self._optional_reference_for_path(path)
+        if existing is None:
+            self._reject_redundant_target_prefix(path)
         destination = self._resolve_path(path)
         encoded = content.encode()
         if len(encoded) > MAX_ARTIFACT_BYTES:
             raise ValueError("candidate artifact exceeds the V0 size limit")
-        existing = self._optional_reference_for_path(path)
         if existing is None:
             if expected_revision is not None:
                 raise ValueError("new artifact cannot declare expected_revision")
@@ -291,6 +293,7 @@ class TargetWorkspace:
         reference = self._reference_for_path(source_path)
         self._require_revision(reference, expected_revision)
         source = self._resolve_path(source_path)
+        self._reject_redundant_target_prefix(destination_path)
         destination = self._resolve_path(destination_path)
         self._read_current(reference)
         if self._optional_reference_for_path(destination_path) is not None:
@@ -348,6 +351,17 @@ class TargetWorkspace:
         resolved = configured.resolve()
         self._require_within_root(resolved)
         return resolved
+
+    def _reject_redundant_target_prefix(self, path: str) -> None:
+        parts = PurePosixPath(path).parts
+        if parts and parts[0] == self._spec.target_id:
+            corrected_path = PurePosixPath(*parts[1:]).as_posix()
+            raise ValueError(
+                f"Artifact paths are already relative to the {self._spec.target_id} "
+                f"target workspace. Do not prefix paths with "
+                f'"{self._spec.target_id}/". '
+                f'Use "{corrected_path}" instead.'
+            )
 
     def _require_within_root(self, path: Path) -> None:
         if path == self._root or not path.is_relative_to(self._root):
@@ -896,13 +910,20 @@ def _build_local_tools(
     tools = [
         LLMTool.bind(
             name="list_target_artifacts",
-            description="List the complete current target-local Markdown inventory.",
+            description=(
+                "List the complete current target-local Markdown inventory. "
+                "Paths are relative to the already-assigned target workspace."
+            ),
             arguments_type=_EmptyArguments,
             handler=lambda _: workspace.list_target_artifacts(),
         ),
         LLMTool.bind(
             name="read_target_artifact",
-            description="Read one bounded current target-local Markdown artifact.",
+            description=(
+                "Read one bounded current target-local Markdown artifact. "
+                "The path is already relative to the assigned target workspace; "
+                "do not repeat the target ID."
+            ),
             arguments_type=_ReadArtifactArguments,
             handler=lambda value: workspace.read_target_artifact(
                 value.path,
@@ -912,7 +933,11 @@ def _build_local_tools(
         ),
         LLMTool.bind(
             name="write_target_artifact",
-            description="Create or whole-file replace target-local Markdown.",
+            description=(
+                "Create or whole-file replace target-local Markdown. The path is "
+                "already relative to the assigned target workspace; do not repeat "
+                "the target ID as its first segment."
+            ),
             arguments_type=_WriteArtifactArguments,
             handler=lambda value: workspace.write_target_artifact(
                 value.path,
@@ -922,7 +947,11 @@ def _build_local_tools(
         ),
         LLMTool.bind(
             name="edit_target_artifact_range",
-            description="Replace an inclusive line range in current Markdown.",
+            description=(
+                "Replace an inclusive line range in current Markdown. Paths are "
+                "relative to the assigned target workspace; do not repeat the "
+                "target ID."
+            ),
             arguments_type=_EditArtifactArguments,
             handler=lambda value: workspace.edit_target_artifact_range(
                 value.path,
@@ -934,7 +963,11 @@ def _build_local_tools(
         ),
         LLMTool.bind(
             name="delete_target_artifact",
-            description="Delete one target-local Markdown artifact by revision.",
+            description=(
+                "Delete one target-local Markdown artifact by revision. Paths are "
+                "relative to the assigned target workspace; do not repeat the "
+                "target ID."
+            ),
             arguments_type=_DeleteArtifactArguments,
             handler=lambda value: workspace.delete_target_artifact(
                 value.path,
@@ -943,7 +976,11 @@ def _build_local_tools(
         ),
         LLMTool.bind(
             name="move_target_artifact",
-            description="Move one target-local Markdown artifact by revision.",
+            description=(
+                "Move one target-local Markdown artifact by revision. Both paths are "
+                "relative to the assigned target workspace; do not repeat the target "
+                "ID in a new destination."
+            ),
             arguments_type=_MoveArtifactArguments,
             handler=lambda value: workspace.move_target_artifact(
                 value.source_path,

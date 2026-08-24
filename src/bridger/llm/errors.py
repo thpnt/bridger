@@ -14,12 +14,14 @@ class LLMError(RuntimeError):
         model: str | None = None,
         operation: LLMOperation | None = None,
         retryable: bool = False,
+        usage: LLMUsage | None = None,
     ) -> None:
         super().__init__(message)
         self.provider = provider
         self.model = model
         self.operation = operation
         self.retryable = retryable
+        self.usage = usage
         self.safe_message = message
         self.attempt_count = 1
 

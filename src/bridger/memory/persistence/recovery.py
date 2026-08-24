@@ -34,6 +34,7 @@ from bridger.contracts.memory.persistence import RuntimeErrorRecord, TaskCheckpo
 from bridger.contracts.memory.worker_cycle import EvidenceReference, OpenQuestion
 from bridger.memory.errors import PersistenceRecoveryError
 from bridger.memory.persistence.durability import (
+    EventObserver,
     FleetRunLock,
     FleetRuntimeStore,
     _atomic_write_bytes,
@@ -177,11 +178,13 @@ def initialize_persistence(
     target_specs: Sequence[TargetTaskSpec],
     target_states: Sequence[TargetTaskState],
     completion_states: Sequence[TargetCompletionState],
+    *,
+    event_observer: EventObserver | None = None,
 ) -> FleetRuntimeStore:
     """Attach Stage 5 trace and baseline checkpoints to Stage 1 products."""
     if not (len(target_specs) == len(target_states) == len(completion_states)):
         raise PersistenceRecoveryError("initial persistence bundle is misaligned")
-    store = FleetRuntimeStore(fleet_spec)
+    store = FleetRuntimeStore(fleet_spec, event_observer=event_observer)
     store.acquire_ownership()
     try:
         existing_events = store.recover_event_tail()

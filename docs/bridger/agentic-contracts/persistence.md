@@ -567,6 +567,14 @@ Workers never write either state file directly.
 
 Concurrent targets therefore cannot drift or double-spend shared fleet capacity.
 
+The model-driven Repository Brain init audit reads these existing durable
+`ExecutionUsage` values after the fleet run. It persists no second charge ledger:
+per-target usage comes from each `TargetTaskState.usage`, memory total comes from
+`FleetRunState.usage`, and fleet-only overhead is the exact component-wise
+difference between them. Layer 5 provider usage is read from its persisted
+generation summary and written with the audit to
+`.bridger/runtime/<fleet-run-id>/token-usage.json`.
+
 ---
 
 # 9. Candidate artifact, evidence and question durability

@@ -349,7 +349,7 @@ def _complete_overlay(graph_build: GraphBuildResult) -> GraphEnrichmentOverlay:
         enrichment_id="record-1",
     )
     return GraphEnrichmentOverlay(
-        schema_version="1",
+        schema_version="2",
         overlay_id="overlay-1",
         graph_snapshot_id="snapshot-1",
         generator_version="bridger-test",
@@ -382,7 +382,7 @@ def _partial_overlay(graph_build: GraphBuildResult) -> GraphEnrichmentOverlay:
         "member_signature": "a91b37e84cd88210",
     }
     return GraphEnrichmentOverlay(
-        schema_version="1",
+        schema_version="2",
         overlay_id="overlay-partial",
         graph_snapshot_id="snapshot-1",
         generator_version="bridger-test",
@@ -421,7 +421,7 @@ def _overlay_with_records(
     records: list[EnrichmentRecord],
 ) -> GraphEnrichmentOverlay:
     return GraphEnrichmentOverlay(
-        schema_version="1",
+        schema_version="2",
         overlay_id="overlay-1",
         graph_snapshot_id=graph_build.manifest.snapshot_id,
         generator_version="bridger-test",

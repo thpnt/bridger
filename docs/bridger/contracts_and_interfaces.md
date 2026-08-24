@@ -1202,7 +1202,8 @@ FeatureGenerationSummary
 ├── failed_target_count
 ├── batch_count
 ├── failed_batch_count
-└── failed_batches: list[FailedEnrichmentBatch]
+├── failed_batches: list[FailedEnrichmentBatch]
+└── usage: TokenUsage
 
 FailedEnrichmentBatch
 ├── batch_id
@@ -1223,6 +1224,11 @@ Rules:
 * V0 permits at most **3 total model-call attempts per failed batch**.
 * Publication with failed targets is valid and is represented by `status = partial`.
 * `generated_count + reused_count + failed_target_count` must equal `target_count`.
+* `usage` is the sum of provider-reported input, cached-input, cache-write, and
+  output tokens across every attempt, including attempts whose responses are
+  later rejected or whose exceptions carry usage.
+* Complete reuse has zero new generation usage. Missing provider usage is not
+  estimated.
 
 ### Notes
 
@@ -1653,6 +1659,19 @@ No separate `EnrichmentManifest` is introduced.
 A rerun always creates a new immutable `overlay_id`.
 
 The Repository Brain publication layer later decides which deterministic graph snapshot and which enrichment overlay belong together.
+
+For model-driven `bridger init`, the existing durable memory usage state and this
+generation summary are combined into one derived audit at:
+
+```text
+.bridger/runtime/<fleet-run-id>/token-usage.json
+```
+
+The audit records Layer 5 usage, ordered target usage, fleet-only memory
+overhead, memory total, and init total. Cached input is a subset of input, so
+uncached input is derived as `input_tokens - cached_input_tokens`; it is not
+stored as a second counter. The report is derived from persisted authorities and
+does not charge usage independently.
 
 ---
 

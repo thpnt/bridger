@@ -12,18 +12,22 @@ from typer.testing import CliRunner
 import bridger.cli as cli
 import bridger.init_pipeline as init_pipeline
 import bridger.repository_brain.harness as harness
+from bridger.artifacts.writer import write_artifact
 from bridger.contracts.files import IntakeConfiguration
 from bridger.contracts.memory.core import FleetPhase
+from bridger.contracts.token_usage import TokenUsage, TokenUsageReport, TokenUsageTarget
 from bridger.init_pipeline import (
     InitMode,
     ReasoningEffort,
     RepositoryBrainBuildError,
     RepositoryBrainBuildResult,
+    format_repository_brain_error,
     resolve_init_configuration,
 )
 from bridger.llm.profiles import LLMProfile
 from bridger.memory import load_target_artifacts, resolve_target_activation
-from bridger.memory.errors import TargetActivationError
+from bridger.memory.errors import TargetActivationError, TargetReviewError
+from bridger.progress import InitStage
 from bridger.repository.service import prepare_repository
 from bridger.repository_brain.harness import (
     _fleet_budget_for,
@@ -41,6 +45,114 @@ _DEFAULT_TARGETS_ROOT = (
     / "memory"
     / "default-targets"
 )
+
+
+def test_typed_stage_reporting_preserves_legacy_labels_and_is_best_effort() -> None:
+    legacy: list[str] = []
+    typed: list[InitStage] = []
+
+    class Observer:
+        def stage_started(self, stage: InitStage) -> None:
+            typed.append(stage)
+
+    init_pipeline._report_stage(
+        legacy.append,
+        Observer(),  # type: ignore[arg-type]
+        InitStage.BUILD_GRAPH,
+    )
+
+    assert legacy == ["Building deterministic graph intelligence"]
+    assert typed == [InitStage.BUILD_GRAPH]
+
+    def fail_legacy(_: str) -> None:
+        raise RuntimeError("legacy UI failed")
+
+    class FailingObserver:
+        def stage_started(self, _: InitStage) -> None:
+            raise RuntimeError("typed UI failed")
+
+    init_pipeline._report_stage(
+        fail_legacy,
+        FailingObserver(),  # type: ignore[arg-type]
+        InitStage.BUILD_GRAPH,
+    )
+
+
+@pytest.mark.parametrize("mode", [InitMode.FULL, InitMode.TEST])
+def test_model_init_passes_presenter_and_closes_it_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: InitMode,
+) -> None:
+    events: list[str] = []
+    presenters: list[object] = []
+
+    class Presenter:
+        def __init__(self, **_: object) -> None:
+            presenters.append(self)
+
+        def start(self) -> None:
+            events.append("start")
+
+        def succeeded(self, result: RepositoryBrainBuildResult) -> None:
+            assert result.publication_path == Path("/tmp/repository-brain.json")
+            events.append("succeeded")
+
+        def failed(self, _: BaseException) -> None:
+            events.append("failed")
+
+        def close(self) -> None:
+            events.append("close")
+
+    def build(
+        _: object,
+        **kwargs: object,
+    ) -> RepositoryBrainBuildResult:
+        assert kwargs["progress"] is presenters[0]
+        return RepositoryBrainBuildResult(
+            mode=mode,
+            graph_build=SimpleNamespace(snapshot_root=Path("/tmp/graph")),
+            publication_path=Path("/tmp/repository-brain.json"),
+        )
+
+    monkeypatch.setattr(cli, "RichInitProgressPresenter", Presenter)
+    monkeypatch.setattr(cli, "build_repository_brain", build)
+
+    result = runner.invoke(cli.app, ["init", "--mode", mode.value])
+
+    assert result.exit_code == 0
+    assert events == ["start", "succeeded", "close"]
+
+
+def test_init_closes_presenter_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    class Presenter:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def start(self) -> None:
+            events.append("start")
+
+        def succeeded(self, _: RepositoryBrainBuildResult) -> None:
+            events.append("succeeded")
+
+        def failed(self, error: BaseException) -> None:
+            assert str(error) == "provider unavailable"
+            events.append("failed")
+
+        def close(self) -> None:
+            events.append("close")
+
+    def fail(_: object, **__: object) -> RepositoryBrainBuildResult:
+        raise RepositoryBrainBuildError("provider unavailable")
+
+    monkeypatch.setattr(cli, "RichInitProgressPresenter", Presenter)
+    monkeypatch.setattr(cli, "build_repository_brain", fail)
+
+    result = runner.invoke(cli.app, ["init"])
+
+    assert result.exit_code == 1
+    assert events == ["start", "failed", "close"]
 
 
 @pytest.mark.parametrize(
@@ -75,6 +187,97 @@ def test_init_resolves_the_requested_mode(
 
     assert result.exit_code == 0
     assert captured[0].mode is expected_mode  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("mode", [InitMode.FULL, InitMode.TEST])
+def test_model_init_renders_persisted_token_usage_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mode: InitMode,
+) -> None:
+    report_path = tmp_path / ".bridger" / "runtime" / "fleet-1" / "token-usage.json"
+    report = TokenUsageReport(
+        init_mode=mode.value,
+        fleet_run_id="fleet-1",
+        enrichment_overlay_id="overlay-1",
+        layer5_enrichment=TokenUsage(
+            input_tokens=10,
+            cached_input_tokens=2,
+            output_tokens=3,
+        ),
+        targets=[
+            TokenUsageTarget(
+                target_task_id="task-a",
+                target_id="architecture",
+                usage=TokenUsage(
+                    input_tokens=20,
+                    cached_input_tokens=5,
+                    output_tokens=4,
+                ),
+            )
+        ],
+        fleet_only_memory_overhead=TokenUsage(
+            input_tokens=5,
+            cached_input_tokens=1,
+            output_tokens=2,
+        ),
+        memory_total=TokenUsage(
+            input_tokens=25,
+            cached_input_tokens=6,
+            output_tokens=6,
+        ),
+        init_total=TokenUsage(input_tokens=35, cached_input_tokens=8, output_tokens=9),
+    )
+    write_artifact(report_path, report)
+
+    monkeypatch.setattr(
+        cli,
+        "build_repository_brain",
+        lambda _configuration, **_kwargs: RepositoryBrainBuildResult(
+            mode=mode,
+            graph_build=SimpleNamespace(snapshot_root=tmp_path / "graph"),
+            publication_path=tmp_path / "published" / "repository-brain.json",
+            token_usage_report_path=report_path,
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["init", "--mode", mode.value])
+
+    assert result.exit_code == 0, result.output
+    for label in (
+        "Layer 5 enrichment",
+        "architecture",
+        "Fleet-only overhead",
+        "Memory subtotal",
+        "Init total",
+        "derived uncached input",
+        str(report_path),
+    ):
+        assert label in result.output
+
+
+def test_token_report_failure_does_not_hide_publication_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    publication_path = tmp_path / "published" / "repository-brain.json"
+    report_path = tmp_path / "missing-token-usage.json"
+    monkeypatch.setattr(
+        cli,
+        "build_repository_brain",
+        lambda _configuration, **_kwargs: RepositoryBrainBuildResult(
+            mode=InitMode.FULL,
+            graph_build=SimpleNamespace(snapshot_root=tmp_path / "graph"),
+            publication_path=publication_path,
+            token_usage_report_path=report_path,
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["init"])
+
+    assert result.exit_code == 0
+    assert "Token usage report could not be rendered" in result.output
+    assert f"Repository Brain published at {publication_path}" in result.output
 
 
 def test_init_defaults_memory_reasoning_to_xhigh(
@@ -421,6 +624,143 @@ def test_model_modes_enter_the_shared_full_pipeline(
     )
 
     assert result.publication_path == tmp_path / "published" / "repository-brain.json"
+
+
+def test_formats_normal_repository_brain_error() -> None:
+    formatted = format_repository_brain_error(ValueError("broken"))
+
+    assert formatted == "ValueError: broken"
+
+
+def test_formats_explicit_repository_brain_error_cause() -> None:
+    try:
+        raise ValueError("inner")
+    except ValueError as cause:
+        try:
+            raise TargetReviewError("outer") from cause
+        except TargetReviewError as error:
+            formatted = format_repository_brain_error(error)
+
+    assert formatted == ("TargetReviewError: outer\ncaused by: ValueError: inner")
+
+
+def test_formats_single_task_group_leaf_without_generic_wrapper() -> None:
+    formatted = format_repository_brain_error(
+        ExceptionGroup(
+            "unhandled errors in a TaskGroup",
+            [RuntimeError("target failed")],
+        )
+    )
+
+    assert formatted == "RuntimeError: target failed"
+    assert "unhandled errors in a TaskGroup" not in formatted
+
+
+def test_formats_base_exception_group_leaf() -> None:
+    formatted = format_repository_brain_error(
+        BaseExceptionGroup("task failures", [KeyboardInterrupt("stop")])
+    )
+
+    assert formatted == "KeyboardInterrupt: stop"
+
+
+def test_formats_task_group_leaf_cause() -> None:
+    try:
+        raise ValueError("bad reviewer reference")
+    except ValueError as cause:
+        try:
+            raise TargetReviewError("review failed") from cause
+        except TargetReviewError as leaf:
+            formatted = format_repository_brain_error(
+                ExceptionGroup("task failures", [leaf])
+            )
+
+    assert "TargetReviewError: review failed" in formatted
+    assert "caused by: ValueError: bad reviewer reference" in formatted
+
+
+def test_formats_multiple_task_group_failures() -> None:
+    formatted = format_repository_brain_error(
+        ExceptionGroup(
+            "task failures",
+            [RuntimeError("first"), ValueError("second")],
+        )
+    )
+
+    assert "Repository Brain build failed with 2 errors:" in formatted
+    assert "1. RuntimeError: first" in formatted
+    assert "2. ValueError: second" in formatted
+
+
+def test_formats_nested_task_groups_without_losing_leaves() -> None:
+    formatted = format_repository_brain_error(
+        ExceptionGroup(
+            "task failures",
+            [
+                ExceptionGroup("nested failures", [ValueError("A")]),
+                RuntimeError("B"),
+            ],
+        )
+    )
+
+    assert "1. ValueError: A" in formatted
+    assert "2. RuntimeError: B" in formatted
+    assert "nested failures" not in formatted
+
+
+def test_build_repository_brain_wraps_group_and_retains_original_cause(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    graph_build = SimpleNamespace(snapshot_root=tmp_path / "graph")
+    monkeypatch.setattr(
+        init_pipeline, "prepare_repository", lambda _: ("context", "index")
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "extract_repository_facts",
+        lambda *_args, **_kwargs: ("symbols", "report", "extraction"),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "build_graph_intelligence",
+        lambda *_args, **_kwargs: ("graph", "diagnostics", "structural"),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "create_graph_snapshot",
+        lambda *_args, **_kwargs: graph_build,
+    )
+    monkeypatch.setattr(
+        harness,
+        "prepare_model_layers",
+        lambda *_args, **_kwargs: (
+            LLMProfile(name="balanced", provider="openai", model="test-model"),
+            SimpleNamespace(),
+        ),
+    )
+
+    try:
+        raise ValueError("bad reviewer reference")
+    except ValueError as cause:
+        try:
+            raise TargetReviewError("review failed") from cause
+        except TargetReviewError as leaf:
+            grouped_error = ExceptionGroup("task failures", [leaf])
+
+    async def model_stage(*_args: object) -> Path:
+        raise grouped_error
+
+    monkeypatch.setattr(init_pipeline, "_run_model_driven_pipeline", model_stage)
+
+    with pytest.raises(RepositoryBrainBuildError) as error:
+        init_pipeline.build_repository_brain(
+            resolve_init_configuration(InitMode.TEST, repository_root=tmp_path)
+        )
+
+    assert error.value.__cause__ is grouped_error
+    assert "TargetReviewError: review failed" in str(error.value)
+    assert "ValueError: bad reviewer reference" in str(error.value)
 
 
 @pytest.mark.parametrize("mode", [InitMode.FULL, InitMode.TEST])
