@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from uuid import uuid4
 
 import orjson
 
@@ -49,6 +51,16 @@ from bridger.memory.persistence.durability import FleetRuntimeStore
 from bridger.memory.runtime.context_window import ContextWindowManager
 from bridger.memory.runtime.hydration import serialize_worker_context_sections
 from bridger.memory.runtime.provider_recovery import run_provider_with_retry
+from bridger.memory.runtime.trace import (
+    bounded_error_message,
+    focus_payload,
+    model_error_trace_payload,
+    model_request_trace_context,
+    model_response_trace_payload,
+    project_tool_arguments,
+    provider_usage_payload,
+    summarize_tool_result,
+)
 from bridger.memory.runtime.worker_tools import (
     FINALIZATION_TOOL_ID,
     YIELD_CYCLE_TOOL_ID,
@@ -132,6 +144,7 @@ class _ModelReservation:
     target_spec: TargetTaskSpec | None = None
     target_state: TargetTaskState | None = None
     fleet_state: FleetRunState | None = None
+    trace_context: dict[str, object] | None = None
 
 
 @dataclass(slots=True)
@@ -184,6 +197,7 @@ class FleetExecutionCoordinator:
         repair: bool,
         input_tokens: int,
         requested_output_tokens: int,
+        trace_context: Mapping[str, object] | None = None,
     ) -> _ModelReservation:
         """Preflight the first action before atomically entering WORKING."""
         target_usage = target_state.usage
@@ -246,6 +260,7 @@ class FleetExecutionCoordinator:
                     output_tokens=requested_output_tokens,
                     cycle_start=True,
                     repair=repair,
+                    trace_context=trace_context,
                 )
             self._reserved_input_tokens += input_tokens
             self._reserved_output_tokens += requested_output_tokens
@@ -256,6 +271,7 @@ class FleetExecutionCoordinator:
                 target_spec=target_spec,
                 target_state=target_state if target_spec is not None else None,
                 fleet_state=(self._fleet_state if target_spec is not None else None),
+                trace_context=dict(trace_context or {}),
             )
 
     async def reserve_model_call(
@@ -269,6 +285,7 @@ class FleetExecutionCoordinator:
         requested_output_tokens: int,
         target_state: TargetTaskState | None = None,
         target_spec: TargetTaskSpec | None = None,
+        trace_context: Mapping[str, object] | None = None,
     ) -> _ModelReservation:
         """Reserve exact input and maximum output, then charge the call attempt."""
         if target_usage.model_calls >= target_budget.max_model_calls:
@@ -321,6 +338,7 @@ class FleetExecutionCoordinator:
                     input_tokens=input_tokens,
                     output_tokens=requested_output_tokens,
                     cycle_start=False,
+                    trace_context=trace_context,
                 )
             self._reserved_input_tokens += input_tokens
             self._reserved_output_tokens += requested_output_tokens
@@ -331,6 +349,7 @@ class FleetExecutionCoordinator:
                 target_spec=target_spec,
                 target_state=target_state,
                 fleet_state=self._fleet_state,
+                trace_context=dict(trace_context or {}),
             )
 
     async def reserve_fleet_model_call(
@@ -340,6 +359,7 @@ class FleetExecutionCoordinator:
         *,
         input_tokens: int,
         requested_output_tokens: int,
+        trace_context: Mapping[str, object] | None = None,
     ) -> _ModelReservation:
         """Reserve and charge one fleet-only model invocation."""
         async with self._lock:
@@ -370,6 +390,7 @@ class FleetExecutionCoordinator:
                     bound,
                     input_tokens=input_tokens,
                     output_tokens=requested_output_tokens,
+                    trace_context=trace_context,
                 )
             self._reserved_input_tokens += input_tokens
             self._reserved_output_tokens += requested_output_tokens
@@ -378,6 +399,7 @@ class FleetExecutionCoordinator:
                 requested_output_tokens,
                 attempt_id=attempt_id,
                 fleet_state=self._fleet_state,
+                trace_context=dict(trace_context or {}),
             )
 
     async def mark_model_invoked(self, reservation: _ModelReservation) -> None:
@@ -391,6 +413,8 @@ class FleetExecutionCoordinator:
         target_usage: ExecutionUsage,
         fleet_usage: ExecutionUsage,
         usage: LLMUsage | None,
+        trace_payload: Mapping[str, object] | None = None,
+        failed: bool | None = None,
     ) -> None:
         """Charge reported tokens and release the unused in-flight allowance."""
         async with self._lock:
@@ -417,7 +441,8 @@ class FleetExecutionCoordinator:
                     ),
                     cache_write_tokens=(usage.cache_write_tokens or 0) if usage else 0,
                     output_tokens=(usage.output_tokens or 0) if usage else 0,
-                    failed=usage is None,
+                    failed=usage is None if failed is None else failed,
+                    trace_payload=trace_payload,
                 )
             elif usage is not None:
                 _apply_usage_delta(
@@ -434,6 +459,8 @@ class FleetExecutionCoordinator:
         reservation: _ModelReservation,
         fleet_state: FleetRunState,
         usage: LLMUsage | None,
+        trace_payload: Mapping[str, object] | None = None,
+        failed: bool | None = None,
     ) -> None:
         """Settle a fleet-only model invocation and release its allowance."""
         async with self._lock:
@@ -454,7 +481,8 @@ class FleetExecutionCoordinator:
                     ),
                     cache_write_tokens=(usage.cache_write_tokens or 0) if usage else 0,
                     output_tokens=(usage.output_tokens or 0) if usage else 0,
-                    failed=usage is None,
+                    failed=usage is None if failed is None else failed,
+                    trace_payload=trace_payload,
                 )
             elif usage is not None:
                 fleet_state.usage.input_tokens += usage.input_tokens or 0
@@ -572,16 +600,31 @@ class FleetExecutionCoordinator:
         provider_attempt: int,
         *,
         failed: bool,
+        usage: LLMUsage | None = None,
+        error: BaseException | None = None,
     ) -> None:
         """Trace one physical retry boundary within a logical model request."""
         if self._persistence is None:
             return
+        payload: dict[str, object] = {
+            "attempt_id": logical_attempt_id,
+            "provider_attempt": provider_attempt,
+        }
+        try:
+            payload.update(
+                self._persistence.load_provider_reservation(
+                    logical_attempt_id
+                ).trace_context
+            )
+        except (FileNotFoundError, ValueError):
+            pass
+        if usage is not None:
+            payload["provider_usage"] = provider_usage_payload(usage)
+        if error is not None:
+            payload.update(model_error_trace_payload(error))
         self._persistence.append_event(
             "model_attempt_failed" if failed else "model_attempt_started",
-            {
-                "attempt_id": logical_attempt_id,
-                "provider_attempt": provider_attempt,
-            },
+            payload,
             target_task_id=target_task_id,
             operation_id=logical_attempt_id,
         )
@@ -641,6 +684,7 @@ class FleetExecutionCoordinator:
         target_state: TargetTaskState | None = None,
         target_spec: TargetTaskSpec | None = None,
         tool: str = "operational",
+        trace_payload: Mapping[str, object] | None = None,
     ) -> None:
         """Charge one attempted operational dispatch from a reserved batch."""
         async with self._lock:
@@ -661,7 +705,7 @@ class FleetExecutionCoordinator:
                     target_state,
                     {"tool_calls": 1},
                     event_type="tool_dispatch_started",
-                    payload={"tool": tool},
+                    payload={"tool": tool, **dict(trace_payload or {})},
                 )
 
     async def release_tool_batch(self, reservation: _ToolReservation) -> None:
@@ -702,20 +746,51 @@ class FleetExecutionCoordinator:
         *,
         failed: bool,
         error_code: str | None = None,
+        trace_payload: Mapping[str, object] | None = None,
     ) -> None:
         """Append compact tool completion metadata when persistence is active."""
         if self._persistence is None:
             return
-        payload: dict[str, str] = {
+        payload: dict[str, object] = {
             "tool": tool,
             "status": "error" if failed else "ok",
         }
         if error_code is not None:
             payload["error_code"] = error_code
+        if trace_payload is not None:
+            payload.update(trace_payload)
         self._persistence.append_event(
             "tool_dispatch_rejected" if failed else "tool_dispatch_completed",
             payload,
             target_task_id=target_task_id,
+        )
+
+    def record_cycle_finished(
+        self,
+        target_task_id: str,
+        *,
+        cycle_id: str,
+        cycle_number: int,
+        outcome: WorkerCycleOutcome,
+        focus: Mapping[str, object],
+        usage_delta: Mapping[str, int],
+        completion_changes: list[Mapping[str, object]],
+    ) -> None:
+        """Append the diagnostic boundary for one normally returned worker cycle."""
+        if self._persistence is None:
+            return
+        self._persistence.append_event(
+            "cycle_finished",
+            {
+                "cycle_id": cycle_id,
+                "cycle_number": cycle_number,
+                "outcome": outcome.value,
+                "focus": dict(focus),
+                "usage_delta": dict(usage_delta),
+                "completion_changes": [dict(item) for item in completion_changes],
+            },
+            target_task_id=target_task_id,
+            operation_id=cycle_id,
         )
 
     def record_compaction_started(
@@ -725,6 +800,7 @@ class FleetExecutionCoordinator:
         projected_context_tokens: int,
         active_context_soft_limit_tokens: int,
         model_context_window_tokens: int,
+        trace_payload: Mapping[str, object] | None = None,
     ) -> None:
         """Append compact context-pressure metadata before compaction dispatch."""
         if self._persistence is None:
@@ -735,6 +811,7 @@ class FleetExecutionCoordinator:
                 "projected_context_tokens": projected_context_tokens,
                 "active_context_soft_limit_tokens": active_context_soft_limit_tokens,
                 "model_context_window_tokens": model_context_window_tokens,
+                **dict(trace_payload or {}),
             },
             target_task_id=target_task_id,
         )
@@ -746,6 +823,7 @@ class FleetExecutionCoordinator:
         projected_context_tokens: int,
         active_context_soft_limit_tokens: int,
         model_context_window_tokens: int,
+        trace_payload: Mapping[str, object] | None = None,
     ) -> None:
         """Append compact context-pressure metadata after successful compaction."""
         if self._persistence is None:
@@ -756,6 +834,7 @@ class FleetExecutionCoordinator:
                 "projected_context_tokens": projected_context_tokens,
                 "active_context_soft_limit_tokens": active_context_soft_limit_tokens,
                 "model_context_window_tokens": model_context_window_tokens,
+                **dict(trace_payload or {}),
             },
             target_task_id=target_task_id,
         )
@@ -948,6 +1027,10 @@ class WorkerRunner:
         self._pending_messages: list[LLMMessage] = []
         self._latest_usage = LLMUsage()
         self._malformed_argument_correction_turns = 0
+        self._cycle_id: str | None = None
+        self._cycle_number = 0
+        self._cycle_turn = 0
+        self._cycle_entry_usage = target_state.usage.model_copy(deep=True)
 
     @property
     def last_runtime_error(self) -> Exception | None:
@@ -964,9 +1047,35 @@ class WorkerRunner:
         self._last_runtime_error = None
         self._last_interruption = None
         self._malformed_argument_correction_turns = 0
+        self._cycle_id = f"cycle-{uuid4().hex}"
+        self._cycle_number = self._target_state.usage.cycles + 1
+        self._cycle_turn = 0
+        self._cycle_entry_usage = self._target_state.usage.model_copy(deep=True)
+        outcome: WorkerCycleOutcome | None = None
         try:
-            return await self._run_cycle()
+            outcome = await self._run_cycle()
+            return outcome
         finally:
+            if outcome is not None and self._cycle_id is not None:
+                try:
+                    self._coordinator.record_cycle_finished(
+                        self._target_spec.target_task_id,
+                        cycle_id=self._cycle_id,
+                        cycle_number=self._cycle_number,
+                        outcome=outcome,
+                        focus=focus_payload(self._context.cycle_focus),
+                        usage_delta=_usage_delta(
+                            self._cycle_entry_usage,
+                            self._target_state.usage,
+                        ),
+                        completion_changes=_completion_changes(
+                            self._base_completion,
+                            self._completion_state,
+                        ),
+                    )
+                except Exception:
+                    pass
+            self._tools.clear_transient_state()
             self._continuation_ref = None
             self._compacted_context = None
             self._pending_messages = []
@@ -985,6 +1094,12 @@ class WorkerRunner:
                 message=str(error),
             )
         repair = self._context.mode is WorkerContextMode.REPAIR
+        self._cycle_turn = 1
+        trace_context = self._request_trace_context(
+            request,
+            input_tokens,
+            cycle_turn=self._cycle_turn,
+        )
         try:
             model_reservation = (
                 await self._coordinator.start_cycle_and_reserve_first_model_call(
@@ -995,6 +1110,7 @@ class WorkerRunner:
                     repair=repair,
                     input_tokens=input_tokens,
                     requested_output_tokens=output_tokens,
+                    trace_context=trace_context,
                 )
             )
         except _BudgetStop as stop:
@@ -1032,6 +1148,8 @@ class WorkerRunner:
                     self._target_state.usage,
                     self._fleet_state.usage,
                     failed_usage if isinstance(failed_usage, LLMUsage) else None,
+                    trace_payload=model_error_trace_payload(error),
+                    failed=True,
                 )
                 attempt_count = getattr(error, "attempt_count", 1)
                 if (
@@ -1052,6 +1170,7 @@ class WorkerRunner:
                 self._target_state.usage,
                 self._fleet_state.usage,
                 response.usage,
+                trace_payload=model_response_trace_payload(response),
             )
             if response.retry_count and not durable_retry_loop:
                 await self._coordinator.charge_additional_model_attempts(
@@ -1089,6 +1208,12 @@ class WorkerRunner:
                             call.name,
                             failed=True,
                             error_code="malformed_arguments",
+                            trace_payload={
+                                "call_id": call.id,
+                                "parent_attempt_id": reservation.attempt_id,
+                                "cycle_id": self._cycle_id,
+                                **project_tool_arguments(call),
+                            },
                         )
                     return self._interrupt(
                         category="runtime",
@@ -1129,20 +1254,18 @@ class WorkerRunner:
                     return self._outcome_for_budget_stop(stop.scope)
 
             results: list[LLMToolResult] = []
+            raw_results: list[LLMToolResult] = []
             try:
                 for call in calls:
                     if call.has_malformed_arguments:
                         result = _malformed_arguments_result(call)
-                        self._coordinator.record_tool_result(
-                            self._target_spec.target_task_id,
-                            call.name,
-                            failed=True,
-                            error_code=result.error.code if result.error else None,
-                        )
+                        raw_results.append(result)
                         results.append(result)
                         continue
                     if call.name in _CONTROL_TOOL_IDS:
-                        results.append(_control_protocol_error(call, calls))
+                        result = _control_protocol_error(call, calls)
+                        raw_results.append(result)
+                        results.append(result)
                         continue
                     if tool_reservation is None:
                         raise RuntimeError("operational call lacks batch reservation")
@@ -1153,20 +1276,20 @@ class WorkerRunner:
                         target_state=self._target_state,
                         target_spec=self._target_spec,
                         tool=call.name,
+                        trace_payload={
+                            "call_id": call.id,
+                            "parent_attempt_id": reservation.attempt_id,
+                            "cycle_id": self._cycle_id,
+                            **project_tool_arguments(call),
+                        },
                     )
                     result = await self._tools.execute_operational(call)
-                    self._coordinator.record_tool_result(
-                        self._target_spec.target_task_id,
-                        call.name,
-                        failed=result.error is not None,
-                        error_code=result.error.code if result.error else None,
+                    delivered = _bound_tool_result(
+                        result,
+                        maximum_bytes=self._limits.tool_result_max_bytes,
                     )
-                    results.append(
-                        _bound_tool_result(
-                            result,
-                            maximum_bytes=self._limits.tool_result_max_bytes,
-                        )
-                    )
+                    raw_results.append(result)
+                    results.append(delivered)
             except Exception as error:
                 if tool_reservation is not None:
                     await self._coordinator.release_tool_batch(tool_reservation)
@@ -1180,6 +1303,36 @@ class WorkerRunner:
                     category="context-capacity",
                     operation="compaction",
                     message=str(error),
+                )
+            for call, raw_result, delivered_result in zip(
+                calls,
+                raw_results,
+                results,
+                strict=True,
+            ):
+                result_trace: dict[str, object] = {
+                    "call_id": call.id,
+                    "parent_attempt_id": reservation.attempt_id,
+                    "cycle_id": self._cycle_id,
+                    "result": summarize_tool_result(
+                        raw_result,
+                        delivered_result,
+                        self._manager.count_text,
+                    ),
+                }
+                if raw_result.error is not None:
+                    result_trace.update(bounded_error_message(raw_result.error.message))
+                self._coordinator.record_tool_result(
+                    self._target_spec.target_task_id,
+                    call.name,
+                    failed=raw_result.error is not None,
+                    error_code=(
+                        raw_result.error.code if raw_result.error is not None else None
+                    ),
+                    trace_payload={
+                        **project_tool_arguments(call),
+                        **result_trace,
+                    },
                 )
             self._working_set.add(_ToolBatch(calls=list(calls), results=results))
             self._pending_messages = [result.as_message() for result in results]
@@ -1208,6 +1361,7 @@ class WorkerRunner:
                 )
             except Exception as error:
                 return self._interrupt_from_error("context-build", error)
+            self._cycle_turn += 1
             try:
                 model_reservation = await self._coordinator.reserve_model_call(
                     self._fleet_spec.fleet_budget,
@@ -1218,6 +1372,11 @@ class WorkerRunner:
                     requested_output_tokens=output_tokens,
                     target_state=self._target_state,
                     target_spec=self._target_spec,
+                    trace_context=self._request_trace_context(
+                        request,
+                        input_tokens,
+                        cycle_turn=self._cycle_turn,
+                    ),
                 )
             except _BudgetStop as stop:
                 return self._outcome_for_budget_stop(stop.scope)
@@ -1308,6 +1467,8 @@ class WorkerRunner:
                 logical_attempt_id,
                 next_attempt - 1,
                 failed=True,
+                usage=(error.usage if isinstance(error.usage, LLMUsage) else None),
+                error=error,
             )
             failed_usage = getattr(error, "usage", None)
             if isinstance(failed_usage, LLMUsage):
@@ -1350,6 +1511,40 @@ class WorkerRunner:
         request, input_tokens, output_tokens = self._build_request(initial=False)
         self._require_execution_headroom(input_tokens, output_tokens)
         return request, input_tokens, output_tokens
+
+    def _request_trace_context(
+        self,
+        request: LLMRequest | LLMCompactionRequest,
+        input_tokens: int,
+        *,
+        cycle_turn: int,
+        call_kind: str = "generate",
+    ) -> dict[str, object]:
+        """Build bounded request diagnostics from existing serialized context."""
+        initial = (
+            isinstance(request, LLMRequest)
+            and request.continuation_ref is None
+            and request.compacted_context is None
+            and not request.messages
+        )
+        overlay_tokens = 0
+        if not initial:
+            overlay_tokens = self._manager.count_text(self._execution_overlay())
+        return model_request_trace_context(
+            request,
+            local_request_input_tokens=input_tokens,
+            count_tokens=self._manager.count_text,
+            canonical_base_tokens=self._manager.count_text(self._canonical_base),
+            execution_overlay_tokens=overlay_tokens,
+            pending_tool_result_tokens=(
+                self._manager.count_text(_serialize_messages(self._pending_messages))
+                if self._pending_messages
+                else 0
+            ),
+            cycle_id=self._cycle_id,
+            cycle_turn=cycle_turn,
+            call_kind=call_kind,
+        )
 
     def _build_request(self, *, initial: bool) -> tuple[LLMRequest, int, int]:
         while True:
@@ -1477,6 +1672,12 @@ class WorkerRunner:
             requested_output_tokens=self._compaction_budget_output_tokens(),
             target_state=self._target_state,
             target_spec=self._target_spec,
+            trace_context=self._request_trace_context(
+                compaction_request,
+                local_input_tokens,
+                cycle_turn=self._cycle_turn,
+                call_kind="compact",
+            ),
         )
         self._coordinator.record_compaction_started(
             self._target_spec.target_task_id,
@@ -1485,6 +1686,15 @@ class WorkerRunner:
                 self._limits.active_context_soft_limit_tokens
             ),
             model_context_window_tokens=self._profile.model_context_window_tokens,
+            trace_payload={
+                "cycle_id": self._cycle_id,
+                "cycle_turn": self._cycle_turn,
+                "trigger_threshold_tokens": trigger,
+                "pending_message_tokens": pending_tokens,
+                "latest_provider_input_tokens": latest_input,
+                "latest_provider_output_tokens": latest_output,
+                "local_compaction_request_tokens": local_input_tokens,
+            },
         )
         result: LLMCompactionResult | None = None
         try:
@@ -1497,6 +1707,8 @@ class WorkerRunner:
                 self._target_state.usage,
                 self._fleet_state.usage,
                 failed_usage if isinstance(failed_usage, LLMUsage) else None,
+                trace_payload=model_error_trace_payload(error),
+                failed=True,
             )
             attempt_count = getattr(error, "attempt_count", 1)
             if isinstance(attempt_count, int) and attempt_count > 1:
@@ -1514,6 +1726,13 @@ class WorkerRunner:
             self._target_state.usage,
             self._fleet_state.usage,
             result.usage,
+            trace_payload={
+                "provider": result.context.provider,
+                "model": self._profile.model,
+                "retry_count": result.retry_count,
+                "provider_attempt": result.retry_count + 1,
+                "provider_usage": provider_usage_payload(result.usage),
+            },
         )
         if result.retry_count:
             await self._coordinator.charge_additional_model_attempts(
@@ -1536,6 +1755,15 @@ class WorkerRunner:
                 self._limits.active_context_soft_limit_tokens
             ),
             model_context_window_tokens=self._profile.model_context_window_tokens,
+            trace_payload={
+                "cycle_id": self._cycle_id,
+                "cycle_turn": self._cycle_turn,
+                "trigger_threshold_tokens": trigger,
+                "pending_message_tokens": pending_tokens,
+                "latest_provider_input_tokens": latest_input,
+                "latest_provider_output_tokens": latest_output,
+                "local_compaction_request_tokens": local_input_tokens,
+            },
         )
 
     def _bound_pending_tool_results(
@@ -1874,6 +2102,46 @@ def _apply_usage_delta(
             raise ValueError("usage deltas cannot be negative")
         setattr(target_usage, field_name, getattr(target_usage, field_name) + amount)
         setattr(fleet_usage, field_name, getattr(fleet_usage, field_name) + amount)
+
+
+def _usage_delta(before: ExecutionUsage, after: ExecutionUsage) -> dict[str, int]:
+    """Return all execution counters changed by one worker cycle."""
+    fields = (
+        "cycles",
+        "model_calls",
+        "tool_calls",
+        "repair_cycles",
+        "input_tokens",
+        "cached_input_tokens",
+        "cache_write_tokens",
+        "output_tokens",
+    )
+    return {field: getattr(after, field) - getattr(before, field) for field in fields}
+
+
+def _completion_changes(
+    before: Mapping[str, tuple[object, ...]],
+    after: TargetCompletionState,
+) -> list[dict[str, object]]:
+    """Summarize every obligation status transition, including opportunistic ones."""
+    changes: list[dict[str, object]] = []
+    for item in after.items:
+        previous = before.get(item.obligation_id)
+        previous_status = previous[0] if previous is not None else None
+        if previous_status == item.status:
+            continue
+        changes.append(
+            {
+                "obligation_id": item.obligation_id,
+                "from_status": (
+                    previous_status.value
+                    if isinstance(previous_status, StrEnum)
+                    else previous_status
+                ),
+                "to_status": item.status.value,
+            }
+        )
+    return changes
 
 
 def _control_protocol_error(

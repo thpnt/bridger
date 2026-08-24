@@ -559,7 +559,21 @@ def compile_worker_context(
             target_spec,
             target_state,
             event_type="context_hydrated",
-            payload={},
+            payload={
+                "mode": context.mode.value,
+                "cycle_focus": context.cycle_focus.model_dump(mode="json"),
+                "worker_profile_id": context.worker_profile_id,
+                "permission_profile_id": context.permission_profile_id,
+                "allowed_tool_count": len(context.allowed_tool_ids),
+                "worker_context_tokens": diagnostics.worker_context_tokens,
+                "complete_initial_provider_input_tokens": (
+                    diagnostics.complete_initial_provider_input_tokens
+                ),
+                "provider_input_hard_cap_tokens": (
+                    diagnostics.provider_input_hard_cap_tokens
+                ),
+                "model_context_window_tokens": diagnostics.model_context_window_tokens,
+            },
         )
     return context
 

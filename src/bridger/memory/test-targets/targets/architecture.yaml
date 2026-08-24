@@ -1,0 +1,34 @@
+schema_version: 1
+target_id: architecture
+target_contract_version: test-v1
+activation: {mode: always}
+depends_on: []
+canonical_question: What are the major runtime components and how does execution move through them?
+purpose: Provide a deliberately bounded structural and runtime model for diagnostic test runs.
+expected_abstraction: Major runtime composition and principal execution paths.
+always_relevant_scope:
+  - Principal runtime entrypoints.
+  - Major runtime applications, processes, components, and responsibilities.
+  - Principal execution and control paths.
+conditional_scope: []
+exclusions:
+  - Detailed domain rules, persistence lifecycle, external protocol mechanics, operations, design, testing strategy, and contributor conventions.
+boundary_guidance:
+  - Own runtime structure and mechanics while leaving product meaning and specialist detail to canonical targets.
+investigation_expectations:
+  - Identify runtime entrypoints and major components from manifests, graph relations, and source inspection.
+  - Trace the principal execution paths across their meaningful component chain.
+evidence_expectations:
+  - Use graph and import relations for structure, manifests for entrypoints, and source inspection for responsibilities and control flow.
+output_quality_expectations:
+  - Explain responsibilities and execution paths mechanically without becoming a file inventory or domain guide.
+completion_obligations:
+  - obligation_id: runtime-entrypoints
+    description: Identify the principal runtime entrypoints.
+    applicability: always
+  - obligation_id: runtime-components
+    description: Identify the major runtime applications, processes, and components.
+    applicability: always
+  - obligation_id: execution-paths
+    description: Explain the principal execution and control paths mechanically.
+    applicability: always

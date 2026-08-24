@@ -1,0 +1,35 @@
+schema_version: 1
+target_id: repository
+target_contract_version: test-v1
+activation: {mode: always}
+depends_on: []
+canonical_question: What is this repository, what major areas does it contain, and where should someone start?
+purpose: Provide a deliberately bounded repository orientation for diagnostic test runs.
+expected_abstraction: Shallow repository orientation and routing.
+always_relevant_scope:
+  - Repository purpose and overall shape.
+  - Major source areas, applications, packages, and workspaces.
+  - Principal entry surfaces and high-level orientation routes.
+conditional_scope: []
+exclusions:
+  - Detailed runtime, domain, persistence, interface, testing, convention, operations, and design explanations.
+boundary_guidance:
+  - Remain a shallow terrain map and route specialist questions to the corresponding targets.
+investigation_expectations:
+  - Establish repository purpose from top-level documentation and manifests.
+  - Identify major areas and workspaces from deterministic inventory and repository structure.
+  - Identify important entry surfaces without tracing their detailed runtime behavior.
+evidence_expectations:
+  - Use deterministic inventory, manifests, top-level documentation, and source reads for unclear responsibilities or entrypoints.
+output_quality_expectations:
+  - Be concise, repository-specific, navigable, and free of specialist duplication.
+completion_obligations:
+  - obligation_id: repository-purpose
+    description: Explain the repository's purpose and overall orientation.
+    applicability: always
+  - obligation_id: applications-packages-workspaces
+    description: Identify major applications, packages, and workspaces.
+    applicability: always
+  - obligation_id: entry-surfaces
+    description: Identify principal entry surfaces at a high level.
+    applicability: always

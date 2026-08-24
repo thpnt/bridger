@@ -153,6 +153,8 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
     assert first_batch_entered == set(task_ids)
     assert calls == Counter({task_id: 2 for task_id in task_ids})
     assert fleet_validation_calls == [(2, 2, 2)]
+    assert [event[0] for event in store.events] == ["fleet_execution_finished"]
+    assert store.events[0][1]["fleet_phase"] == "initialized"
     assert client.closed is True
     assert store.closed is True
 
@@ -411,9 +413,13 @@ class _BarrierClient:
 class _Store:
     def __init__(self) -> None:
         self.closed = False
+        self.events: list[tuple[str, dict[str, object]]] = []
 
     def exhaust_fleet_budget(self, fleet_state: FleetRunState) -> None:
         fleet_state.phase = FleetPhase.EXHAUSTED
+
+    def append_event(self, event_type: str, payload: dict[str, object]) -> None:
+        self.events.append((event_type, payload))
 
     def close(self) -> None:
         self.closed = True

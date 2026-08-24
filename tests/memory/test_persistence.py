@@ -12,6 +12,7 @@ import pytest
 
 import bridger.repository_brain.harness as harness
 from bridger.artifacts.writer import write_artifact
+from bridger.contracts.files import FileDisposition, FileRecord
 from bridger.contracts.memory.core import (
     ActivationMode,
     CompletionItemState,
@@ -33,8 +34,10 @@ from bridger.contracts.memory.core import (
     TargetTaskState,
 )
 from bridger.contracts.memory.persistence import TaskCheckpoint
+from bridger.contracts.navigation import FileOverview
 from bridger.llm.errors import LLMConnectionError
 from bridger.memory import (
+    EvidenceRecorder,
     FinalizationRequestError,
     FleetRuntimeStore,
     PersistenceRecoveryError,
@@ -50,6 +53,14 @@ from bridger.memory import (
     validate_checkpoint,
 )
 from bridger.memory.persistence.store import persist_fleet_spec, persist_initialization
+from bridger.memory.runtime.worker_cycle import (
+    FleetExecutionCoordinator,
+    WorkerCycleOutcome,
+)
+from bridger.memory.runtime.worker_navigation_tools import (
+    EvidenceCandidateRegistry,
+    WorkerNavigationTools,
+)
 
 _SOURCE = SourceBinding(
     repository_id="repository-1",
@@ -76,6 +87,35 @@ class RuntimeFixture:
     catalog: MemoryTargetCatalog
     definition: TargetDefinition
     store: FleetRuntimeStore
+
+
+class _EvidenceNavigator:
+    source_identity = (
+        _SOURCE.repository_id,
+        _SOURCE.repository_revision,
+        _SOURCE.graph_snapshot_id,
+        None,
+    )
+
+    def get_file_overview(self, path: str, **_: object) -> FileOverview:
+        return FileOverview(
+            file=FileRecord(
+                path=path,
+                git_object_id="b" * 40,
+                size_bytes=20,
+                content_type="source",
+                language="python",
+                disposition=FileDisposition(
+                    read_mode="full",
+                    processing_mode="extract",
+                ),
+            ),
+            symbol_ids=[],
+            graph_node_ids=[],
+        )
+
+    def list_symbols(self, **_: object) -> list[object]:
+        return []
 
 
 def test_completion_update_event_includes_resulting_status(tmp_path: Path) -> None:
@@ -119,6 +159,20 @@ def test_historical_completion_update_without_status_remains_valid(
     assert fixture.store.recover_event_tail()[-1] == event
 
 
+def test_historical_tool_event_without_diagnostic_fields_remains_valid(
+    tmp_path: Path,
+) -> None:
+    fixture = _runtime(tmp_path)
+
+    event = fixture.store.append_event(
+        "tool_dispatch_completed",
+        {"tool": "search_source_content", "status": "ok"},
+        target_task_id=fixture.target_spec.target_task_id,
+    )
+
+    assert fixture.store.recover_event_tail()[-1] == event
+
+
 def test_cycle_start_event_exposes_the_persisted_working_transition(
     tmp_path: Path,
 ) -> None:
@@ -138,6 +192,135 @@ def test_cycle_start_event_exposes_the_persisted_working_transition(
     event = fixture.store.recover_event_tail()[-1]
     assert event.payload["from_phase"] == "hydrating"
     assert event.payload["to_phase"] == "working"
+
+
+def test_model_attempt_trace_context_survives_provider_reservation_lifecycle(
+    tmp_path: Path,
+) -> None:
+    fixture = _runtime(tmp_path)
+    trace_context = {
+        "llm_operation": "memory_agent_worker",
+        "call_kind": "generate",
+        "profile": "worker-v1",
+        "reasoning_effort": "low",
+        "reasoning_context": "all_turns",
+        "cycle_id": "cycle-1",
+        "cycle_turn": 1,
+        "request_shape": {
+            "local_request_input_tokens": 100,
+            "canonical_base_tokens": 50,
+            "execution_overlay_tokens": 10,
+            "message_tokens": 20,
+            "tool_definition_tokens": 20,
+            "continuation_present": False,
+            "compacted_context_present": False,
+            "prompt_cache_key": "cache-key",
+            "prompt_cache_breakpoint_count": 2,
+        },
+    }
+    attempt_id = fixture.store.prepare_provider_attempt(
+        fixture.fleet_state,
+        fixture.target_spec,
+        fixture.target_state,
+        input_tokens=100,
+        output_tokens=100,
+        cycle_start=True,
+        trace_context=trace_context,
+    )
+    fixture.store.mark_provider_invoked(attempt_id)
+    fixture.store.settle_provider_attempt(
+        fixture.fleet_state,
+        fixture.target_spec,
+        fixture.target_state,
+        attempt_id,
+        input_tokens=80,
+        cached_input_tokens=60,
+        cache_write_tokens=5,
+        output_tokens=20,
+        trace_payload={
+            "provider": "openai",
+            "model": "gpt-test",
+            "latency_ms": 12,
+            "retry_count": 1,
+            "finish_reason": "tool_calls",
+            "tool_call_count": 1,
+            "tool_names": ["inspect_file"],
+            "provider_usage": {
+                "input_tokens": 80,
+                "cached_input_tokens": 60,
+                "cache_write_tokens": 5,
+                "output_tokens": 20,
+                "reasoning_tokens": 7,
+                "total_tokens": 100,
+            },
+        },
+    )
+
+    events = fixture.store.recover_event_tail()
+    started = next(
+        event for event in events if event.event_type == "model_attempt_started"
+    )
+    completed = next(
+        event for event in events if event.event_type == "model_attempt_completed"
+    )
+    assert started.payload["cycle_id"] == "cycle-1"
+    assert started.payload["cycle_turn"] == 1
+    assert started.payload["provider_attempt"] == 1
+    assert completed.payload["provider_usage"]["reasoning_tokens"] == 7
+    assert completed.payload["request_shape"] == trace_context["request_shape"]
+
+
+def test_cycle_finished_and_terminal_events_have_new_required_shapes(
+    tmp_path: Path,
+) -> None:
+    fixture = _runtime(tmp_path)
+    coordinator = FleetExecutionCoordinator(fixture.store)
+    coordinator.record_cycle_finished(
+        fixture.target_spec.target_task_id,
+        cycle_id="cycle-2",
+        cycle_number=2,
+        outcome=WorkerCycleOutcome.CYCLE_YIELDED,
+        focus={
+            "kind": "obligation",
+            "obligation_id": "describe-architecture",
+            "finding_ids": [],
+        },
+        usage_delta={
+            "cycles": 1,
+            "model_calls": 2,
+            "tool_calls": 1,
+            "repair_cycles": 0,
+            "input_tokens": 10,
+            "cached_input_tokens": 5,
+            "cache_write_tokens": 0,
+            "output_tokens": 3,
+        },
+        completion_changes=[
+            {
+                "obligation_id": "describe-architecture",
+                "from_status": "uninvestigated",
+                "to_status": "covered",
+            }
+        ],
+    )
+    fixture.store.append_event(
+        "fleet_execution_finished",
+        {
+            "fleet_phase": "working",
+            "termination_reason": "execution interrupted",
+            "target_phase_counts": {"working": 1},
+            "usage": fixture.fleet_state.usage.model_dump(mode="json"),
+        },
+    )
+
+    events = fixture.store.recover_event_tail()
+    cycle = next(event for event in events if event.event_type == "cycle_finished")
+    terminal = next(
+        event for event in events if event.event_type == "fleet_execution_finished"
+    )
+    assert cycle.payload["cycle_id"] == "cycle-2"
+    assert cycle.payload["completion_changes"][0]["to_status"] == "covered"
+    assert terminal.payload["fleet_phase"] == "working"
 
 
 def test_event_observer_runs_only_after_durable_append(tmp_path: Path) -> None:
@@ -691,6 +874,81 @@ def test_working_recovery_preserves_usage_and_bypasses_admission(
         assert recovered.unresolved_provider_attempt_ids == ()
     finally:
         recovered.close()
+
+
+def test_recovery_discards_candidates_but_preserves_recorded_evidence(
+    tmp_path: Path,
+) -> None:
+    unrecorded = _runtime(tmp_path / "unrecorded")
+    _enter_working(unrecorded)
+    unrecorded_candidates = EvidenceCandidateRegistry(
+        unrecorded.target_spec.target_task_id,
+        unrecorded.target_spec.source,
+    )
+    unrecorded_adapter = WorkerNavigationTools(
+        _EvidenceNavigator(),  # type: ignore[arg-type]
+        unrecorded_candidates,
+    )
+    candidate_result = unrecorded_adapter.inspect_file("service.py")
+    assert candidate_result["evidence_handle"]
+    create_checkpoint(
+        unrecorded.store,
+        unrecorded.target_spec,
+        unrecorded.target_state,
+        unrecorded.completion_state,
+        {},
+        {},
+    )
+
+    recovered_unrecorded = _recover(unrecorded)
+    try:
+        task_id = unrecorded.target_spec.target_task_id
+        assert recovered_unrecorded.evidence[task_id] == {}
+        assert recovered_unrecorded.target_states[task_id].evidence_refs == []
+    finally:
+        recovered_unrecorded.close()
+
+    recorded = _runtime(tmp_path / "recorded")
+    _enter_working(recorded)
+    recorded_evidence = {}
+    recorded_candidates = EvidenceCandidateRegistry(
+        recorded.target_spec.target_task_id,
+        recorded.target_spec.source,
+    )
+    recorded_adapter = WorkerNavigationTools(
+        _EvidenceNavigator(),  # type: ignore[arg-type]
+        recorded_candidates,
+    )
+    recorded_result = recorded_adapter.inspect_file("service.py")
+    candidate = recorded_candidates.resolve(recorded_result["evidence_handle"])
+    recorder = EvidenceRecorder(
+        recorded.target_spec,
+        recorded.target_state,
+        _EvidenceNavigator(),  # type: ignore[arg-type]
+        recorded_evidence,
+        recorded.store,
+    )
+    reference = recorder.record_evidence(candidate.kind, candidate.locator)
+    create_checkpoint(
+        recorded.store,
+        recorded.target_spec,
+        recorded.target_state,
+        recorded.completion_state,
+        recorded_evidence,
+        {},
+    )
+
+    recovered_recorded = _recover(recorded)
+    try:
+        task_id = recorded.target_spec.target_task_id
+        assert recovered_recorded.evidence[task_id] == {
+            reference.evidence_id: reference
+        }
+        assert recovered_recorded.target_states[task_id].evidence_refs == [
+            reference.evidence_id
+        ]
+    finally:
+        recovered_recorded.close()
 
 
 def test_invoked_provider_ambiguity_retains_conservative_hold(

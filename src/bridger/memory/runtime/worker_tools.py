@@ -9,9 +9,8 @@ from typing import Annotated
 from uuid import uuid4
 
 import orjson
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
-from bridger.contracts.enrichment import EnrichmentTargetType
 from bridger.contracts.memory.core import (
     CandidateArtifactRef,
     CompletionItemState,
@@ -42,13 +41,12 @@ from bridger.llm.models import (
 )
 from bridger.llm.tools import LLMTool, ToolExecutor
 from bridger.memory.persistence.durability import FleetRuntimeStore
-from bridger.navigation.navigator import MAX_RANGE_LINES, RepositoryNavigator
-from bridger.navigation.tools import (
-    NAVIGATION_TOOL_IDS,
-    _CommunityTargetReference,
-    _EdgeTargetReference,
-    build_navigation_tools,
+from bridger.memory.runtime.worker_navigation_tools import (
+    WORKER_REPOSITORY_TOOL_IDS,
+    EvidenceCandidateRegistry,
+    build_worker_navigation_tools,
 )
+from bridger.navigation.navigator import MAX_RANGE_LINES, RepositoryNavigator
 from bridger.repository.errors import RepositoryError
 
 MAX_ARTIFACT_BYTES = 1024 * 1024
@@ -57,8 +55,9 @@ MAX_WORKING_SUMMARY_CHARS = 8_000
 MAX_QUESTION_CHARS = 1_000
 MAX_OPEN_QUESTIONS = 20
 MAX_RESOLUTION_NOTE_CHARS = 4_000
+MAX_EVIDENCE_HANDLES = 20
 
-REPOSITORY_TOOL_IDS = NAVIGATION_TOOL_IDS
+REPOSITORY_TOOL_IDS = WORKER_REPOSITORY_TOOL_IDS
 TARGET_TOOL_IDS = (
     "list_target_artifacts",
     "read_target_artifact",
@@ -779,49 +778,11 @@ class _MoveArtifactArguments(_Arguments):
     expected_revision: int = Field(ge=1)
 
 
-class _GraphEntityEvidenceLocatorArguments(_Arguments):
-    target_type: EnrichmentTargetType
-    target_ref: str | _EdgeTargetReference | _CommunityTargetReference
-
-
 class _RecordEvidenceArguments(_Arguments):
-    kind: EvidenceKind
-    locator: (
-        FileEvidenceLocator
-        | SourceRangeEvidenceLocator
-        | SymbolEvidenceLocator
-        | _GraphEntityEvidenceLocatorArguments
+    evidence_handles: list[Annotated[str, Field(min_length=1)]] = Field(
+        min_length=1,
+        max_length=MAX_EVIDENCE_HANDLES,
     )
-
-    @model_validator(mode="after")
-    def validate_kind(self) -> _RecordEvidenceArguments:
-        expected = {
-            EvidenceKind.FILE: FileEvidenceLocator,
-            EvidenceKind.SOURCE_RANGE: SourceRangeEvidenceLocator,
-            EvidenceKind.SYMBOL: SymbolEvidenceLocator,
-            EvidenceKind.GRAPH_ENTITY: _GraphEntityEvidenceLocatorArguments,
-        }[self.kind]
-        if not isinstance(self.locator, expected):
-            raise ValueError("evidence kind does not match locator")
-        return self
-
-
-def _persisted_evidence_locator(locator: object) -> EvidenceLocator:
-    if isinstance(locator, _GraphEntityEvidenceLocatorArguments):
-        target_ref = (
-            locator.target_ref.model_dump()
-            if isinstance(locator.target_ref, BaseModel)
-            else locator.target_ref
-        )
-        return GraphEntityEvidenceLocator(
-            target_type=locator.target_type,
-            target_ref=target_ref,
-        )
-    assert isinstance(
-        locator,
-        (FileEvidenceLocator, SourceRangeEvidenceLocator, SymbolEvidenceLocator),
-    )
-    return locator
 
 
 class _UpdateCompletionArguments(_Arguments):
@@ -858,10 +819,18 @@ class WorkerToolRuntime:
         if unknown:
             raise ValueError(f"unknown configured worker tool: {sorted(unknown)[0]}")
         self._allowed = set(context.allowed_tool_ids)
-        self._navigation = build_navigation_tools(navigator)
+        self._evidence_candidates = EvidenceCandidateRegistry(
+            context.target_task_id,
+            context.source,
+        )
+        self._navigation = build_worker_navigation_tools(
+            navigator,
+            self._evidence_candidates,
+        )
         self._local = _build_local_tools(
             workspace,
             evidence_recorder,
+            self._evidence_candidates,
             completion_updater,
             progress_updater,
         )
@@ -885,6 +854,10 @@ class WorkerToolRuntime:
         """Return the stable exposed definitions after permission filtering."""
         return list(self._definitions)
 
+    def clear_transient_state(self) -> None:
+        """Discard cycle-local evidence candidates."""
+        self._evidence_candidates.clear()
+
     async def execute_operational(self, call: LLMToolCall) -> LLMToolResult:
         """Enforce permission again and dispatch one operational call."""
         if call.name not in self._allowed:
@@ -904,6 +877,7 @@ class WorkerToolRuntime:
 def _build_local_tools(
     workspace: TargetWorkspace,
     evidence_recorder: EvidenceRecorder,
+    evidence_candidates: EvidenceCandidateRegistry,
     completion_updater: CompletionStateUpdater,
     progress_updater: ProgressUpdater,
 ) -> ToolExecutor:
@@ -920,9 +894,11 @@ def _build_local_tools(
         LLMTool.bind(
             name="read_target_artifact",
             description=(
-                "Read one bounded current target-local Markdown artifact. "
-                "The path is already relative to the assigned target workspace; "
-                "do not repeat the target ID."
+                "Read an existing current target-local Markdown artifact. Use a path "
+                "returned by list_target_artifacts or a prior successful artifact "
+                "mutation. Paths are relative to the assigned target workspace; do "
+                "not repeat the target ID. If the artifact does not exist, create it "
+                "with write_target_artifact instead."
             ),
             arguments_type=_ReadArtifactArguments,
             handler=lambda value: workspace.read_target_artifact(
@@ -990,11 +966,17 @@ def _build_local_tools(
         ),
         LLMTool.bind(
             name="record_evidence",
-            description="Validate and record one durable repository evidence locator.",
+            description=(
+                "Select and durably record repository evidence inspected in the "
+                "current cycle. Pass one or more transient evidence handles returned "
+                "by evidence-bearing repository tools. Returns durable evidence IDs "
+                "for update_completion_item; do not reconstruct evidence locators."
+            ),
             arguments_type=_RecordEvidenceArguments,
-            handler=lambda value: evidence_recorder.record_evidence(
-                value.kind,
-                _persisted_evidence_locator(value.locator),
+            handler=lambda value: _record_evidence_candidates(
+                value.evidence_handles,
+                evidence_candidates,
+                evidence_recorder,
             ),
         ),
         LLMTool.bind(
@@ -1023,6 +1005,22 @@ def _build_local_tools(
         tools,
         handled_errors=(ValueError, KeyError, RepositoryError),
     )
+
+
+def _record_evidence_candidates(
+    handles: Sequence[str],
+    candidates: EvidenceCandidateRegistry,
+    recorder: EvidenceRecorder,
+) -> dict[str, list[EvidenceReference]]:
+    recorded: list[EvidenceReference] = []
+    recorded_ids: set[str] = set()
+    resolved = [candidates.resolve(handle) for handle in dict.fromkeys(handles)]
+    for candidate in resolved:
+        reference = recorder.record_evidence(candidate.kind, candidate.locator)
+        if reference.evidence_id not in recorded_ids:
+            recorded.append(reference)
+            recorded_ids.add(reference.evidence_id)
+    return {"recorded_evidence": recorded}
 
 
 def _finalization_definition() -> LLMToolDefinition:

@@ -205,6 +205,27 @@ def test_init_resume_skips_new_graph_enrichment_and_memory_binding(
     assert received_recovery == [recovery_spec]
 
 
+def test_old_worker_tool_profile_is_not_resume_compatible(tmp_path: Path) -> None:
+    configuration = resolve_init_configuration(
+        InitMode.TEST,
+        repository_root=tmp_path,
+    )
+    context = _context(tmp_path)
+    catalog, _definitions = harness.load_target_artifacts(
+        harness._target_artifacts_root(configuration)
+    )
+    old_contract = _fleet_spec(configuration, context, "old-tools").model_copy(
+        update={"default_permission_profile_id": "bridger-memory-tools-v1"}
+    )
+
+    assert not harness._is_resume_compatible(
+        old_contract,
+        configuration,
+        context,
+        catalog,
+    )
+
+
 def test_recovered_harness_reuses_authorities_without_stage_zero_or_one(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -408,7 +429,9 @@ def _fleet_spec(
     context: RepositoryContext,
     run_id: str,
 ) -> MemoryFleetSpec:
-    catalog, _definitions = harness.load_target_artifacts(harness._TARGETS_ROOT)
+    catalog, _definitions = harness.load_target_artifacts(
+        harness._target_artifacts_root(configuration)
+    )
     target_capacity = len(catalog.targets)
     return MemoryFleetSpec(
         fleet_run_id=run_id,
@@ -424,7 +447,7 @@ def _fleet_spec(
         runtime_profile_id="test-v1",
         default_worker_profile_id="bridger-worker-v1",
         default_reviewer_profile_id="bridger-reviewer-v1",
-        default_permission_profile_id="bridger-memory-tools-v1",
+        default_permission_profile_id="bridger-memory-tools-v2",
         fleet_budget=harness._fleet_budget_for(True, target_capacity=target_capacity),
         default_target_budget=harness._target_budget_for(True),
         max_concurrent_targets=target_capacity,

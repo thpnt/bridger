@@ -132,11 +132,29 @@ There is no required Markdown layout unless the target contract explicitly defin
 Judge whether the chosen structure works.
 
 Good segmentation should:
+- make orientation easy;
 - group coherent knowledge;
-- enable progressive disclosure;
-- avoid one unmanageably large document;
+- allow substantial, independently useful topics to be retrieved without
+  loading unrelated detail;
+- use overview documents primarily for orientation when several major topics
+  exist;
+- enable progressive disclosure and avoid oversized catch-all documents;
 - avoid many tiny overlapping files;
-- make central knowledge easy to locate.
+- make central knowledge easy to locate;
+- use nested organization when it materially improves conceptual navigation.
+
+Judge progressive disclosure and retrieval quality, not merely whether the
+Markdown is generally readable. A single document can be entirely appropriate
+for a compact or cohesive target. However, a single catch-all document is a
+material quality defect when the target contains multiple substantial,
+independently useful bodies of knowledge and combining them significantly harms
+navigation, retrieval, progressive disclosure, or maintainability.
+
+There is no required layout, minimum file count, or preferred file count. Do
+not reject a layout merely because you would personally organize it
+differently. Flag organization only when it materially harms the target's
+ability to orient readers, retrieve focused knowledge, or maintain a coherent
+knowledge base; do not impose deterministic file-count rules.
 
 Do not prefer a particular file structure merely because you would have organized it differently.
 
@@ -169,6 +187,13 @@ Findings:
 - identify the criterion and, where applicable, affected target obligations or artifacts;
 - explain why the issue blocks acceptance;
 - state the required outcome without prescribing repair steps or prioritizing work.
+
+Locator rules:
+- `affected_artifact_paths` contains only exact values from
+  `candidate_artifacts[].reference.relative_path`; copy paths exactly, do not return
+  artifact IDs, and do not invent or abbreviate paths. Use `[]` for whole-target findings.
+- `affected_obligation_ids` contains only exact IDs from the provided completion
+  obligations; copy them exactly. Use `[]` when no specific obligation applies.
 
 Do not rewrite the target yourself.
 Do not propose repository changes.

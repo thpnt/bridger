@@ -1,0 +1,34 @@
+schema_version: 1
+target_id: testing
+target_contract_version: test-v1
+activation: {mode: always}
+depends_on: []
+canonical_question: How does the repository establish correctness and how should a contributor validate a change?
+purpose: Provide a deliberately bounded verification model for diagnostic test runs.
+expected_abstraction: Test organization, levels, and practical validation commands.
+always_relevant_scope:
+  - Test frameworks and principal verification levels.
+  - Test organization and layout.
+  - Standard validation and test commands.
+conditional_scope: []
+exclusions:
+  - Complete domain behavior, production architecture, release mechanics beyond verification, and generic test-writing conventions.
+boundary_guidance:
+  - Own how correctness is established, not the complete behavior under test.
+investigation_expectations:
+  - Inspect test configuration, representative test levels, and test organization.
+  - Identify the standard validation and test commands from manifests and repository configuration.
+evidence_expectations:
+  - Use test source and configuration as primary evidence and manifest scripts for commands.
+output_quality_expectations:
+  - Be practical and repository-specific so a contributor can choose and run the relevant validation surfaces.
+completion_obligations:
+  - obligation_id: frameworks-test-levels
+    description: Identify test frameworks and principal test levels.
+    applicability: always
+  - obligation_id: test-organization
+    description: Explain test organization and layout.
+    applicability: always
+  - obligation_id: validation-commands
+    description: Identify standard validation and test commands.
+    applicability: always

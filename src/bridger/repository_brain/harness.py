@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,7 @@ from bridger.graph.enrichment import (
 )
 from bridger.graph.lifecycle import load_graph_snapshot, validate_graph_snapshot
 from bridger.init_pipeline import (
+    InitMode,
     InitRunConfiguration,
     ReasoningEffort,
     RepositoryBrainBuildError,
@@ -88,6 +90,7 @@ from bridger.repository_brain.token_usage import persist_token_usage_report
 
 _PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "prompts"
 _TARGETS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "default-targets"
+_TEST_TARGETS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "test-targets"
 _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS = 32_000
 _TEST_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS = 32_000
 _FULL_ACTIVE_CONTEXT_SOFT_LIMIT_TOKENS = 256_000
@@ -148,12 +151,12 @@ async def run_memory_harness(
     recovery_spec: MemoryFleetSpec | None = None,
 ) -> RepositoryBrainModelBuildResult:
     """Run the existing Layer 5 and memory stages through publication."""
-    catalog, definitions = load_target_artifacts(_TARGETS_ROOT)
+    catalog, definitions = load_target_artifacts(_target_artifacts_root(configuration))
     worker_profile, reviewer_profile = _profiles(
         profile, configuration.test_budgets, configuration.reasoning_effort
     )
     permissions = PermissionProfile(
-        profile_id="bridger-memory-tools-v1",
+        profile_id="bridger-memory-tools-v2",
         allowed_tool_ids=WORKER_TOOL_IDS,
     )
     target_budget = _target_budget_for(configuration.test_budgets)
@@ -360,6 +363,25 @@ async def run_memory_harness(
         active_error = error
         raise
     finally:
+        if store is not None:
+            try:
+                phase_counts = Counter(state.phase.value for state in target_states)
+                terminal_payload: dict[str, object] = {
+                    "fleet_phase": fleet_state.phase.value,
+                    "target_phase_counts": dict(phase_counts),
+                    "usage": fleet_state.usage.model_dump(mode="json"),
+                }
+                termination_reason = fleet_state.termination_reason
+                if termination_reason is None and active_error is not None:
+                    termination_reason = str(active_error)[:512]
+                if termination_reason is not None:
+                    terminal_payload["termination_reason"] = termination_reason
+                store.append_event("fleet_execution_finished", terminal_payload)
+            except BaseException as event_error:
+                if active_error is not None:
+                    active_error.add_note(
+                        f"fleet execution terminal trace failed: {event_error!r}"
+                    )
         if active_error is not None and store is not None:
             try:
                 persist_token_usage_report(
@@ -533,7 +555,7 @@ def discover_resumable_fleet(
     if not runtime_root.is_dir():
         return None
 
-    catalog, _definitions = load_target_artifacts(_TARGETS_ROOT)
+    catalog, _definitions = load_target_artifacts(_target_artifacts_root(configuration))
     candidates: list[MemoryFleetSpec] = []
     for run_root in sorted(path for path in runtime_root.iterdir() if path.is_dir()):
         spec_path = run_root / "fleet-spec.json"
@@ -658,7 +680,7 @@ def _is_resume_compatible(
     context: RepositoryContext,
     catalog: MemoryTargetCatalog,
 ) -> bool:
-    permissions_profile_id = "bridger-memory-tools-v1"
+    permissions_profile_id = "bridger-memory-tools-v2"
     return (
         spec.source.repository_id == context.repository_id
         and spec.source.repository_revision == context.revision
@@ -684,6 +706,13 @@ def _is_resume_compatible(
 
 def _runtime_profile_id(configuration: InitRunConfiguration) -> str:
     return "test-v1" if configuration.test_budgets else "full-v1"
+
+
+def _target_artifacts_root(configuration: InitRunConfiguration) -> Path:
+    """Select the catalog profile before the normal fleet is instantiated."""
+    if configuration.mode is InitMode.TEST:
+        return _TEST_TARGETS_ROOT
+    return _TARGETS_ROOT
 
 
 def _resolve_model_profile(configuration: InitRunConfiguration) -> LLMProfile:

@@ -111,16 +111,13 @@ A strong investigation should:
 
 ## Graph-guided navigation
 
-When beginning an investigation whose relevant repository area is not already known, first use the hydrated graph overview and graph navigation tools to orient. Treat the graph as a traversal map rather than a flat search index:
+When the relevant implementation area is unknown, use the hydrated graph overview and this investigation path:
 
-1. identify relevant central nodes, communities, entities, surprising connections, or suggested questions;
-2. progressively inspect bounded neighborhoods, communities, paths, or subgraphs as needed;
-3. bridge promising graph entities to their files and symbols;
-4. inspect the exact source implementation and record the evidence that supports your conclusions.
+`orient_repository` → `inspect_graph_node` / `inspect_graph_community` → `inspect_file` / `inspect_symbol` → exact source verification.
 
 The graph tells you where to look. Exact source establishes what the implementation means and does.
 
-Use direct repository, symbol, or source search when it is the cheaper or more precise route: for a known literal, configuration value, symbol, or concept; when graph data does not expose the needed information; or when graph-guided exploration leaves a question unanswered.
+When an exact file, symbol, literal, configuration value, or source location is already known, enter the workflow directly at that point. Use `find_symbol` for a known symbol name, `find_source_text` for concrete source text, and `read_source_range` for an exact known location.
 
 Do not perform graph calls merely to satisfy a routine. If the current obligation already identifies the exact file or symbol, inspect that evidence directly. Likewise, do not treat centrality, community membership, graph labels, or enrichment as semantic proof.
 
@@ -162,6 +159,8 @@ If documentation, tests, configuration, and implementation disagree, preserve th
 Central workflows or high-impact conclusions should normally be supported across the meaningful implementation chain rather than by one isolated location.
 
 Never fabricate evidence or claim to have inspected something you have not inspected.
+
+Repository inspection tools may return transient evidence handles for exact repository facts or source inspected during the current cycle. When that evidence supports a conclusion, pass the relevant handles to `record_evidence`. Do not reconstruct evidence locators yourself. Handles expire when the cycle ends; `record_evidence` returns durable `evidence_id` values that completion updates use. Graph evidence supports deterministic structural claims, while substantive behavioral claims still require implementation-level source evidence where applicable.
 
 # 6. Completion vocabulary
 
@@ -240,6 +239,22 @@ Do not create one file per completion criterion by default.
 
 Do not create arbitrary fragmentation.
 
+Treat the target folder as a small repository knowledge base, not merely as a
+place for one summary document. Substantial topics with independent retrieval
+value should normally be separated so future engineers and coding agents can
+retrieve focused knowledge without loading large amounts of unrelated detail.
+Nested directories are appropriate when they clarify meaningful conceptual
+groupings. A topic is often worth separating when it describes a substantial
+subsystem, workflow, or responsibility; is independently useful for future
+engineering; requires significant explanation; or forms a coherent
+implementation knowledge unit.
+
+For a non-trivial target, `overview.md` should primarily orient the reader and
+point toward major topics rather than automatically absorb all detailed
+knowledge. Do not keep appending to an early catch-all document merely because
+it already exists. A compact, cohesive target may still be best represented by
+one document.
+
 Split knowledge when doing so improves:
 - topic coherence;
 - navigability;
@@ -277,9 +292,20 @@ Before requesting finalization:
 2. verify that central claims are sufficiently grounded;
 3. verify that important unknowns and contradictions are explicit;
 4. verify that the target stays within its semantic ownership boundary;
-5. verify that the Markdown organization is coherent and navigable;
-6. remove unnecessary duplication and generic filler;
-7. ensure the artifacts represent your best current understanding of the pinned repository revision.
+5. reconsider the complete information architecture now that all
+   investigations have accumulated: split catch-all documents when progressive
+   disclosure would improve consumption, merge thin or repetitive documents,
+   move or rename artifacts when appropriate, and introduce meaningful
+   subdirectories when useful;
+6. verify that overview documents orient rather than absorb all detailed
+   knowledge, and that the Markdown organization is coherent and navigable;
+7. remove unnecessary duplication and generic filler;
+8. ensure the artifacts represent your best current understanding of the pinned repository revision.
+
+Artifact structure created during early obligation cycles is not fixed. The
+semantic completion contract defines what knowledge must be established;
+artifact organization determines how effectively that knowledge can later be
+consumed.
 
 # 11. Cycle termination
 

@@ -85,6 +85,7 @@ from bridger.memory import (
     WorkerToolRuntime,
     run_worker_cycle,
 )
+from bridger.memory.runtime.worker_navigation_tools import EvidenceCandidateRegistry
 from bridger.memory.runtime.worker_tools import (
     REPOSITORY_TOOL_IDS,
     WORKER_TOOL_IDS,
@@ -135,8 +136,11 @@ def test_complete_memory_worker_tool_surface_is_openai_strict_compatible(
     ]
 
     assert {tool["name"] for tool in emitted_tools} >= set(WORKER_TOOL_IDS)
-    assert REPOSITORY_TOOL_IDS == NAVIGATION_TOOL_IDS
-    assert {tool["name"] for tool in emitted_tools} >= set(NAVIGATION_TOOL_IDS)
+    assert REPOSITORY_TOOL_IDS != NAVIGATION_TOOL_IDS
+    assert tuple(tool["name"] for tool in emitted_tools[: len(WORKER_TOOL_IDS)]) == (
+        WORKER_TOOL_IDS
+    )
+    assert not set(NAVIGATION_TOOL_IDS) & {tool["name"] for tool in emitted_tools}
     assert all(tool["strict"] is True for tool in emitted_tools)
     for tool in emitted_tools:
         _assert_no_empty_schema_nodes(tool["parameters"])
@@ -186,7 +190,8 @@ def test_assembled_worker_request_combines_graph_strategy_context_and_tools(
     assert "Graph-guided navigation" in request.instructions
     assert "Repository graph overview" in request.instructions
     assert '"node_count":1' in request.instructions
-    assert {tool.name for tool in request.tools} >= set(NAVIGATION_TOOL_IDS)
+    assert {tool.name for tool in request.tools} >= set(REPOSITORY_TOOL_IDS)
+    assert not set(NAVIGATION_TOOL_IDS) & {tool.name for tool in request.tools}
 
 
 class CountingContextWindowManager(ContextWindowManager):
@@ -312,6 +317,25 @@ class WorkerFixture:
         client: DummyLLMClient | None = None,
         limits: WorkerRuntimeLimits | None = None,
     ) -> WorkerRunner:
+        tools = self.tool_runtime()
+        return WorkerRunner(
+            fleet_spec=self.fleet_spec,
+            fleet_state=self.fleet_state,
+            target_spec=self.target_spec,
+            target_state=self.target_state,
+            completion_state=self.completion_state,
+            context=self.context,
+            worker_profile=self.profile,
+            context_window_manager=self.manager,
+            llm_client=client or DummyLLMClient(responses),  # type: ignore[arg-type]
+            tools=tools,
+            evidence=self.evidence,
+            questions=self.questions,
+            coordinator=FleetExecutionCoordinator(),
+            limits=limits,
+        )
+
+    def tool_runtime(self) -> WorkerToolRuntime:
         workspace = TargetWorkspace(self.target_spec, self.target_state)
         evidence_recorder = EvidenceRecorder(
             self.target_spec,
@@ -331,7 +355,7 @@ class WorkerFixture:
             self.target_state,
             self.questions,
         )
-        tools = WorkerToolRuntime(
+        return WorkerToolRuntime(
             self.context,
             self.permissions,
             self.navigator,  # type: ignore[arg-type]
@@ -339,22 +363,6 @@ class WorkerFixture:
             evidence_recorder,
             completion_updater,
             progress_updater,
-        )
-        return WorkerRunner(
-            fleet_spec=self.fleet_spec,
-            fleet_state=self.fleet_state,
-            target_spec=self.target_spec,
-            target_state=self.target_state,
-            completion_state=self.completion_state,
-            context=self.context,
-            worker_profile=self.profile,
-            context_window_manager=self.manager,
-            llm_client=client or DummyLLMClient(responses),  # type: ignore[arg-type]
-            tools=tools,
-            evidence=self.evidence,
-            questions=self.questions,
-            coordinator=FleetExecutionCoordinator(),
-            limits=limits,
         )
 
 
@@ -511,6 +519,293 @@ def test_openai_schema_validation_errors_keep_existing_dispatch_behavior(
     assert fixture.target_state.usage.tool_calls == 1
     correction = json.loads(provider.responses.requests[1]["input"][0]["output"])
     assert correction["result"]["error"]["code"] == "invalid_arguments"
+
+
+def test_worker_repository_schemas_expose_only_semantic_arguments(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path, allowed_tools=WORKER_TOOL_IDS)
+    definitions = {
+        definition.name: definition for definition in fixture.tool_runtime().definitions
+    }
+
+    assert tuple(definitions) == (
+        *WORKER_TOOL_IDS,
+        "yield_cycle",
+        "request_finalization",
+    )
+    assert set(definitions["orient_repository"].input_schema["properties"]) == {"query"}
+    assert set(definitions["inspect_graph_node"].input_schema["properties"]) == {
+        "node_id"
+    }
+    assert set(definitions["find_symbol"].input_schema["properties"]) == {
+        "query",
+        "path",
+    }
+    assert set(definitions["find_source_text"].input_schema["properties"]) == {
+        "query",
+        "paths",
+    }
+    assert set(definitions["read_source_range"].input_schema["properties"]) == {
+        "path",
+        "start_line",
+        "end_line",
+    }
+    assert set(definitions["record_evidence"].input_schema["properties"]) == {
+        "evidence_handles"
+    }
+
+
+def test_worker_tool_validation_feedback_is_field_level_and_bounded(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path, allowed_tools=("read_source_range",))
+    runtime = fixture.tool_runtime()
+
+    missing = asyncio.run(
+        runtime.execute_operational(
+            _call("missing", "read_source_range", {"path": "service.py"})
+        )
+    )
+    inverted = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "inverted",
+                "read_source_range",
+                {"path": "service.py", "start_line": 5, "end_line": 2},
+            )
+        )
+    )
+
+    assert missing.error is not None
+    assert missing.error.code == "invalid_arguments"
+    assert "- start_line: Field required" in missing.error.message
+    assert "- end_line: Field required" in missing.error.message
+    assert len(missing.error.message) < 1_000
+    assert inverted.error is not None
+    assert inverted.error.code == "invalid_arguments"
+    assert "greater than or equal to start_line" in inverted.error.message
+
+
+def test_worker_repository_schemas_reject_hidden_retrieval_tuning(
+    tmp_path: Path,
+) -> None:
+    allowed = ("orient_repository", "find_source_text", "read_source_range")
+    fixture = _fixture(tmp_path, allowed_tools=allowed)
+    runtime = fixture.tool_runtime()
+    calls = [
+        _call("orient", "orient_repository", {"query": "runtime", "limit": 1}),
+        _call(
+            "source",
+            "find_source_text",
+            {"query": "runtime", "regex": True, "context_lines": 10},
+        ),
+        _call(
+            "range",
+            "read_source_range",
+            {
+                "path": "service.py",
+                "ranges": [{"start_line": 1, "end_line": 1}],
+                "max_bytes": 100,
+            },
+        ),
+    ]
+
+    results = [asyncio.run(runtime.execute_operational(call)) for call in calls]
+
+    assert all(result.error is not None for result in results)
+    assert all(
+        result.error.code == "invalid_arguments" for result in results if result.error
+    )
+
+
+def test_evidence_candidates_transition_to_existing_durable_evidence(
+    tmp_path: Path,
+) -> None:
+    allowed = ("read_source_range", "record_evidence", "update_completion_item")
+    fixture = _fixture(tmp_path, allowed_tools=allowed)
+    fixture.target_state.phase = TargetPhase.WORKING
+    runtime = fixture.tool_runtime()
+
+    inspected = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "inspect",
+                "read_source_range",
+                {"path": "service.py", "start_line": 1, "end_line": 1},
+            )
+        )
+    )
+
+    assert inspected.error is None
+    assert isinstance(inspected.output, dict)
+    handle = inspected.output["evidence_handle"]
+    assert isinstance(handle, str)
+    assert handle.startswith("evidence-candidate-")
+    assert "service.py" not in handle
+    assert fixture.evidence == {}
+    assert fixture.target_state.evidence_refs == []
+
+    recorded = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "record",
+                "record_evidence",
+                {"evidence_handles": [handle, handle]},
+            )
+        )
+    )
+
+    assert recorded.error is None
+    assert isinstance(recorded.output, dict)
+    references = recorded.output["recorded_evidence"]
+    assert isinstance(references, list)
+    assert len(references) == 1
+    evidence_id = references[0]["evidence_id"]
+    durable = fixture.evidence[evidence_id]
+    assert durable.kind is EvidenceKind.SOURCE_RANGE
+    assert durable.locator.model_dump(mode="json") == {
+        "path": "service.py",
+        "start_line": 1,
+        "end_line": 1,
+        "content_digest": "c" * 64,
+    }
+
+    completed = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "complete",
+                "update_completion_item",
+                {
+                    "obligation_id": "describe-runtime",
+                    "status": "covered",
+                    "resolution_note": "Grounded in exact source.",
+                    "evidence_refs": [evidence_id],
+                },
+            )
+        )
+    )
+
+    assert completed.error is None
+    assert fixture.completion_state.items[0].evidence_refs == [evidence_id]
+
+
+def test_evidence_candidates_are_cycle_local_but_recorded_evidence_deduplicates(
+    tmp_path: Path,
+) -> None:
+    allowed = ("read_source_range", "record_evidence")
+    fixture = _fixture(tmp_path, allowed_tools=allowed)
+    fixture.target_state.phase = TargetPhase.WORKING
+    first_runtime = fixture.tool_runtime()
+    first_inspection = asyncio.run(
+        first_runtime.execute_operational(
+            _call(
+                "inspect-first",
+                "read_source_range",
+                {"path": "service.py", "start_line": 1, "end_line": 1},
+            )
+        )
+    )
+    assert isinstance(first_inspection.output, dict)
+    first_handle = first_inspection.output["evidence_handle"]
+    first_recording = asyncio.run(
+        first_runtime.execute_operational(
+            _call(
+                "record-first",
+                "record_evidence",
+                {"evidence_handles": [first_handle]},
+            )
+        )
+    )
+    assert isinstance(first_recording.output, dict)
+    first_id = first_recording.output["recorded_evidence"][0]["evidence_id"]
+    first_runtime.clear_transient_state()
+
+    expired = asyncio.run(
+        first_runtime.execute_operational(
+            _call(
+                "record-expired",
+                "record_evidence",
+                {"evidence_handles": [first_handle]},
+            )
+        )
+    )
+    second_runtime = fixture.tool_runtime()
+    foreign = asyncio.run(
+        second_runtime.execute_operational(
+            _call(
+                "record-foreign",
+                "record_evidence",
+                {"evidence_handles": [first_handle]},
+            )
+        )
+    )
+    second_inspection = asyncio.run(
+        second_runtime.execute_operational(
+            _call(
+                "inspect-second",
+                "read_source_range",
+                {"path": "service.py", "start_line": 1, "end_line": 1},
+            )
+        )
+    )
+    assert isinstance(second_inspection.output, dict)
+    second_recording = asyncio.run(
+        second_runtime.execute_operational(
+            _call(
+                "record-second",
+                "record_evidence",
+                {"evidence_handles": [second_inspection.output["evidence_handle"]]},
+            )
+        )
+    )
+
+    assert expired.error is not None
+    assert expired.error.code == "tool_execution_error"
+    assert "Reinspect" in expired.error.message
+    assert foreign.error is not None
+    assert foreign.error.code == "tool_execution_error"
+    assert isinstance(second_recording.output, dict)
+    assert second_recording.output["recorded_evidence"][0]["evidence_id"] == first_id
+    assert fixture.target_state.evidence_refs == [first_id]
+    assert len(fixture.evidence) == 1
+
+
+def test_evidence_candidate_binding_rejects_another_target_source() -> None:
+    origin = EvidenceCandidateRegistry("task-1", _SOURCE)
+    handle = origin.register(
+        EvidenceKind.FILE,
+        FileEvidenceLocator(path="service.py"),
+    )
+    foreign = EvidenceCandidateRegistry(
+        "task-2",
+        _SOURCE.model_copy(update={"repository_revision": "b" * 40}),
+    )
+    foreign._candidates[handle] = origin.resolve(handle)
+
+    with pytest.raises(ValueError, match="another target/source"):
+        foreign.resolve(handle)
+
+
+def test_local_artifact_and_worker_prompt_describe_new_handoffs(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, allowed_tools=WORKER_TOOL_IDS)
+    definitions = {
+        definition.name: definition for definition in fixture.tool_runtime().definitions
+    }
+    prompt = (
+        Path(__file__).resolve().parents[2]
+        / "src/bridger/memory/prompts/worker/system.md"
+    ).read_text(encoding="utf-8")
+
+    read_description = definitions["read_target_artifact"].description
+    assert "list_target_artifacts" in read_description
+    assert "write_target_artifact" in read_description
+    assert "do not repeat the target ID" in read_description
+    assert "orient_repository" in prompt
+    assert "inspect_graph_node" in prompt
+    assert "find_source_text" in prompt
+    assert "transient evidence handles" in prompt
+    assert "Do not reconstruct evidence locators" in prompt
 
 
 def test_redundant_target_prefix_returns_in_band_error_and_worker_continues(
@@ -731,17 +1026,12 @@ def test_uncorrelatable_openai_tool_call_remains_fatal(
     assert runner.last_interruption.category == "provider"
 
 
-def test_yield_preserves_all_durable_progress_domains(tmp_path: Path) -> None:
+def test_yield_preserves_artifact_completion_and_summary_progress(
+    tmp_path: Path,
+) -> None:
     fixture = _fixture(tmp_path)
     runner = fixture.runner(
         [
-            _response(
-                _call(
-                    "evidence",
-                    "record_evidence",
-                    {"kind": "file", "locator": {"path": "service.py"}},
-                )
-            ),
             _response(
                 _call(
                     "artifact",
@@ -773,7 +1063,6 @@ def test_yield_preserves_all_durable_progress_domains(tmp_path: Path) -> None:
     assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
     assert fixture.target_state.phase is TargetPhase.SCHEDULED
     assert fixture.target_state.artifact_refs[0].relative_path == "progress.md"
-    assert len(fixture.target_state.evidence_refs) == 1
     assert fixture.completion_state.items[0].status is CompletionStatus.COVERED
     assert fixture.target_state.working_summary == "Continue from the next obligation."
 

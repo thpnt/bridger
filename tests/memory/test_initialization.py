@@ -55,6 +55,9 @@ _DEFAULT_TARGETS_ROOT = (
     / "memory"
     / "default-targets"
 )
+_TEST_TARGETS_ROOT = (
+    Path(__file__).resolve().parents[2] / "src" / "bridger" / "memory" / "test-targets"
+)
 _SHIPPED_OBLIGATION_IDS = {
     "repository": [
         "repository-purpose",
@@ -339,6 +342,56 @@ def test_shipped_target_bundle_has_versioned_granular_contracts() -> None:
     }
     assert conditional
     assert all(condition_hint for condition_hint in conditional.values())
+
+
+def test_test_target_bundle_has_four_targets_and_three_obligations_each() -> None:
+    catalog, definitions = load_target_artifacts(_TEST_TARGETS_ROOT)
+
+    assert catalog.catalog_id == "bridger-v0-memory-test"
+    assert [entry.target_id for entry in catalog.targets] == [
+        "repository",
+        "architecture",
+        "business-logic",
+        "testing",
+    ]
+    assert [definition.target_id for definition in definitions] == [
+        "repository",
+        "architecture",
+        "business-logic",
+        "testing",
+    ]
+    assert all(
+        definition.target_contract_version == "test-v1"
+        and len(definition.completion_obligations) == 3
+        for definition in definitions
+    )
+    assert {
+        definition.target_id: [
+            obligation.obligation_id for obligation in definition.completion_obligations
+        ]
+        for definition in definitions
+    } == {
+        "repository": [
+            "repository-purpose",
+            "applications-packages-workspaces",
+            "entry-surfaces",
+        ],
+        "architecture": [
+            "runtime-entrypoints",
+            "runtime-components",
+            "execution-paths",
+        ],
+        "business-logic": [
+            "domain-concepts",
+            "domain-workflows",
+            "rules-invariants",
+        ],
+        "testing": [
+            "frameworks-test-levels",
+            "test-organization",
+            "validation-commands",
+        ],
+    }
 
 
 def test_static_target_artifacts_reject_duplicates_and_version_mismatch(
@@ -679,6 +732,36 @@ def test_shipped_contracts_materialize_every_obligation_independently(
     )
     assert architecture.items[1].status is CompletionStatus.UNINVESTIGATED
     assert len(architecture.items) == len(_SHIPPED_OBLIGATION_IDS["architecture"])
+
+
+def test_test_bundle_initial_state_has_four_targets_and_three_obligations(
+    tmp_path: Path,
+    upstream: tuple[RepositoryContext, FileIndex, SymbolIndex, GraphBuildResult],
+) -> None:
+    catalog, definitions = load_target_artifacts(_TEST_TARGETS_ROOT)
+    spec = _bind(tmp_path, upstream, catalog, definitions)
+
+    _, task_specs, task_states, completion_states = initialize_fleet(
+        spec,
+        catalog,
+        definitions,
+    )
+
+    assert [task.target_id for task in task_specs] == [
+        "repository",
+        "architecture",
+        "business-logic",
+        "testing",
+    ]
+    assert len(task_specs) == len(task_states) == len(completion_states) == 4
+    assert all(len(state.items) == 3 for state in completion_states)
+    assert all(
+        item.status is CompletionStatus.UNINVESTIGATED
+        and item.resolution_note is None
+        and item.evidence_refs == []
+        for state in completion_states
+        for item in state.items
+    )
 
 
 @pytest.mark.parametrize("failure", ["inactive", "invalid", "cycle"])

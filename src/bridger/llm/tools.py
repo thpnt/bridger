@@ -98,10 +98,7 @@ class ToolExecutor:
             return _failed_result(
                 call,
                 code="invalid_arguments",
-                message=(
-                    f"Invalid arguments for {call.name}: "
-                    f"{error.error_count()} validation error(s)"
-                ),
+                message=_validation_error_message(call.name, error),
             )
 
         try:
@@ -144,6 +141,19 @@ def _error_message(error: Exception) -> str:
     if isinstance(error, KeyError) and error.args:
         return str(error.args[0])
     return str(error) or type(error).__name__
+
+
+def _validation_error_message(tool_name: str, error: ValidationError) -> str:
+    summaries: list[str] = []
+    validation_errors = error.errors(include_input=False, include_url=False)
+    for item in validation_errors[:5]:
+        location = ".".join(str(part) for part in item["loc"]) or "arguments"
+        message = str(item["msg"]).removeprefix("Value error, ")[:200]
+        summaries.append(f"- {location}: {message}")
+    remaining = len(validation_errors) - len(summaries)
+    if remaining > 0:
+        summaries.append(f"- ...: {remaining} additional validation error(s)")
+    return f"Invalid arguments for {tool_name}:\n" + "\n".join(summaries)
 
 
 __all__ = ["LLMTool", "ToolExecutor"]

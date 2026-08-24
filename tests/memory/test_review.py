@@ -19,7 +19,7 @@ from bridger.contracts.memory.review import (
     ReviewVerdict,
     TargetReviewModelResult,
 )
-from bridger.llm.errors import LLMConnectionError
+from bridger.llm.errors import LLMConnectionError, LLMStructuredOutputError
 from bridger.llm.models import LLMOperation, LLMResponse, LLMUsage
 from bridger.llm.testing.dummy import DummyLLMClient
 from bridger.memory import (
@@ -82,8 +82,8 @@ def test_needs_work_persists_runtime_findings_and_routes_to_repair(
         findings=[
             ReviewFindingDraft(
                 criterion_id="runtime-composition",
-                affected_artifact_refs=[
-                    fixture.target_state.artifact_refs[0].artifact_id
+                affected_artifact_paths=[
+                    fixture.target_state.artifact_refs[0].relative_path
                 ],
                 message="The central runtime path is only named.",
                 required_outcome=(
@@ -111,6 +111,9 @@ def test_needs_work_persists_runtime_findings_and_routes_to_repair(
     assert finding.required_outcome == (
         "The artifact explains the path from bootstrap to execution."
     )
+    assert finding.affected_artifact_refs == [
+        fixture.target_state.artifact_refs[0].artifact_id
+    ]
     assert (
         resolve_review_verdict(
             fixture.store,
@@ -119,6 +122,119 @@ def test_needs_work_persists_runtime_findings_and_routes_to_repair(
         )
         == verdict
     )
+
+
+def test_unknown_artifact_path_retries_and_commits_only_valid_review(
+    tmp_path: Path,
+) -> None:
+    fixture, request = _ready_for_review(tmp_path)
+    valid_path = fixture.target_state.artifact_refs[0].relative_path
+    client = _clients(
+        _needs_work_result("does-not-exist.md"),
+        _needs_work_result(valid_path),
+    )
+
+    verdict = _run_review(fixture, client)
+
+    assert len(client.requests) == 2
+    assert fixture.target_state.usage.model_calls == 2
+    assert fixture.target_state.usage.input_tokens == 40
+    assert fixture.target_state.usage.output_tokens == 10
+    assert len(verdict.finding_refs) == 1
+    finding = resolve_review_finding(
+        fixture.store,
+        fixture.target_spec,
+        verdict.finding_refs[0].finding_id,
+    )
+    assert finding.affected_artifact_refs == [
+        fixture.target_state.artifact_refs[0].artifact_id
+    ]
+    events = fixture.store.recover_event_tail()
+    assert sum(event.event_type == "review_completed" for event in events) == 1
+
+
+def test_unknown_obligation_id_retries_and_commits_only_valid_review(
+    tmp_path: Path,
+) -> None:
+    fixture, _ = _ready_for_review(tmp_path)
+    valid_path = fixture.target_state.artifact_refs[0].relative_path
+    client = _clients(
+        _needs_work_result(valid_path, obligation_ids=["not-a-real-obligation"]),
+        _needs_work_result(valid_path),
+    )
+
+    verdict = _run_review(fixture, client)
+
+    assert len(client.requests) == 2
+    assert fixture.target_state.usage.model_calls == 2
+    assert fixture.target_state.usage.input_tokens == 40
+    assert fixture.target_state.usage.output_tokens == 10
+    assert len(verdict.finding_refs) == 1
+    events = fixture.store.recover_event_tail()
+    assert sum(event.event_type == "review_completed" for event in events) == 1
+
+
+def test_exhausted_malformed_reviewer_output_remains_recoverable(
+    tmp_path: Path,
+) -> None:
+    fixture, request = _ready_for_review(tmp_path)
+    original_artifacts = fixture.target_state.artifact_refs.copy()
+    client = _clients(*[_needs_work_result("does-not-exist.md") for _ in range(3)])
+
+    with pytest.raises(LLMStructuredOutputError, match="unknown candidate artifact"):
+        _run_review(fixture, client)
+
+    assert len(client.requests) == 3
+    assert fixture.target_state.phase is TargetPhase.REVIEWING
+    assert (
+        fixture.target_state.pending_finalization_request_ref
+        == request.finalization_request_id
+    )
+    assert fixture.target_state.artifact_refs == original_artifacts
+    assert fixture.target_state.usage.model_calls == 3
+    assert fixture.target_state.usage.input_tokens == 60
+    assert fixture.target_state.usage.output_tokens == 15
+    assert (
+        resolve_review_verdict(
+            fixture.store,
+            fixture.target_spec,
+            request.finalization_request_id,
+        )
+        is None
+    )
+    findings = fixture.store.paths.target_root(fixture.target_spec) / "review-findings"
+    assert list(findings.glob("*.json")) == []
+    events = fixture.store.recover_event_tail()
+    assert sum(event.event_type == "review_completed" for event in events) == 0
+
+    verdict = _run_review(fixture, _client(_pass_result()))
+
+    assert verdict.verdict is ReviewVerdict.PASS
+
+
+def test_whole_target_finding_allows_empty_locator_lists(tmp_path: Path) -> None:
+    fixture, _ = _ready_for_review(tmp_path)
+    result = TargetReviewModelResult(
+        outcome=ReviewVerdict.NEEDS_WORK,
+        summary="The target lacks a coherent through-line.",
+        findings=[
+            ReviewFindingDraft(
+                criterion_id="coherence",
+                message="The target is internally inconsistent.",
+                required_outcome="The complete target is internally coherent.",
+            )
+        ],
+    )
+
+    verdict = _run_review(fixture, _client(result))
+
+    finding = resolve_review_finding(
+        fixture.store,
+        fixture.target_spec,
+        verdict.finding_refs[0].finding_id,
+    )
+    assert finding.affected_artifact_refs == []
+    assert finding.affected_obligation_ids == []
 
 
 def test_duplicate_review_reuses_one_authoritative_verdict(tmp_path: Path) -> None:
@@ -522,17 +638,52 @@ def _client(
     input_tokens: int = 20,
     output_tokens: int = 5,
 ) -> DummyLLMClient:
-    response: LLMResponse[BaseModel] = LLMResponse(
-        structured_output=result,
-        usage=LLMUsage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        ),
-        provider="test-provider",
-        model="review-model",
-        response_id="response-1",
+    return _clients(
+        result,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
-    return DummyLLMClient([response])
+
+
+def _clients(
+    *results: TargetReviewModelResult,
+    input_tokens: int = 20,
+    output_tokens: int = 5,
+) -> DummyLLMClient:
+    responses: list[LLMResponse[BaseModel]] = [
+        LLMResponse(
+            structured_output=result,
+            usage=LLMUsage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            ),
+            provider="test-provider",
+            model="review-model",
+            response_id=f"response-{index}",
+        )
+        for index, result in enumerate(results, start=1)
+    ]
+    return DummyLLMClient(responses)
+
+
+def _needs_work_result(
+    artifact_path: str,
+    *,
+    obligation_ids: list[str] | None = None,
+) -> TargetReviewModelResult:
+    return TargetReviewModelResult(
+        outcome=ReviewVerdict.NEEDS_WORK,
+        summary="The architecture explanation is too shallow.",
+        findings=[
+            ReviewFindingDraft(
+                criterion_id="runtime-composition",
+                affected_artifact_paths=[artifact_path],
+                affected_obligation_ids=obligation_ids or [],
+                message="The central runtime path is only named.",
+                required_outcome="The artifact explains the central runtime path.",
+            )
+        ],
+    )
 
 
 def _reenter_working(fixture: RuntimeFixture) -> None:

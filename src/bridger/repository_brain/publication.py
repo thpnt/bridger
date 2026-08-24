@@ -39,6 +39,8 @@ def publish_repository_brain(
         "accepted_memory_fleet_result_id": (
             accepted_fleet.accepted_memory_fleet_result_id
         ),
+        "memory_target_catalog_id": accepted_fleet.target_catalog_id,
+        "memory_target_catalog_version": accepted_fleet.target_catalog_version,
         "memory_output_root": str(output_root),
         "accepted_target_result_refs": list(accepted_fleet.accepted_target_result_refs),
     }

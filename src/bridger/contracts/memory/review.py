@@ -33,10 +33,32 @@ class ReviewFindingDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     criterion_id: str = Field(min_length=1)
-    affected_artifact_refs: list[str] = Field(default_factory=list)
-    affected_obligation_ids: list[str] = Field(default_factory=list)
+    affected_artifact_paths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Exact candidate relative paths from candidate_artifacts[].reference."
+            "relative_path; copy them exactly. May be empty for a whole-target "
+            "finding."
+        ),
+    )
+    affected_obligation_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Exact completion-obligation IDs provided for this target; copy them "
+            "exactly. May be empty when no specific obligation applies."
+        ),
+    )
     message: str = Field(min_length=1)
     required_outcome: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_locator_uniqueness(self) -> ReviewFindingDraft:
+        """Keep model-provided locators unambiguous before runtime resolution."""
+        if len(self.affected_artifact_paths) != len(set(self.affected_artifact_paths)):
+            raise ValueError("affected artifact paths must be unique")
+        if len(self.affected_obligation_ids) != len(set(self.affected_obligation_ids)):
+            raise ValueError("affected obligation IDs must be unique")
+        return self
 
 
 class TargetReviewModelResult(BaseModel):

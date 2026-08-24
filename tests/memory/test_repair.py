@@ -264,7 +264,7 @@ def test_review_failure_reenters_stage_7_before_reviewing_again(
     rejected_verdict = review_helpers._run_review(
         fixture,
         review_helpers._client(
-            _needs_work_result(fixture.target_state.artifact_refs[0].artifact_id)
+            _needs_work_result(fixture.target_state.artifact_refs[0].relative_path)
         ),
     )
     original_finding = rejected_verdict.finding_refs[0]
@@ -471,14 +471,14 @@ def _worker_profile() -> WorkerProfile:
     )
 
 
-def _needs_work_result(artifact_id: str) -> TargetReviewModelResult:
+def _needs_work_result(artifact_path: str) -> TargetReviewModelResult:
     return TargetReviewModelResult(
         outcome=ReviewVerdict.NEEDS_WORK,
         summary="The central execution path is missing.",
         findings=[
             ReviewFindingDraft(
                 criterion_id="execution-paths",
-                affected_artifact_refs=[artifact_id],
+                affected_artifact_paths=[artifact_path],
                 affected_obligation_ids=["describe-architecture"],
                 message="The central execution path is missing.",
                 required_outcome="The artifact explains the central execution path.",

@@ -80,6 +80,16 @@ _EVENT_REQUIRED_KEYS: dict[str, frozenset[str]] = {
     "phase_transition": frozenset({"from_phase", "to_phase"}),
     "context_hydrated": frozenset(),
     "cycle_started": frozenset({"usage_delta"}),
+    "cycle_finished": frozenset(
+        {
+            "cycle_id",
+            "cycle_number",
+            "outcome",
+            "focus",
+            "usage_delta",
+            "completion_changes",
+        }
+    ),
     "model_attempt_started": frozenset({"attempt_id"}),
     "model_attempt_completed": frozenset({"attempt_id"}),
     "model_attempt_failed": frozenset({"attempt_id"}),
@@ -212,6 +222,9 @@ _EVENT_REQUIRED_KEYS: dict[str, frozenset[str]] = {
     ),
     "runtime_error_recorded": frozenset({"error_id"}),
     "recovery_reset": frozenset({"from_phase", "to_phase"}),
+    "fleet_execution_finished": frozenset(
+        {"fleet_phase", "target_phase_counts", "usage"}
+    ),
 }
 
 
@@ -253,6 +266,7 @@ class _ProviderReservation(BaseModel):
     input_token_reservation: int = Field(ge=0)
     output_token_reservation: int = Field(ge=0)
     state: str = Field(pattern=r"^(prepared|invoked)$")
+    trace_context: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class RuntimePaths:
@@ -1011,6 +1025,7 @@ class FleetRuntimeStore:
         output_tokens: int,
         cycle_start: bool,
         repair: bool = False,
+        trace_context: Mapping[str, object] | None = None,
     ) -> str:
         """Charge a model attempt and persist its prepared budget reservation."""
         with self.state_locks(target_spec.target_task_id):
@@ -1028,6 +1043,9 @@ class FleetRuntimeStore:
                 input_token_reservation=input_tokens,
                 output_token_reservation=output_tokens,
                 state="prepared",
+                trace_context=_JSON_VALUE_ADAPTER.validate_python(
+                    dict(trace_context or {})
+                ),
             )
             delta = {"model_calls": 1}
             if cycle_start:
@@ -1045,7 +1063,10 @@ class FleetRuntimeStore:
                         reservation
                     )
                 },
-                payload={"attempt_id": attempt_id},
+                payload={
+                    "attempt_id": attempt_id,
+                    **dict(trace_context or {}),
+                },
                 phase=TargetPhase.WORKING if cycle_start else None,
             )
             return attempt_id
@@ -1056,6 +1077,7 @@ class FleetRuntimeStore:
         *,
         input_tokens: int,
         output_tokens: int,
+        trace_context: Mapping[str, object] | None = None,
     ) -> str:
         """Charge and reserve one fleet-only provider invocation."""
         with self.state_locks():
@@ -1070,6 +1092,9 @@ class FleetRuntimeStore:
                 input_token_reservation=input_tokens,
                 output_token_reservation=output_tokens,
                 state="prepared",
+                trace_context=_JSON_VALUE_ADAPTER.validate_python(
+                    dict(trace_context or {})
+                ),
             )
             after_fleet = fleet_state.model_copy(deep=True)
             after_fleet.usage.model_calls += 1
@@ -1089,6 +1114,7 @@ class FleetRuntimeStore:
                 event_type="usage_delta",
                 payload={
                     "attempt_id": attempt_id,
+                    **dict(trace_context or {}),
                     "usage_delta": {"model_calls": 1},
                 },
             )
@@ -1104,7 +1130,11 @@ class FleetRuntimeStore:
         _atomic_write_model(self.provider_reservation_path(attempt_id), invoked)
         self.append_event(
             "model_attempt_started",
-            {"attempt_id": attempt_id},
+            {
+                "attempt_id": attempt_id,
+                "provider_attempt": 1,
+                **reservation.trace_context,
+            },
             target_task_id=reservation.target_task_id,
             operation_id=attempt_id,
         )
@@ -1121,6 +1151,7 @@ class FleetRuntimeStore:
         cache_write_tokens: int = 0,
         output_tokens: int = 0,
         failed: bool = False,
+        trace_payload: Mapping[str, object] | None = None,
     ) -> None:
         """Charge reported tokens and remove a definitive reservation."""
         reservation_path = self.provider_reservation_path(attempt_id)
@@ -1139,7 +1170,11 @@ class FleetRuntimeStore:
                 "model_attempt_failed" if failed else "model_attempt_completed"
             ),
             deletions=[reservation_path],
-            payload={"attempt_id": reservation.attempt_id},
+            payload={
+                "attempt_id": reservation.attempt_id,
+                **reservation.trace_context,
+                **dict(trace_payload or {}),
+            },
             operation_id=f"settle-{attempt_id}",
             allow_budget_overage=True,
         )
@@ -1154,6 +1189,7 @@ class FleetRuntimeStore:
         cache_write_tokens: int = 0,
         output_tokens: int = 0,
         failed: bool = False,
+        trace_payload: Mapping[str, object] | None = None,
     ) -> None:
         """Charge tokens and settle one fleet-only provider reservation."""
         reservation_path = self.provider_reservation_path(attempt_id)
@@ -1172,7 +1208,11 @@ class FleetRuntimeStore:
                 "model_attempt_failed" if failed else "model_attempt_completed"
             ),
             deletions=[reservation_path],
-            payload={"attempt_id": reservation.attempt_id},
+            payload={
+                "attempt_id": reservation.attempt_id,
+                **reservation.trace_context,
+                **dict(trace_payload or {}),
+            },
             operation_id=f"settle-{attempt_id}",
             allow_budget_overage=True,
         )

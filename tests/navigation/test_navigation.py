@@ -20,6 +20,14 @@ from bridger.contracts.enrichment import (
     GraphEnrichmentOverlay,
 )
 from bridger.contracts.graph import GraphBuildResult, GraphConstructionConfig
+from bridger.contracts.memory.core import SourceBinding
+from bridger.contracts.memory.worker_cycle import (
+    EvidenceKind,
+    FileEvidenceLocator,
+    GraphEntityEvidenceLocator,
+    SourceRangeEvidenceLocator,
+    SymbolEvidenceLocator,
+)
 from bridger.contracts.symbols import SymbolIndex, SymbolRecord, summarize_symbols
 from bridger.graph.intelligence import build_graph_intelligence
 from bridger.graph.lifecycle import (
@@ -39,6 +47,11 @@ from bridger.llm.models import (
 from bridger.llm.profiles import LLMProfile, RetryPolicy
 from bridger.llm.providers.openai import OpenAILLMClient
 from bridger.memory import build_graph_overview
+from bridger.memory.runtime.worker_navigation_tools import (
+    WORKER_REPOSITORY_TOOL_IDS,
+    EvidenceCandidateRegistry,
+    build_worker_navigation_tools,
+)
 from bridger.navigation import RepositoryNavigator, build_navigation_tools
 from bridger.navigation.tools import NAVIGATION_TOOL_IDS
 from bridger.repository.errors import SourceReadDeniedError
@@ -398,6 +411,197 @@ def test_navigation_tool_set_is_explicit_schema_derived_and_authority_bound(
         "overlay",
     ):
         assert internal_authority not in serialized_schemas
+
+
+def test_worker_navigation_surface_is_distinct_and_graph_node_is_composed(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    navigator = RepositoryNavigator(context, file_index, symbol_index, graph_build)
+    candidates = _evidence_candidates(context, graph_build)
+    executor = build_worker_navigation_tools(navigator, candidates)
+
+    result = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="inspect-service",
+                name="inspect_graph_node",
+                arguments={"node_id": "service"},
+            )
+        )
+    )
+
+    assert tuple(definition.name for definition in executor.definitions) == (
+        WORKER_REPOSITORY_TOOL_IDS
+    )
+    assert not set(NAVIGATION_TOOL_IDS) & set(WORKER_REPOSITORY_TOOL_IDS)
+    assert result.error is None
+    assert isinstance(result.output, dict)
+    assert result.output["node"]["target_ref"] == "service"
+    relationships = result.output["relationships"]
+    assert {node["target_ref"] for node in relationships["neighboring_nodes"]} == {
+        "file",
+        "run",
+    }
+    assert result.output["source_bridges"]["files"][0]["path"] == "service.py"
+    assert [
+        symbol["symbol_id"] for symbol in result.output["source_bridges"]["symbols"]
+    ] == ["symbol-service"]
+    candidate = candidates.resolve(result.output["evidence_handle"])
+    assert candidate.kind is EvidenceKind.GRAPH_ENTITY
+    assert candidate.locator == GraphEntityEvidenceLocator(
+        target_type="node",
+        target_ref="service",
+    )
+
+
+def test_worker_community_composition_retains_exact_durable_identity(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, structural = layer6_state
+    navigator = RepositoryNavigator(context, file_index, symbol_index, graph_build)
+    candidates = _evidence_candidates(context, graph_build)
+    executor = build_worker_navigation_tools(navigator, candidates)
+    community_id = min(structural["communities"])
+
+    result = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="inspect-community",
+                name="inspect_graph_community",
+                arguments={"community_id": community_id},
+            )
+        )
+    )
+
+    assert result.error is None
+    assert isinstance(result.output, dict)
+    assert result.output["members"]
+    assert "internal_relationships" in result.output
+    assert "cross_community_relationships" in result.output
+    candidate = candidates.resolve(result.output["evidence_handle"])
+    assert candidate.kind is EvidenceKind.GRAPH_ENTITY
+    assert candidate.locator == GraphEntityEvidenceLocator(
+        target_type="community",
+        target_ref={
+            "community_id": community_id,
+            "member_signature": structural["community_member_signatures"][community_id],
+        },
+    )
+
+
+def test_worker_source_bridges_create_only_inspection_candidates(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    navigator = RepositoryNavigator(context, file_index, symbol_index, graph_build)
+    candidates = _evidence_candidates(context, graph_build)
+    executor = build_worker_navigation_tools(navigator, candidates)
+
+    orientation = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="orient",
+                name="orient_repository",
+                arguments={"query": "Service"},
+            )
+        )
+    )
+    file_result = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="file",
+                name="inspect_file",
+                arguments={"path": "service.py"},
+            )
+        )
+    )
+    symbol_result = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="symbol",
+                name="inspect_symbol",
+                arguments={"symbol_id": "symbol-run"},
+            )
+        )
+    )
+    source_search = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="search",
+                name="find_source_text",
+                arguments={"query": "needle"},
+            )
+        )
+    )
+    source_result = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="source",
+                name="read_source_range",
+                arguments={"path": "service.py", "start_line": 5, "end_line": 6},
+            )
+        )
+    )
+
+    assert isinstance(orientation.output, dict)
+    assert "evidence_handle" not in orientation.output
+    assert orientation.output["graph_nodes"]
+    assert isinstance(source_search.output, list)
+    assert all("evidence_handle" not in match for match in source_search.output)
+    assert isinstance(file_result.output, dict)
+    assert candidates.resolve(file_result.output["evidence_handle"]).locator == (
+        FileEvidenceLocator(path="service.py")
+    )
+    assert isinstance(symbol_result.output, dict)
+    assert candidates.resolve(symbol_result.output["evidence_handle"]).locator == (
+        SymbolEvidenceLocator(symbol_id="symbol-run")
+    )
+    assert isinstance(source_result.output, dict)
+    assert "content_digest" not in source_result.output
+    source_candidate = candidates.resolve(source_result.output["evidence_handle"])
+    expected_source = navigator.read_file_ranges("service.py", [(5, 6)])[0]
+    assert source_candidate.locator == SourceRangeEvidenceLocator(
+        path="service.py",
+        start_line=5,
+        end_line=6,
+        content_digest=expected_source.content_digest,
+    )
+
+
+def test_worker_path_trace_uses_actual_edge_directions_without_evidence_handle(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    navigator = RepositoryNavigator(context, file_index, symbol_index, graph_build)
+    executor = build_worker_navigation_tools(
+        navigator,
+        _evidence_candidates(context, graph_build),
+    )
+
+    result = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="path",
+                name="trace_graph_path",
+                arguments={
+                    "source_node_id": "helper",
+                    "target_node_id": "service",
+                },
+            )
+        )
+    )
+
+    assert result.error is None
+    assert isinstance(result.output, dict)
+    assert "evidence_handle" not in result.output
+    assert {
+        (
+            edge["deterministic"]["source_node_id"],
+            edge["deterministic"]["target_node_id"],
+        )
+        for edge in result.output["edges"]
+    } == {("service", "run"), ("run", "helper")}
 
 
 def test_graph_overview_reuses_the_persisted_graph_snapshot(
@@ -1086,6 +1290,20 @@ def test_openai_unsupported_model_ignores_cache_intent_without_changing_request(
 
 class _StructuredAnswer(BaseModel):
     answer: str
+
+
+def _evidence_candidates(
+    context: Any,
+    graph_build: GraphBuildResult,
+) -> EvidenceCandidateRegistry:
+    return EvidenceCandidateRegistry(
+        "task-1",
+        SourceBinding(
+            repository_id=context.repository_id,
+            repository_revision=context.revision,
+            graph_snapshot_id=graph_build.manifest.snapshot_id,
+        ),
+    )
 
 
 class _FakeResponses:

@@ -1,0 +1,35 @@
+schema_version: 1
+target_id: business-logic
+target_contract_version: test-v1
+activation: {mode: always}
+depends_on: []
+canonical_question: What product or domain concepts and central workflows does the software implement?
+purpose: Provide a deliberately bounded semantic model for diagnostic test runs.
+expected_abstraction: Principal domain concepts, workflows, and invariants.
+always_relevant_scope:
+  - Principal product and domain concepts and their relationships.
+  - Central product and domain workflows.
+  - Important business and domain rules and invariants.
+conditional_scope: []
+exclusions:
+  - Bootstrap, runtime composition, persistence mechanics, provider protocols, operations, testing, conventions, and visual design.
+boundary_guidance:
+  - Own what the software means and guarantees, not the incidental components or storage mechanisms that implement it.
+investigation_expectations:
+  - Establish the repository's terminology and principal domain concepts from implementation-level evidence.
+  - Trace central workflows from trigger through domain decisions and meaningful outcomes.
+  - Verify important rules and invariants against source and relevant tests.
+evidence_expectations:
+  - Ground concepts, workflows, rules, and invariants in implementation-level evidence across the relevant chain.
+output_quality_expectations:
+  - Use repository terminology, synthesize behavior, and separate semantic rules from implementation mechanics.
+completion_obligations:
+  - obligation_id: domain-concepts
+    description: Identify and relate the principal domain and product concepts.
+    applicability: always
+  - obligation_id: domain-workflows
+    description: Explain central product and domain workflows end to end semantically.
+    applicability: always
+  - obligation_id: rules-invariants
+    description: Make important business and domain rules and invariants explicit.
+    applicability: always

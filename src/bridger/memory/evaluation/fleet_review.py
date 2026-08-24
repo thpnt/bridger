@@ -60,6 +60,11 @@ from bridger.memory.persistence.durability import (
 from bridger.memory.persistence.recovery import validate_checkpoint
 from bridger.memory.runtime.context_window import ContextWindowManager
 from bridger.memory.runtime.provider_recovery import run_provider_with_retry
+from bridger.memory.runtime.trace import (
+    model_error_trace_payload,
+    model_request_trace_context,
+    model_response_trace_payload,
+)
 from bridger.memory.runtime.worker_cycle import FleetExecutionCoordinator, _BudgetStop
 
 
@@ -168,6 +173,11 @@ async def reconcile_fleet(
             fleet_state,
             input_tokens=input_tokens,
             requested_output_tokens=output_tokens,
+            trace_context=model_request_trace_context(
+                request,
+                local_request_input_tokens=input_tokens,
+                count_tokens=context_window_manager.count_text,
+            ),
         )
     except _BudgetStop as stop:
         raise FleetReviewBudgetError(stop.scope.value) from stop
@@ -198,6 +208,8 @@ async def reconcile_fleet(
             reservation,
             fleet_state,
             failed_usage if isinstance(failed_usage, LLMUsage) else None,
+            trace_payload=model_error_trace_payload(error),
+            failed=True,
         )
         if not durable_retry_loop:
             await _charge_client_retries(
@@ -211,6 +223,7 @@ async def reconcile_fleet(
         reservation,
         fleet_state,
         response.usage,
+        trace_payload=model_response_trace_payload(response),
     )
     if response.retry_count and not durable_retry_loop:
         await _charge_client_retries(
@@ -572,6 +585,8 @@ async def _generate_with_retries(
             logical_attempt_id,
             next_attempt - 1,
             failed=True,
+            usage=(error.usage if isinstance(error.usage, LLMUsage) else None),
+            error=error,
         )
         failed_usage = getattr(error, "usage", None)
         if isinstance(failed_usage, LLMUsage):

@@ -337,21 +337,36 @@ def test_deterministic_mode_disables_model_stages() -> None:
     assert configuration.test_budgets is False
 
 
-def test_test_mode_uses_full_topology_with_reduced_budgets() -> None:
+def test_test_mode_uses_reduced_catalog_and_budgets() -> None:
     configuration = resolve_init_configuration(InitMode.TEST)
-    full_budget = _fleet_budget_for(False, target_capacity=4)
-    test_budget = _fleet_budget_for(True, target_capacity=4)
+    full_catalog, _ = load_target_artifacts(_DEFAULT_TARGETS_ROOT)
+    test_catalog, _ = load_target_artifacts(harness._TEST_TARGETS_ROOT)
+    full_budget = _fleet_budget_for(False, target_capacity=len(full_catalog.targets))
+    test_budget = _fleet_budget_for(True, target_capacity=len(test_catalog.targets))
     test_target_budget = _target_budget_for(True)
 
     assert configuration.enable_model_stages is True
     assert configuration.test_budgets is True
+    assert harness._target_artifacts_root(configuration) == harness._TEST_TARGETS_ROOT
+    assert [entry.target_id for entry in test_catalog.targets] == [
+        "repository",
+        "architecture",
+        "business-logic",
+        "testing",
+    ]
+    assert len(test_catalog.targets) == 4
+    assert test_catalog.catalog_id != full_catalog.catalog_id
     assert test_budget.max_cycles < full_budget.max_cycles
     assert test_budget.max_model_calls < full_budget.max_model_calls
     assert test_budget.max_input_tokens < full_budget.max_input_tokens
     assert _target_budget_for(False).max_input_tokens == 2_000_000
     assert test_budget.max_input_tokens == 250_000
-    assert full_budget.max_input_tokens == 2_000_000 * 4 * 5 // 4
-    assert test_budget.max_cycles == test_target_budget.max_cycles * 4
+    assert (
+        full_budget.max_input_tokens == 2_000_000 * len(full_catalog.targets) * 5 // 4
+    )
+    assert test_budget.max_cycles == test_target_budget.max_cycles * len(
+        test_catalog.targets
+    )
 
 
 @pytest.mark.parametrize("test_budgets", [False, True])

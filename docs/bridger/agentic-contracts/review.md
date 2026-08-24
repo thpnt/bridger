@@ -384,6 +384,13 @@ TargetReviewFinding
 └── required_outcome
 ```
 
+The reviewer draft uses `affected_artifact_paths[]`, containing exact relative
+paths from the immutable candidate checkpoint. The runtime validates those paths
+and deterministically resolves them to the authoritative
+`TargetReviewFinding.affected_artifact_refs[]` before persistence. Unknown paths
+or obligation IDs are malformed reviewer output, acquire no durable authority,
+and use the existing bounded retry and recovery behavior.
+
 Affected artifact and obligation references are optional when the issue applies to the complete target.
 
 `required_outcome` describes what must become true without prescribing the worker's implementation strategy.

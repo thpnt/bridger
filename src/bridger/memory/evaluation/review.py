@@ -35,7 +35,7 @@ from bridger.contracts.memory.review import (
 )
 from bridger.contracts.memory.validation import ValidationVerdict
 from bridger.llm.client import LLMClient
-from bridger.llm.errors import LLMError
+from bridger.llm.errors import LLMError, LLMStructuredOutputError
 from bridger.llm.models import (
     LLMMessage,
     LLMOperation,
@@ -62,6 +62,11 @@ from bridger.memory.persistence.durability import (
 from bridger.memory.persistence.recovery import validate_checkpoint
 from bridger.memory.runtime.context_window import ContextWindowManager
 from bridger.memory.runtime.provider_recovery import run_provider_with_retry
+from bridger.memory.runtime.trace import (
+    model_error_trace_payload,
+    model_request_trace_context,
+    model_response_trace_payload,
+)
 from bridger.memory.runtime.worker_cycle import (
     FleetExecutionCoordinator,
     _BudgetScope,
@@ -215,6 +220,11 @@ async def review_target(
             requested_output_tokens=output_tokens,
             target_state=target_state,
             target_spec=target_spec,
+            trace_context=model_request_trace_context(
+                request,
+                local_request_input_tokens=input_tokens,
+                count_tokens=context_window_manager.count_text,
+            ),
         )
     except _BudgetStop as stop:
         _raise_review_budget_error(
@@ -241,6 +251,7 @@ async def review_target(
                 target_state,
                 fleet_state,
                 reservation.attempt_id or "",
+                context,
             )
         else:
             response = await llm_client.generate(
@@ -268,6 +279,8 @@ async def review_target(
             target_state.usage,
             fleet_state.usage,
             failed_usage if isinstance(failed_usage, LLMUsage) else None,
+            trace_payload=model_error_trace_payload(error),
+            failed=True,
         )
         if not durable_retry_loop:
             await _charge_client_retries(
@@ -284,6 +297,7 @@ async def review_target(
         target_state.usage,
         fleet_state.usage,
         response.usage,
+        trace_payload=model_response_trace_payload(response),
     )
     if response.retry_count and not durable_retry_loop:
         await _charge_client_retries(
@@ -543,15 +557,22 @@ async def _generate_with_retries(
     target_state: TargetTaskState,
     fleet_state: FleetRunState,
     logical_attempt_id: str,
+    context: TargetReviewContext,
 ) -> LLMResponse[TargetReviewModelResult]:
     async def operation() -> LLMResponse[TargetReviewModelResult]:
         generate_once = getattr(client, "generate_once", None)
         if callable(generate_once):
-            return await generate_once(
+            response = await generate_once(
                 request,
                 output_type=TargetReviewModelResult,
             )
-        return await client.generate(request, output_type=TargetReviewModelResult)
+        else:
+            response = await client.generate(
+                request,
+                output_type=TargetReviewModelResult,
+            )
+        _validate_review_model_result(context, response)
+        return response
 
     async def before_attempt(attempt: int) -> None:
         if attempt == 1:
@@ -580,6 +601,8 @@ async def _generate_with_retries(
             logical_attempt_id,
             next_attempt - 1,
             failed=True,
+            usage=(error.usage if isinstance(error.usage, LLMUsage) else None),
+            error=error,
         )
         failed_usage = getattr(error, "usage", None)
         if isinstance(failed_usage, LLMUsage):
@@ -649,16 +672,15 @@ def _complete_review(
                 raise ValueError("review completion lost its current candidate")
 
             verdict_id = _review_verdict_id(context.finalization_request_id)
-            artifact_ids = {
-                artifact.reference.artifact_id
+            artifact_ids_by_path = {
+                artifact.reference.relative_path: artifact.reference.artifact_id
                 for artifact in context.candidate_artifacts
             }
             findings = _materialize_findings(
                 verdict_id,
                 target_spec,
-                context.target_definition,
                 result.findings,
-                artifact_ids,
+                artifact_ids_by_path,
             )
             finding_refs = [_finding_ref(finding) for finding in findings]
             verdict = TargetReviewVerdict(
@@ -741,26 +763,11 @@ def _complete_review(
 def _materialize_findings(
     verdict_id: str,
     target_spec: TargetTaskSpec,
-    target_definition: TargetDefinition,
     drafts: Sequence[ReviewFindingDraft],
-    artifact_ids: set[str],
+    artifact_ids_by_path: dict[str, str],
 ) -> list[ReviewFinding]:
     findings: list[ReviewFinding] = []
-    obligation_ids = {
-        obligation.obligation_id
-        for obligation in target_definition.completion_obligations
-    }
     for index, draft in enumerate(drafts):
-        if any(
-            artifact_id not in artifact_ids
-            for artifact_id in draft.affected_artifact_refs
-        ):
-            raise ValueError("review finding names an unknown candidate artifact")
-        if any(
-            obligation_id not in obligation_ids
-            for obligation_id in draft.affected_obligation_ids
-        ):
-            raise ValueError("review finding names an unknown target obligation")
         finding_id = _finding_id(verdict_id, index, draft)
         findings.append(
             ReviewFinding(
@@ -768,13 +775,63 @@ def _materialize_findings(
                 review_verdict_id=verdict_id,
                 target_task_id=target_spec.target_task_id,
                 criterion_id=draft.criterion_id,
-                affected_artifact_refs=draft.affected_artifact_refs,
+                affected_artifact_refs=[
+                    artifact_ids_by_path[path] for path in draft.affected_artifact_paths
+                ],
                 affected_obligation_ids=draft.affected_obligation_ids,
                 message=draft.message,
                 required_outcome=draft.required_outcome,
             )
         )
     return findings
+
+
+def _validate_review_model_result(
+    context: TargetReviewContext,
+    response: LLMResponse[TargetReviewModelResult],
+) -> None:
+    result = response.structured_output
+    if result is None:
+        return
+    if not result.findings:
+        return
+    artifact_paths = {
+        artifact.reference.relative_path for artifact in context.candidate_artifacts
+    }
+    obligation_ids = {
+        obligation.obligation_id
+        for obligation in context.target_definition.completion_obligations
+    }
+    for finding in result.findings:
+        if not set(finding.affected_artifact_paths).issubset(artifact_paths):
+            _raise_malformed_review_output(
+                "review finding names an unknown candidate artifact path",
+                response,
+            )
+        if not set(finding.affected_obligation_ids).issubset(obligation_ids):
+            _raise_malformed_review_output(
+                "review finding names an unknown target obligation",
+                response,
+            )
+
+
+def _raise_malformed_review_output(
+    message: str,
+    response: LLMResponse[TargetReviewModelResult],
+) -> NoReturn:
+    structured_output = response.structured_output
+    if structured_output is None:
+        raise AssertionError("malformed review output requires structured output")
+    raise LLMStructuredOutputError(
+        message,
+        invalid_output=structured_output.model_dump(mode="json"),
+        usage=response.usage,
+        latency_ms=response.latency_ms,
+        provider=response.provider,
+        model=response.model,
+        operation=LLMOperation.MEMORY_AGENT_REVIEW,
+        retryable=True,
+    )
 
 
 def _replace_review_state(
