@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 target_id: repository
-target_contract_version: v2
-activation: {mode: always}
+target_contract_version: v3
+activation: { mode: always }
 depends_on: []
 canonical_question: What is this repository, what major things does it contain, and where should someone go for deeper understanding?
 purpose: Provide the Repository Brain's canonical orientation and index layer.
@@ -16,33 +16,92 @@ exclusions:
 boundary_guidance:
   - Remain a shallow terrain map and route detailed questions to the canonical specialist targets.
 investigation_expectations:
-  - Establish terrain from FileIndex, manifests, top-level docs, graph structure, workspaces, and entry surfaces.
-  - Limit deep source tracing to what is needed to orient major areas correctly.
+  - >-
+    Phase A — Inventory the repository terrain from the FileIndex, manifests,
+    workspace/build configuration, top-level documentation, graph structure,
+    source roots, and executable entry surfaces.
+  - >-
+    Phase B — Classify the major applications, packages, workspaces, source
+    regions, generated/vendor/special regions, languages, frameworks, and
+    toolchain responsibilities without yet performing specialist deep dives.
+  - >-
+    Phase C — Verify orientation claims against manifests and implementation
+    where necessary. Documentation is useful for declared intent but must not
+    override contradictory repository structure or executable source.
 evidence_expectations:
   - Use deterministic inventory, manifests, and graph structure for terrain and source reads for unclear responsibilities or entrypoints.
   - Use documentation for declared purpose while surfacing contradictions with actual structure.
 completion_obligations:
   - obligation_id: repository-purpose
-    description: Explain the repository's purpose and overall orientation.
+    related_obligation_ids:
+      - languages-frameworks-toolchain
+      - applications-packages-workspaces
+      - source-organization
+      - entry-surfaces
+    description: Establish the repository's current identity and purpose.
+    investigation_requirements:
+      - Compare declared purpose in metadata/documentation with implemented applications and entry surfaces.
+      - Use current source and manifests to detect stale, generic, or contradictory documentation.
+      - Resolve at the repository level; do not expand into specialist behavioral analysis.
     applicability: always
   - obligation_id: languages-frameworks-toolchain
-    description: Identify major languages, frameworks, and toolchain.
+    related_obligation_ids:
+      - applications-packages-workspaces
+      - source-organization
+    description: Identify the significant languages, frameworks, package systems, and development toolchain.
+    investigation_requirements:
+      - Inventory manifests, lockfiles, build/test/lint configuration, and significant language roots.
+      - Distinguish declared dependencies from frameworks or tooling that materially structure the repository.
+      - Record the commands or configuration anchors that let a future agent verify the toolchain.
     applicability: always
   - obligation_id: applications-packages-workspaces
-    description: Identify major applications, packages, and workspaces.
+    related_obligation_ids:
+      - source-organization
+      - entry-surfaces
+      - generated-vendor-special-regions
+    description: Identify the major applications, packages, services, and workspaces.
+    investigation_requirements:
+      - Establish the major executable or independently meaningful repository units rather than inferring them from directory names alone.
+      - Verify each major unit through manifests, entry surfaces, or representative source.
+      - Describe only enough responsibility to route deeper investigation to the correct specialist target.
     applicability: always
   - obligation_id: source-organization
-    description: Make top-level source organization navigable.
+    related_obligation_ids:
+      - entry-surfaces
+      - generated-vendor-special-regions
+      - specialist-navigation
+    description: Explain the repository's major source regions and organizational shape.
+    investigation_requirements:
+      - Inventory principal source, configuration, data, documentation, test, infrastructure, and support regions.
+      - Distinguish authoritative source areas from auxiliary or machine-managed material.
+      - Provide navigation landmarks rather than an exhaustive directory tree.
     applicability: always
   - obligation_id: entry-surfaces
-    description: Identify principal entry surfaces at a high level.
+    related_obligation_ids:
+      - specialist-navigation
+    description: Identify the principal surfaces through which the repository is built, run, invoked, or developed.
+    investigation_requirements:
+      - Inspect actual CLI, server, package, script, build, or development entry definitions.
+      - Verify that named entry surfaces reach real implementation rather than relying only on README commands.
+      - Keep detailed runtime execution in Architecture.
     applicability: always
   - obligation_id: generated-vendor-special-regions
-    description: Identify generated, vendored, or specialized regions when materially important.
+    related_obligation_ids:
+      - specialist-navigation
+    description: Identify material generated, vendored, machine-managed, or otherwise special repository regions.
+    investigation_requirements:
+      - Inventory candidate special regions from repository structure and configuration.
+      - Determine whether they are generated, vendored, authoritative inputs, generated outputs, or intentionally ignored.
+      - Explain how a future coding agent should treat them when reading or changing the repository.
     applicability: conditional
-    condition_hint: Generated, vendored, unusual workspace, multi-language, or other special repository regions materially affect navigation.
+    condition_hint: Generated, vendored, machine-managed, or other special regions materially exist.
   - obligation_id: specialist-navigation
-    description: Point orientation toward deeper specialist knowledge targets.
+    related_obligation_ids: []
+    description: Provide useful routing from repository-level questions to the correct specialist area.
+    investigation_requirements:
+      - Identify the principal implementation anchors for each major repository area.
+      - Map behavioral, architectural, state, interface, testing, conventions, operations, and design questions to their canonical target.
+      - Do not duplicate the detailed explanation owned by those targets.
     applicability: always
 output_quality_expectations:
   - Be concise, repository-specific, and navigable while avoiding duplicated specialist ownership.

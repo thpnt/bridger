@@ -39,6 +39,7 @@ class WorkerCycleFocus(BaseModel):
     kind: WorkerCycleFocusKind
     obligation_id: str | None = Field(default=None, min_length=1)
     finding_ids: tuple[str, ...] = ()
+    related_obligation_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_focus(self) -> WorkerCycleFocus:
@@ -46,12 +47,26 @@ class WorkerCycleFocus(BaseModel):
         if self.kind is WorkerCycleFocusKind.OBLIGATION:
             if self.obligation_id is None or self.finding_ids:
                 raise ValueError("obligation focus requires only obligation_id")
+            if len(self.related_obligation_ids) != len(
+                set(self.related_obligation_ids)
+            ):
+                raise ValueError(
+                    "obligation focus related_obligation_ids must be unique"
+                )
         elif self.kind is WorkerCycleFocusKind.REPAIR_FINDINGS:
-            if self.obligation_id is not None or not self.finding_ids:
+            if (
+                self.obligation_id is not None
+                or not self.finding_ids
+                or self.related_obligation_ids
+            ):
                 raise ValueError("repair focus requires only finding_ids")
             if len(self.finding_ids) != len(set(self.finding_ids)):
                 raise ValueError("repair focus finding_ids must be unique")
-        elif self.obligation_id is not None or self.finding_ids:
+        elif (
+            self.obligation_id is not None
+            or self.finding_ids
+            or self.related_obligation_ids
+        ):
             raise ValueError("finalization-readiness focus has no identifiers")
         return self
 
@@ -199,6 +214,7 @@ class CompletionObligationView(BaseModel):
 
     obligation_id: str = Field(min_length=1)
     description: str = Field(min_length=1)
+    investigation_requirements: tuple[str, ...]
     applicability: ObligationApplicability
     condition_hint: str | None = None
     status: CompletionStatus
@@ -293,6 +309,20 @@ class WorkerContext(BaseModel):
                 or self.cycle_focus.obligation_id != unresolved[0]
             ):
                 raise ValueError("normal cycle focus must select first unresolved item")
+            obligation_statuses = {
+                item.obligation_id: item.status for item in self.completion_obligations
+            }
+            related_ids = self.cycle_focus.related_obligation_ids
+            if self.cycle_focus.obligation_id in related_ids:
+                raise ValueError("normal cycle focus cannot relate to its primary item")
+            if any(
+                obligation_statuses.get(related_id)
+                is not CompletionStatus.UNINVESTIGATED
+                for related_id in related_ids
+            ):
+                raise ValueError(
+                    "normal cycle focus related items must be unresolved obligations"
+                )
         elif self.cycle_focus.kind is not WorkerCycleFocusKind.FINALIZATION_READINESS:
             raise ValueError("resolved target requires finalization-readiness focus")
         return self

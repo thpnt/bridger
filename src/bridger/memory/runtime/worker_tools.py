@@ -107,6 +107,8 @@ class TargetWorkspace:
         self._spec = target_spec
         self._state = target_state
         self._persistence = persistence
+        self._inventory_inspected = False
+        self._read_revisions: dict[str, int] = {}
         configured_root = Path(target_spec.target_workspace)
         if configured_root.is_symlink():
             raise ValueError("target workspace cannot be a symlink")
@@ -116,6 +118,7 @@ class TargetWorkspace:
 
     def list_target_artifacts(self) -> list[CandidateArtifactRef]:
         """Return the complete authoritative current artifact inventory."""
+        self._inventory_inspected = True
         return sorted(
             self._state.artifact_refs,
             key=lambda item: (item.relative_path, item.artifact_id),
@@ -157,6 +160,7 @@ class TargetWorkspace:
             selected = encoded[:MAX_ARTIFACT_READ_BYTES].decode(
                 "utf-8", errors="ignore"
             )
+        self._read_revisions[reference.artifact_id] = reference.revision
         return {
             "artifact": reference,
             "content": selected,
@@ -176,7 +180,17 @@ class TargetWorkspace:
         _require_working_phase(self._state)
         existing = self._optional_reference_for_path(path)
         if existing is None:
+            if not self._inventory_inspected:
+                raise ValueError(
+                    "list_target_artifacts must be called before creating a new "
+                    "artifact"
+                )
             self._reject_redundant_target_prefix(path)
+        elif self._read_revisions.get(existing.artifact_id) != existing.revision:
+            raise ValueError(
+                "read_target_artifact must be called for the current revision "
+                "before modifying an existing artifact"
+            )
         destination = self._resolve_path(path)
         encoded = content.encode()
         if len(encoded) > MAX_ARTIFACT_BYTES:
@@ -214,6 +228,10 @@ class TargetWorkspace:
                 action="write",
                 artifact_id=reference.artifact_id,
             )
+        if existing is None:
+            self._inventory_inspected = False
+        else:
+            self._read_revisions.pop(existing.artifact_id, None)
         return reference
 
     def edit_target_artifact_range(
@@ -228,6 +246,11 @@ class TargetWorkspace:
         """Replace one inclusive line range using optimistic revision control."""
         _require_working_phase(self._state)
         reference = self._reference_for_path(path)
+        if self._read_revisions.get(reference.artifact_id) != reference.revision:
+            raise ValueError(
+                "read_target_artifact must be called for the current revision "
+                "before editing an existing artifact"
+            )
         self._require_revision(reference, expected_revision)
         if start_line < 1 or end_line < start_line:
             raise ValueError("artifact range must be positive and non-inverted")
@@ -278,6 +301,8 @@ class TargetWorkspace:
                 action="delete",
                 artifact_id=reference.artifact_id,
             )
+        self._inventory_inspected = False
+        self._read_revisions.pop(reference.artifact_id, None)
         return reference
 
     def move_target_artifact(
@@ -322,6 +347,8 @@ class TargetWorkspace:
                 action="move",
                 artifact_id=reference.artifact_id,
             )
+        self._inventory_inspected = False
+        self._read_revisions.pop(reference.artifact_id, None)
         return moved
 
     def _reference_for_path(self, path: str) -> CandidateArtifactRef:
@@ -419,6 +446,11 @@ class TargetWorkspace:
             key=lambda item: (item.relative_path, item.artifact_id),
         )
         return after_state
+
+    def clear_transient_access_state(self) -> None:
+        """Discard cycle-local artifact inventory and read permissions."""
+        self._inventory_inspected = False
+        self._read_revisions.clear()
 
 
 class EvidenceRecorder:
@@ -819,6 +851,7 @@ class WorkerToolRuntime:
         if unknown:
             raise ValueError(f"unknown configured worker tool: {sorted(unknown)[0]}")
         self._allowed = set(context.allowed_tool_ids)
+        self._workspace = workspace
         self._evidence_candidates = EvidenceCandidateRegistry(
             context.target_task_id,
             context.source,
@@ -857,6 +890,7 @@ class WorkerToolRuntime:
     def clear_transient_state(self) -> None:
         """Discard cycle-local evidence candidates."""
         self._evidence_candidates.clear()
+        self._workspace.clear_transient_access_state()
 
     async def execute_operational(self, call: LLMToolCall) -> LLMToolResult:
         """Enforce permission again and dispatch one operational call."""
@@ -886,7 +920,11 @@ def _build_local_tools(
             name="list_target_artifacts",
             description=(
                 "List the complete current target-local Markdown inventory. "
-                "Paths are relative to the already-assigned target workspace."
+                "Call this before creating a new artifact so you can determine whether "
+                "the topic is already owned by an existing file. Prefer integrating "
+                "new knowledge into an existing artifact when appropriate. Paths are "
+                "relative "
+                "to the already-assigned target workspace."
             ),
             arguments_type=_EmptyArguments,
             handler=lambda _: workspace.list_target_artifacts(),
@@ -894,11 +932,14 @@ def _build_local_tools(
         LLMTool.bind(
             name="read_target_artifact",
             description=(
-                "Read an existing current target-local Markdown artifact. Use a path "
-                "returned by list_target_artifacts or a prior successful artifact "
-                "mutation. Paths are relative to the assigned target workspace; do "
-                "not repeat the target ID. If the artifact does not exist, create it "
-                "with write_target_artifact instead."
+                "Read an existing current target-local Markdown artifact. "
+                "Call this before modifying an existing artifact so you understand its "
+                "current structure and can integrate new knowledge without duplicating "
+                "an existing explanation. Use a path returned by list_target_artifacts "
+                "or a "
+                "prior successful artifact mutation. Paths are relative to the "
+                "assigned "
+                "target workspace; do not repeat the target ID."
             ),
             arguments_type=_ReadArtifactArguments,
             handler=lambda value: workspace.read_target_artifact(
@@ -910,9 +951,14 @@ def _build_local_tools(
         LLMTool.bind(
             name="write_target_artifact",
             description=(
-                "Create or whole-file replace target-local Markdown. The path is "
-                "already relative to the assigned target workspace; do not repeat "
-                "the target ID as its first segment."
+                "Create or whole-file replace target-local Markdown. "
+                "Before creating a new artifact, call list_target_artifacts and "
+                "confirm the topic is not already owned by an existing artifact. "
+                "Before replacing an existing artifact, call read_target_artifact "
+                "for its current revision. Integrate new knowledge into the existing "
+                "structure rather than adding a second explanation of a topic already "
+                "covered. The path is relative to "
+                "the assigned target workspace; do not repeat the target ID."
             ),
             arguments_type=_WriteArtifactArguments,
             handler=lambda value: workspace.write_target_artifact(
@@ -924,9 +970,12 @@ def _build_local_tools(
         LLMTool.bind(
             name="edit_target_artifact_range",
             description=(
-                "Replace an inclusive line range in current Markdown. Paths are "
-                "relative to the assigned target workspace; do not repeat the "
-                "target ID."
+                "Replace an inclusive line range in current Markdown. "
+                "Before editing, call read_target_artifact for the current revision. "
+                "Integrate new knowledge into the existing structure and do not create "
+                "a duplicate explanation of a topic already covered. Paths are "
+                "relative "
+                "to the assigned target workspace; do not repeat the target ID."
             ),
             arguments_type=_EditArtifactArguments,
             handler=lambda value: workspace.edit_target_artifact_range(

@@ -1811,6 +1811,143 @@ def test_workspace_confinement_and_optimistic_revisions(tmp_path: Path) -> None:
         workspace.write_target_artifact("linked.md", "no")
 
 
+def test_artifact_mutation_errors_require_model_inspection(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.target_state.phase = TargetPhase.WORKING
+    runtime = fixture.tool_runtime()
+
+    rejected_create = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "create-without-list",
+                "write_target_artifact",
+                {"path": "notes.md", "content": "# Notes\n"},
+            )
+        )
+    )
+    assert rejected_create.error is not None
+    assert rejected_create.error.code == "tool_execution_error"
+    assert (
+        rejected_create.error.message
+        == "list_target_artifacts must be called before creating a new artifact"
+    )
+
+    asyncio.run(runtime.execute_operational(_call("list", "list_target_artifacts", {})))
+    created = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "create",
+                "write_target_artifact",
+                {"path": "notes.md", "content": "# Notes\n"},
+            )
+        )
+    )
+    assert created.error is None
+    reference = fixture.target_state.artifact_refs[0]
+
+    rejected_replace = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "replace-without-read",
+                "write_target_artifact",
+                {
+                    "path": "notes.md",
+                    "content": "# Updated\n",
+                    "expected_revision": reference.revision,
+                },
+            )
+        )
+    )
+    assert rejected_replace.error is not None
+    assert rejected_replace.error.code == "tool_execution_error"
+    assert (
+        rejected_replace.error.message
+        == "read_target_artifact must be called for the current revision before "
+        "modifying an existing artifact"
+    )
+
+    rejected_edit = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "edit-without-read",
+                "edit_target_artifact_range",
+                {
+                    "path": "notes.md",
+                    "expected_revision": reference.revision,
+                    "start_line": 1,
+                    "end_line": 1,
+                    "replacement": "# Edited\n",
+                },
+            )
+        )
+    )
+    assert rejected_edit.error is not None
+    assert rejected_edit.error.code == "tool_execution_error"
+    assert (
+        rejected_edit.error.message
+        == "read_target_artifact must be called for the current revision before "
+        "editing an existing artifact"
+    )
+
+    asyncio.run(
+        runtime.execute_operational(
+            _call("read", "read_target_artifact", {"path": "notes.md"})
+        )
+    )
+    edited = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "edit",
+                "edit_target_artifact_range",
+                {
+                    "path": "notes.md",
+                    "expected_revision": reference.revision,
+                    "start_line": 1,
+                    "end_line": 1,
+                    "replacement": "# Edited\n",
+                },
+            )
+        )
+    )
+    assert edited.error is None
+
+    second_edit = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "edit-again",
+                "edit_target_artifact_range",
+                {
+                    "path": "notes.md",
+                    "expected_revision": reference.revision + 1,
+                    "start_line": 1,
+                    "end_line": 1,
+                    "replacement": "# Edited again\n",
+                },
+            )
+        )
+    )
+    assert second_edit.error is not None
+    assert second_edit.error.code == "tool_execution_error"
+    assert "read_target_artifact must be called" in second_edit.error.message
+
+    runtime.clear_transient_state()
+    rejected_after_reset = asyncio.run(
+        runtime.execute_operational(
+            _call(
+                "replace-after-reset",
+                "write_target_artifact",
+                {
+                    "path": "notes.md",
+                    "content": "# Reset\n",
+                    "expected_revision": reference.revision + 1,
+                },
+            )
+        )
+    )
+    assert rejected_after_reset.error is not None
+    assert "read_target_artifact must be called" in rejected_after_reset.error.message
+
+
 @pytest.mark.parametrize(
     ("target_id", "path"),
     [
@@ -2187,6 +2324,7 @@ def _fixture(
     obligation = CompletionObligationDefinition(
         obligation_id="describe-runtime",
         description="Describe the runtime.",
+        investigation_requirements=["Inspect source."],
         applicability=ObligationApplicability.ALWAYS,
     )
     definition = TargetDefinition(
@@ -2262,7 +2400,7 @@ def _fixture(
             CompletionObligationView(
                 obligation_id="describe-runtime",
                 description="Describe the runtime.",
-                applicability=ObligationApplicability.ALWAYS,
+                investigation_requirements=("Inspect source.",),
                 status=CompletionStatus.UNINVESTIGATED,
                 evidence_refs=(),
             ),

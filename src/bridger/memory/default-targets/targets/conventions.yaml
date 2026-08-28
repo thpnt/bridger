@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 target_id: conventions
-target_contract_version: v2
-activation: {mode: always}
+target_contract_version: v3
+activation: { mode: always }
 depends_on: []
 canonical_question: What recurring engineering rules and implementation patterns should future contributors reproduce?
 purpose: Explain established, repeatable, and repository-grounded engineering conventions.
@@ -16,35 +16,95 @@ exclusions:
 boundary_guidance:
   - Own repeatable implementation practice and scope local patterns explicitly rather than generalizing isolated examples.
 investigation_expectations:
-  - Inspect explicit instructions and tooling, then sample representative code across multiple important areas.
-  - Distinguish enforced rules, recurring observations, and local patterns, and surface legitimate conflicts.
+  - >-
+    Phase A — Inventory explicit contributor instructions, formatter/linter/type
+    configuration, structural conventions, and representative implementation
+    patterns across multiple important repository areas.
+  - >-
+    Phase B — Classify conventions as explicitly enforced, strongly recurring,
+    area-local, weakly observed, or conflicting.
+  - >-
+    Phase C — Before generalizing an observed convention, verify it across multiple
+    independent representative examples or through an explicit enforcement
+    mechanism. One example is not a repository convention.
 evidence_expectations:
   - Use tooling and repository instructions for enforced conventions and repeated representative examples for observed conventions.
   - Do not treat external best practices or a single example as repository-wide evidence.
 completion_obligations:
   - obligation_id: naming-layout
-    description: Identify major repository-wide naming and layout rules.
+    related_obligation_ids:
+      - structural-patterns
+      - enforced-vs-observed
+      - local-convention-scope
+    description: Explain significant naming and layout conventions.
+    investigation_requirements:
+      - Sample naming and placement across multiple representative areas.
+      - Separate tool-enforced or explicitly documented conventions from merely recurring choices.
+      - Record meaningful exceptions or local scopes.
     applicability: always
   - obligation_id: structural-patterns
-    description: Identify recurring structural implementation patterns.
+    related_obligation_ids:
+      - error-logging-configuration
+      - type-schema-patterns
+      - specialist-implementation-conventions
+      - enforced-vs-observed
+      - local-convention-scope
+    description: Explain recurring implementation and structural patterns that future code should reproduce.
+    investigation_requirements:
+      - Identify candidate patterns from representative implementation rather than graph labels or architecture names.
+      - Verify recurrence across independent areas before calling a pattern repository-wide.
+      - Explain the context in which the pattern applies, not only its syntax.
     applicability: always
   - obligation_id: error-logging-configuration
-    description: Explain error, logging, and configuration patterns where recurrent.
+    related_obligation_ids:
+      - enforced-vs-observed
+      - local-convention-scope
+    description: Explain recurring error-handling, logging, and configuration conventions when materially established.
+    investigation_requirements:
+      - Sample representative error, logging, and configuration code across more than one subsystem.
+      - Identify shared helpers or enforced patterns and distinguish them from local styles.
+      - Surface materially inconsistent handling instead of forcing a false convention.
     applicability: conditional
-    condition_hint: Representative code shows recurring error, logging, or configuration-access patterns.
+    condition_hint: Error handling, logging, or configuration has material recurring repository conventions.
   - obligation_id: type-schema-patterns
-    description: Explain type and schema patterns where recurrent.
+    related_obligation_ids:
+      - specialist-implementation-conventions
+      - enforced-vs-observed
+      - local-convention-scope
+    description: Explain recurring typing, model, schema, or serialization conventions when materially established.
+    investigation_requirements:
+      - Inspect representative models and their use at multiple boundaries or subsystems.
+      - Distinguish framework-required patterns from repository-specific choices.
+      - Explain where the convention should and should not be reproduced.
     applicability: conditional
-    condition_hint: The repository uses recurring type, validation, or schema practices.
+    condition_hint: The repository has material recurring type, model, schema, validation, or serialization conventions.
   - obligation_id: specialist-implementation-conventions
-    description: Explain recurrent data, interface, test, and frontend implementation conventions where present.
+    related_obligation_ids:
+      - enforced-vs-observed
+      - local-convention-scope
+    description: Explain important area-specific implementation conventions when present.
+    investigation_requirements:
+      - Identify specialist conventions only after determining the area in which they recur.
+      - Use multiple examples within that area or explicit local instructions as evidence.
+      - Mark the scope clearly so future agents do not generalize a local convention repository-wide.
     applicability: conditional
-    condition_hint: Specialist areas expose repeated implementation conventions beyond repository-wide structure.
+    condition_hint: Important subsystems have recurring conventions that do not apply repository-wide.
   - obligation_id: enforced-vs-observed
-    description: Distinguish enforced conventions from observed recurring patterns.
+    related_obligation_ids:
+      - local-convention-scope
+    description: Distinguish enforced conventions from observed patterns and preferences.
+    investigation_requirements:
+      - For important conventions, identify whether enforcement comes from tooling, tests, schemas, contributor instructions, or code review convention only.
+      - Assign weaker confidence to patterns inferred solely from examples.
+      - Surface conflicts between tooling/documentation and current implementation.
     applicability: always
   - obligation_id: local-convention-scope
-    description: Scope local conventions accurately instead of generalizing them repository-wide.
+    related_obligation_ids: []
+    description: Explain the scope, exceptions, and conflicts of important conventions.
+    investigation_requirements:
+      - Compare candidate conventions across materially different repository regions.
+      - Identify subsystem-local variants and exceptions.
+      - Avoid universal wording where evidence supports only local recurrence.
     applicability: always
 output_quality_expectations:
   - Be concise, actionable, and evidence-backed while excluding unsupported generic advice.

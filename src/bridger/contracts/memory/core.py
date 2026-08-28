@@ -329,7 +329,9 @@ class CompletionObligationDefinition(BaseModel):
 
     obligation_id: str = Field(min_length=1)
     description: str = Field(min_length=1)
+    investigation_requirements: list[str] = Field(min_length=1)
     applicability: ObligationApplicability
+    related_obligation_ids: list[str] = Field(default_factory=list)
     condition_hint: str | None = Field(default=None, min_length=1)
 
 
@@ -367,6 +369,15 @@ class TargetDefinition(BaseModel):
         ]
         if len(obligation_ids) != len(set(obligation_ids)):
             raise ValueError("completion obligation IDs must be unique")
+        obligation_id_set = set(obligation_ids)
+        for obligation in self.completion_obligations:
+            related_ids = obligation.related_obligation_ids
+            if len(related_ids) != len(set(related_ids)):
+                raise ValueError("related obligation IDs must be unique")
+            if obligation.obligation_id in related_ids:
+                raise ValueError("an obligation cannot relate to itself")
+            if any(related_id not in obligation_id_set for related_id in related_ids):
+                raise ValueError("related obligation IDs must belong to the target")
         return self
 
 

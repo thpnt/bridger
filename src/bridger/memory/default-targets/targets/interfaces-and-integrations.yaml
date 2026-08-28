@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 target_id: interfaces-and-integrations
-target_contract_version: v2
-activation: {mode: always}
+target_contract_version: v3
+activation: { mode: always }
 depends_on: []
 canonical_question: What capabilities cross repository or system boundaries, through what contracts, and how are those boundaries implemented?
 purpose: Explain boundary contracts and external interactions from their declared surfaces through their internal handoffs.
@@ -16,39 +16,102 @@ exclusions:
 boundary_guidance:
   - Own boundary contracts, adapters, and mechanics; defer internal architecture and product semantics.
 investigation_expectations:
-  - Trace each significant boundary from contract through adapter, validation, authentication, mapping, handoff, response, and failure behavior.
-  - Do not infer a meaningful integration from a manifest dependency alone.
+  - >-
+    Phase A — Inventory significant inbound and outbound boundaries, callbacks,
+    webhooks/events, streams, providers, and system-to-system handoffs. Do not
+    infer a real integration from a dependency declaration alone.
+  - >-
+    Phase B — Classify each material boundary by direction, contract/serialization,
+    authentication or trust mechanism, internal adapter/handoff, and reliability
+    semantics.
+  - >-
+    Phase C — Deeply trace significant inbound boundaries as request/event arrival
+    → validation/authentication → adaptation/deserialization → internal handoff
+    → response/effect → error transformation/retry/idempotency, and outbound
+    boundaries through the corresponding reverse handoff.
 evidence_expectations:
   - Use routes, schemas, protocol definitions, event definitions, public exports, handlers, clients, and adapters.
   - Prefer contract and integration tests as support and never invent external facts absent from the repository.
 completion_obligations:
   - obligation_id: inbound-interfaces
-    description: Identify significant inbound interfaces.
+    related_obligation_ids:
+      - contracts-mappings
+      - boundary-authentication-security
+      - boundary-internal-handoff
+    description: Explain the significant inbound interfaces and their effective behavior.
+    investigation_requirements:
+      - Inventory material inbound HTTP, RPC, CLI, webhook, event, stream, message, or other externally initiated boundaries.
+      - For important boundaries, trace arrival → authentication/verification → parsing/validation → mapping → internal handoff → effective response or side effect.
+      - Follow outer exception and response handling far enough to establish the actual externally visible behavior.
     applicability: always
   - obligation_id: outbound-integrations
-    description: Identify significant outbound integrations.
+    related_obligation_ids:
+      - contracts-mappings
+      - boundary-authentication-security
+      - error-retry-idempotency
+      - callbacks-events-webhooks
+      - boundary-internal-handoff
+    description: Explain the significant outbound integrations and external-provider calls.
+    investigation_requirements:
+      - Inventory material external providers and outbound adapters from actual usages, not package dependencies alone.
+      - Trace internal trigger → request/payload mapping → authentication/client adapter → provider call → response mapping → internal outcome.
+      - Include material failure handling and provider-specific semantics at the boundary.
     applicability: always
   - obligation_id: contracts-mappings
-    description: Explain important payload contracts, serialization, and mappings.
+    related_obligation_ids:
+      - versioning-compatibility
+      - boundary-internal-handoff
+    description: Explain important boundary contracts, serialization, validation, and internal/external mappings.
+    investigation_requirements:
+      - Inspect the concrete request/event/payload models and the code that converts them to or from internal representations.
+      - Verify required fields, normalization, validation, and mapping through usage.
+      - Distinguish a model's accepted shape from behavior enforced elsewhere in the boundary flow.
     applicability: always
   - obligation_id: boundary-authentication-security
-    description: Explain boundary authentication, authorization, and security mechanics when present.
+    related_obligation_ids: []
+    description: Explain material authentication, verification, authorization, or trust-boundary mechanics when present.
+    investigation_requirements:
+      - Trace credential/signature/token origin through verification and effective allow/reject behavior.
+      - Follow exceptions and middleware/outer handlers to determine the actual boundary result.
+      - Distinguish configured secrets from mechanisms that truly enforce a boundary.
     applicability: conditional
-    condition_hint: A significant boundary authenticates, authorizes, signs, verifies, or otherwise secures traffic.
+    condition_hint: A significant system boundary authenticates, verifies, authorizes, signs, or otherwise establishes trust.
   - obligation_id: error-retry-idempotency
-    description: Explain boundary error, retry, timeout, and idempotency semantics where relevant.
+    related_obligation_ids: []
+    description: Explain boundary error, retry, timeout, and idempotency semantics when present.
+    investigation_requirements:
+      - Trace representative success and failure paths through the full retry/error loop rather than reading constants or comments alone.
+      - Verify retry counters, status selection, backoff, timeout, and idempotency-key behavior from executable control flow.
+      - Identify where errors are transformed, swallowed, propagated, or converted into external responses.
     applicability: conditional
-    condition_hint: Boundary behavior includes material failure handling, timeouts, retries, or idempotency.
+    condition_hint: Significant boundaries implement retries, timeouts, idempotency, deduplication, or non-trivial failure mapping.
   - obligation_id: callbacks-events-webhooks
-    description: Explain callbacks, events, and webhooks when present.
+    related_obligation_ids:
+      - versioning-compatibility
+      - boundary-internal-handoff
+    description: Explain callback, event, webhook, or streaming contracts when present.
+    investigation_requirements:
+      - Trace event arrival or emission from transport through validation, dispatch, deduplication/ordering, handling, and acknowledgement/effect.
+      - Identify event identities and material duplicate, replay, ordering, or acknowledgement semantics.
+      - Distinguish transport lifecycle from the product meaning owned by Business Logic.
     applicability: conditional
-    condition_hint: The repository sends or receives callbacks, events, or webhooks.
+    condition_hint: The repository receives or emits significant callbacks, events, webhooks, messages, or streaming interactions.
   - obligation_id: versioning-compatibility
-    description: Explain boundary versioning and compatibility constraints when present.
+    related_obligation_ids: []
+    description: Explain interface versioning and compatibility behavior when present.
+    investigation_requirements:
+      - Determine whether versions are merely path/package metadata or drive actual negotiation/transformation/compatibility behavior.
+      - Trace explicit compatibility adapters, version checks, or fallback paths where present.
+      - Record unsupported or unspecified compatibility rather than inferring guarantees.
     applicability: conditional
-    condition_hint: A public or external contract has explicit versions or compatibility guarantees.
+    condition_hint: Significant interfaces expose or implement version negotiation, compatibility adapters, or multiple contract generations.
   - obligation_id: boundary-internal-handoff
-    description: Explain the handoff between each significant boundary and internal implementation.
+    related_obligation_ids: []
+    description: Explain how significant external boundaries hand work and data into internal runtime components.
+    investigation_requirements:
+      - Follow important adapters past parsing into the first meaningful internal owner or orchestration component.
+      - For outbound boundaries, follow the return path far enough to establish how external results affect internal execution.
+      - Use this handoff to connect Interface knowledge to Architecture without duplicating the complete runtime flow.
     applicability: always
 output_quality_expectations:
   - Make consumers, compatibility constraints, adapters, and failure semantics clear.

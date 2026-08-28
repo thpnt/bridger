@@ -14,7 +14,7 @@ from bridger.memory.errors import InvalidTargetArtifacts
 
 _CATALOG_FILE = "catalog.yaml"
 _TARGETS_DIRECTORY = "targets"
-_SUPPORTED_SCHEMA_VERSION = 1
+_SUPPORTED_SCHEMA_VERSION = 2
 
 ModelT = TypeVar("ModelT", MemoryTargetCatalog, TargetDefinition)
 

@@ -603,15 +603,6 @@ def serialize_worker_context_sections(
     ]
     target_sections = [
         _section(
-            "Source binding and global ownership guidance",
-            _canonical_json(
-                {
-                    "source": context.source,
-                    "global_ownership_guidance": context.global_ownership_guidance,
-                }
-            ),
-        ),
-        _section(
             "Target instructions and semantic contract",
             context.target_worker_instructions
             + "\n\n"
@@ -625,7 +616,7 @@ def serialize_worker_context_sections(
         ),
         _section(
             "Current cycle objective",
-            _serialize_cycle_focus(context.cycle_focus),
+            _serialize_cycle_focus(context.cycle_focus, context.completion_obligations),
         ),
         _section(
             "Completion obligations and current states",
@@ -762,6 +753,7 @@ def _compile_hydrating_context(
     cycle_focus = _select_cycle_focus(
         completion_obligations,
         repair_findings,
+        definition,
     )
     context = WorkerContext(
         target_task_id=target_spec.target_task_id,
@@ -815,6 +807,7 @@ def _validate_graph_overview(
 def _select_cycle_focus(
     completion_obligations: tuple[CompletionObligationView, ...],
     repair_findings: tuple[RepairFinding, ...],
+    definition: TargetDefinition,
 ) -> WorkerCycleFocus:
     """Select one deterministic focus from the already-projected authorities."""
     if repair_findings:
@@ -822,38 +815,90 @@ def _select_cycle_focus(
             kind=WorkerCycleFocusKind.REPAIR_FINDINGS,
             finding_ids=tuple(finding.finding_id for finding in repair_findings),
         )
+    definition_obligations = {
+        item.obligation_id: item for item in definition.completion_obligations
+    }
     for obligation in completion_obligations:
         if obligation.status is CompletionStatus.UNINVESTIGATED:
+            primary_definition = definition_obligations[obligation.obligation_id]
+            unresolved_ids = {
+                item.obligation_id
+                for item in completion_obligations
+                if item.status is CompletionStatus.UNINVESTIGATED
+            }
             return WorkerCycleFocus(
                 kind=WorkerCycleFocusKind.OBLIGATION,
                 obligation_id=obligation.obligation_id,
+                related_obligation_ids=tuple(
+                    related_id
+                    for related_id in primary_definition.related_obligation_ids
+                    if related_id in unresolved_ids
+                ),
             )
     return WorkerCycleFocus(kind=WorkerCycleFocusKind.FINALIZATION_READINESS)
 
 
-def _serialize_cycle_focus(focus: WorkerCycleFocus) -> str:
+def _serialize_cycle_focus(
+    focus: WorkerCycleFocus,
+    completion_obligations: tuple[CompletionObligationView, ...],
+) -> str:
     """Render the harness-owned bounded-cycle instruction for the worker."""
     if focus.kind is WorkerCycleFocusKind.OBLIGATION:
-        directive = (
-            f"obligation_id: {focus.obligation_id}\n\n"
-            "Your primary responsibility during this cycle is to investigate and "
-            "resolve this obligation.\n\n"
-            "Keep the complete target in mind, but do not deliberately move on to "
-            "unrelated unresolved obligations. If the same evidence directly "
-            "resolves closely related obligations, you may update them too."
+        obligation = next(
+            (
+                obligation
+                for obligation in completion_obligations
+                if obligation.obligation_id == focus.obligation_id
+            ),
+            None,
         )
+
+        if obligation is None:
+            raise WorkerContextHydrationError(
+                f"focused obligation is missing: {focus.obligation_id}"
+            )
+
+        requirements = "\n".join(
+            f"- {requirement}" for requirement in obligation.investigation_requirements
+        )
+
+        related_ids = (
+            "\n".join(f"- {related_id}" for related_id in focus.related_obligation_ids)
+            or "- none"
+        )
+        directive = (
+            f"obligation_id: {obligation.obligation_id}\n"
+            f"description: {obligation.description}\n"
+            "investigation_requirements:\n"
+            f"{requirements}\n\n"
+            "related_unresolved_obligation_ids:\n"
+            f"{related_ids}\n\n"
+            "Your primary responsibility during this cycle is to investigate and "
+            "resolve the primary obligation.\n\n"
+            "The listed related unresolved obligations are investigation-reuse "
+            "candidates, not additional objectives.\n\n"
+            "If the investigation and evidence required for the primary obligation "
+            "materially establish one of the listed related obligations, resolve that "
+            "obligation during this cycle using the same investigation/evidence.\n\n"
+            "Do not launch additional repository exploration merely to clear a related "
+            "obligation. If the primary investigation does not establish it, leave it "
+            "uninvestigated for a future cycle."
+        )
+
     elif focus.kind is WorkerCycleFocusKind.REPAIR_FINDINGS:
         directive = (
             "finding_ids:\n"
             + "\n".join(f"- {finding_id}" for finding_id in focus.finding_ids)
             + "\n\nResolve the currently routed repair finding set in persisted order."
         )
+
     else:
         directive = (
             "Inspect the current target as a whole, make any necessary final "
             "coherence or organization fixes, verify completion state, and request "
             "finalization when the complete target is ready."
         )
+
     return (
         f"kind: {focus.kind.value}\n"
         f"{directive}\n\n"
@@ -995,6 +1040,7 @@ def _project_completion(
             CompletionObligationView(
                 obligation_id=obligation.obligation_id,
                 description=obligation.description,
+                investigation_requirements=tuple(obligation.investigation_requirements),
                 applicability=obligation.applicability,
                 condition_hint=obligation.condition_hint,
                 status=item.status,

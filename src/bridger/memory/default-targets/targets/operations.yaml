@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 target_id: operations
-target_contract_version: v2
-activation: {mode: always}
+target_contract_version: v3
+activation: { mode: always }
 depends_on: []
 canonical_question: How does this repository become a runnable or released system, how is that runtime configured, and how is it operated?
 purpose: Explain build, packaging, delivery, deployment, runtime configuration, observability, and operational lifecycle.
@@ -16,48 +16,126 @@ exclusions:
 boundary_guidance:
   - Own the source-to-runtime and operational lifecycle rather than in-process component behavior.
 investigation_expectations:
-  - Trace source through build artifact, configuration, release, deployment, runtime topology, observability, and recovery where represented.
-  - Do not invent operational practices absent from repository evidence.
+  - >-
+    Phase A — Inventory build/package scripts, runtime configuration, environment
+    handling, CI/release files, deployment artifacts, process launchers,
+    observability surfaces, migration/recovery mechanisms, and operator commands.
+  - >-
+    Phase B — Classify what the repository actually owns versus what is delegated
+    to an external platform or simply not represented.
+  - >-
+    Phase C — Deeply trace represented operational paths from source/configuration
+    through build or launch to runtime/deployment/observation/recovery. Preserve
+    explicit negative knowledge rather than inventing external operational policy.
 evidence_expectations:
   - Use scripts, manifests, workflows, containers, infrastructure, deployment files, environment templates, and observability configuration.
   - Use source for health, configuration loading, lifecycle, telemetry, and runtime switches; executable evidence outranks conflicting docs.
 completion_obligations:
   - obligation_id: build-package-path
-    description: Identify the build and package path.
+    related_obligation_ids:
+      - runtime-prerequisites-configuration
+      - ci-cd-release
+      - operator-developer-commands
+    description: Explain the supported build, dependency, packaging, and launch path.
+    investigation_requirements:
+      - Trace repository-supported commands through the underlying tool invocation and artifacts they produce or launch.
+      - Identify lockfiles, package configuration, runtime version requirements, and material prerequisites.
+      - Distinguish development helpers from production-style launch paths.
     applicability: always
   - obligation_id: runtime-prerequisites-configuration
-    description: Explain runtime prerequisites and the principal configuration model.
+    related_obligation_ids:
+      - environments
+      - deployment-topology
+      - secrets-config-injection
+      - operator-developer-commands
+    description: Explain runtime prerequisites and configuration sources.
+    investigation_requirements:
+      - Inventory material runtime settings and where their values originate.
+      - Trace representative configuration from declaration/default through loading/validation into runtime consumption.
+      - Identify required versus defaulted configuration from executable validation, not comments alone.
     applicability: always
   - obligation_id: environments
-    description: Explain environment distinctions when present.
+    related_obligation_ids:
+      - ci-cd-release
+      - deployment-topology
+      - secrets-config-injection
+    description: Explain environment-specific behavior or environment topology when present.
+    investigation_requirements:
+      - Identify explicit environment profiles, branches, settings, or environment-dependent behavior.
+      - Trace how environment selection changes actual configuration or execution.
+      - Do not invent development/staging/production topology not represented by the repository.
     applicability: conditional
-    condition_hint: The repository represents distinct development, test, staging, production, or comparable environments.
+    condition_hint: The repository explicitly models or configures materially different runtime/deployment environments.
   - obligation_id: ci-cd-release
-    description: Explain CI/CD and release flow when present.
+    related_obligation_ids:
+      - deployment-topology
+      - secrets-config-injection
+      - migrations-rollout-rollback
+      - operator-developer-commands
+    description: Explain CI, delivery, and release automation when present.
+    investigation_requirements:
+      - Trace triggers through jobs/scripts to concrete build, validation, publishing, or deployment actions.
+      - Identify artifact/version/promotion mechanics actually represented.
+      - Distinguish CI validation from a complete deployment/release process.
     applicability: conditional
-    condition_hint: The repository contains delivery, release, publishing, or deployment automation.
+    condition_hint: CI, CD, publishing, or release automation exists.
   - obligation_id: deployment-topology
-    description: Explain deployment and runtime topology when present.
+    related_obligation_ids:
+      - secrets-config-injection
+      - health-observability
+      - migrations-rollout-rollback
+      - scaling-scheduled-operations
+    description: Explain repository-defined deployment and runtime topology when present.
+    investigation_requirements:
+      - Trace deployment or launcher artifacts to the processes/services they start and their binding/communication relationships.
+      - Identify which topology is repository-defined versus external platform behavior.
+      - Include startup/shutdown supervision when materially represented.
     applicability: conditional
-    condition_hint: Deployment manifests, containers, infrastructure, or multiple runtime processes are represented.
+    condition_hint: Deployment manifests, process launchers, containers, infrastructure code, or other deployment topology is represented.
   - obligation_id: secrets-config-injection
-    description: Explain secrets and configuration injection when present.
+    related_obligation_ids: []
+    description: Explain how secrets and operational configuration enter runtime when materially represented.
+    investigation_requirements:
+      - Trace representative secrets from declared configuration field to loading/injection and consumer.
+      - Identify local files, environment variables, platform adapters, or secret-manager clients actually used.
+      - Do not infer external secret storage, rotation, or encryption guarantees absent repository evidence.
     applicability: conditional
-    condition_hint: Runtime configuration or secrets are injected through explicit operational mechanisms.
+    condition_hint: Runtime uses secrets or externally injected operational configuration.
   - obligation_id: health-observability
-    description: Explain health and observability mechanisms when present.
+    related_obligation_ids: []
+    description: Explain health, logs, metrics, tracing, and other observability mechanisms when present.
+    investigation_requirements:
+      - Inventory health/readiness endpoints, structured logs, metrics, tracing, dashboards/exporters, and alert integrations represented in source.
+      - Trace what each health or metric surface actually measures or verifies.
+      - Explicitly distinguish liveness from readiness and process-local metrics from durable/aggregated observability.
     applicability: conditional
-    condition_hint: The runtime exposes health checks, logs, metrics, tracing, alerts, or troubleshooting mechanisms.
+    condition_hint: The repository contains material health, logging, metrics, tracing, or monitoring surfaces.
   - obligation_id: migrations-rollout-rollback
-    description: Explain deployment migrations, rollout, and rollback mechanisms when present.
+    related_obligation_ids:
+      - operator-developer-commands
+    description: Explain operational migration, rollout, rollback, and recovery mechanisms when present.
+    investigation_requirements:
+      - Inventory executable migration, promotion, rollback, backup, restoration, and compatibility mechanisms.
+      - Trace actual commands or control flow rather than inferring procedures from schema files or version fields.
+      - State clearly when these responsibilities are external or unspecified.
     applicability: conditional
-    condition_hint: The operational lifecycle includes migrations, staged rollout, recovery, or rollback.
+    condition_hint: The repository contains explicit migration, rollout, rollback, backup, restoration, or deployment-recovery mechanisms.
   - obligation_id: scaling-scheduled-operations
-    description: Explain scaling and scheduled operational mechanisms when present.
+    related_obligation_ids: []
+    description: Explain material scaling, scheduling, recurring jobs, or operator-maintained runtime operations when present.
+    investigation_requirements:
+      - Trace scheduled/recurring execution from configuration or scheduler through runtime action.
+      - Identify concurrency, replica, scaling, or maintenance controls actually represented.
+      - Separate application-local background work from deployment/platform scaling semantics.
     applicability: conditional
-    condition_hint: Scaling, scheduled jobs, or other operational automation is represented.
+    condition_hint: The repository has material scheduled operations, recurring maintenance, worker scaling, replica coordination, or similar operational behavior.
   - obligation_id: operator-developer-commands
-    description: Ground important operator and developer commands.
+    related_obligation_ids: []
+    description: Provide reliable repository-supported commands for normal developer and operator workflows.
+    investigation_requirements:
+      - Verify commands from scripts/Makefiles/package definitions rather than documentation alone.
+      - Explain the intended effect and material prerequisite of each important command.
+      - Avoid listing low-value helper commands that do not aid build, run, verify, diagnose, or operate workflows.
     applicability: always
 output_quality_expectations:
   - Make checkout-to-runtime, configuration, release, and operational navigation explicit and repository-grounded.

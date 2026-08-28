@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 target_id: architecture
-target_contract_version: v2
-activation: {mode: always}
+target_contract_version: v3
+activation: { mode: always }
 depends_on: []
 canonical_question: How is the software structurally composed, and how does runtime execution move through its major components?
 purpose: Explain the system's structural composition, runtime responsibilities, and execution paths.
@@ -22,47 +22,126 @@ exclusions:
 boundary_guidance:
   - Own runtime structure and mechanics; leave product meaning and specialist implementation detail to their canonical targets.
 investigation_expectations:
-  - Identify entry surfaces, applications, processes, structurally important components, and their source-level responsibilities.
-  - Establish dependency direction and trace principal synchronous and asynchronous runtime paths.
-  - Establish component state responsibility, composition, extension mechanisms, patterns, and important failure or recovery behavior.
+  - >-
+    Phase A — Inventory executable entrypoints, runtime units, major components,
+    background execution surfaces, and process or service boundaries.
+  - >-
+    Phase B — Map actual responsibility, state ownership, composition, dependency
+    direction, and cross-component handoffs using implementation rather than names
+    or declared responsibilities alone.
+  - >-
+    Phase C — Trace principal execution paths end to end. Follow actual call,
+    task, queue, event, and process handoffs far enough to establish effective
+    runtime behavior, including important branches, cleanup, and recovery.
 evidence_expectations:
   - Use graph and import relations for structure, manifests for entrypoints, and source inspection for responsibility and control flow.
   - Use tests and documentation as supporting evidence while surfacing conflicts with implementation.
   - Ground central execution paths across the meaningful component chain.
 completion_obligations:
   - obligation_id: runtime-entrypoints
-    description: Identify the principal runtime entrypoints.
+    related_obligation_ids:
+      - runtime-components
+      - component-responsibilities
+      - execution-paths
+      - bootstrap-composition
+    description: Identify the principal executable runtime entrypoints.
+    investigation_requirements:
+      - Inventory deployable applications, CLIs, workers, servers, scripts, and other executable roots.
+      - Verify how each important entrypoint is actually launched and which composition/runtime path it enters.
+      - Distinguish executable entrypoints from merely importable modules or documented commands.
     applicability: always
   - obligation_id: runtime-components
-    description: Identify the major runtime applications, processes, and components.
+    related_obligation_ids:
+      - component-responsibilities
+      - component-dependencies
+      - execution-paths
+      - component-state-ownership
+    description: Identify the major runtime components that form the system.
+    investigation_requirements:
+      - Build a bounded component inventory from actual composition and execution paths.
+      - Include components that materially own orchestration, transport, background work, or runtime state.
+      - Do not elevate every module or class to an architectural component.
     applicability: always
   - obligation_id: component-responsibilities
-    description: Explain the responsibilities of major components.
+    related_obligation_ids:
+      - component-dependencies
+      - execution-paths
+      - component-state-ownership
+    description: Establish what the major runtime components actually own and do.
+    investigation_requirements:
+      - Verify responsibility through executable methods, call sites, and owned state rather than class names or docstrings alone.
+      - Distinguish intended responsibilities from behavior that is actually implemented.
+      - Surface material contradictions between declared responsibility and executable behavior.
     applicability: always
   - obligation_id: component-dependencies
-    description: Explain important dependencies and interactions between components.
+    related_obligation_ids:
+      - execution-paths
+      - bootstrap-composition
+    description: Explain the significant dependency direction and component relationships.
+    investigation_requirements:
+      - Trace actual construction, injection, imports, calls, or handoffs connecting major components.
+      - Establish directionality rather than merely noting that two components reference the same subsystem.
+      - Follow cross-process or adapter-mediated dependencies when they affect runtime composition.
     applicability: always
   - obligation_id: execution-paths
-    description: Explain the principal execution and control paths mechanically.
+    related_obligation_ids:
+      - bootstrap-composition
+      - async-background-execution
+      - component-state-ownership
+      - runtime-error-recovery
+    description: Explain the principal synchronous runtime execution paths end to end.
+    investigation_requirements:
+      - Follow at least one concrete central path from runtime trigger or ingress through orchestration to its terminal runtime handoff or outcome.
+      - Inspect callers and callees across files where execution crosses component boundaries.
+      - Include meaningful branches and failure transformations that change effective control flow.
+      - Do not resolve from a list of participating components.
     applicability: always
   - obligation_id: bootstrap-composition
-    description: Explain initialization, bootstrap, and runtime composition.
+    related_obligation_ids:
+      - async-background-execution
+      - extension-mechanisms
+    description: Explain bootstrap, construction, dependency injection, and lifecycle composition.
+    investigation_requirements:
+      - Trace startup from executable root through construction of important shared components and resources.
+      - Verify resource ownership and startup/shutdown ordering in executable lifecycle code.
+      - Distinguish process-local composition from cross-process shared state or communication.
     applicability: always
   - obligation_id: async-background-execution
-    description: Explain asynchronous and background execution when present.
+    related_obligation_ids:
+      - runtime-error-recovery
+    description: Explain material asynchronous, queued, scheduled, or background execution when present.
+    investigation_requirements:
+      - Trace creation or enqueue through scheduling, execution, completion, cancellation, and shutdown.
+      - Establish concurrency and ownership boundaries for tasks, queues, workers, or event loops.
+      - Include retry or failure behavior where it materially affects execution.
     applicability: conditional
-    condition_hint: Background workers, queues, events, schedulers, concurrency, or other asynchronous execution exists.
+    condition_hint: Material background tasks, queues, scheduled work, asynchronous workers, or other concurrent execution exists.
   - obligation_id: component-state-ownership
-    description: Identify component-level state ownership.
+    related_obligation_ids: []
+    description: Explain runtime state ownership across major components.
+    investigation_requirements:
+      - Identify mutable runtime state held by major components and who may mutate or observe it.
+      - Distinguish component-owned state from injected shared state and durable external state.
+      - Trace representative ownership through actual usage rather than field declarations alone.
     applicability: always
   - obligation_id: extension-mechanisms
-    description: Explain major extension and plugin mechanisms when present.
+    related_obligation_ids: []
+    description: Explain architectural extension or plugin/composition seams when present.
+    investigation_requirements:
+      - Trace how an extension is registered or discovered, constructed, selected, and invoked.
+      - Determine whether the mechanism is truly extensible or merely a hard-coded registry with future-looking comments.
+      - Explain failure isolation or composition behavior when relevant.
     applicability: conditional
-    condition_hint: The runtime exposes plugin, extension, hook, or comparable composition mechanisms.
+    condition_hint: The runtime has material extension, plugin, hook, registry, or feature-composition mechanisms.
   - obligation_id: runtime-error-recovery
-    description: Explain important runtime error propagation and recovery behavior when present.
+    related_obligation_ids: []
+    description: Explain material runtime error propagation, cleanup, recovery, and shutdown behavior.
+    investigation_requirements:
+      - Trace representative failures across component boundaries to determine where errors are transformed, absorbed, propagated, retried, or logged.
+      - Inspect finally/cleanup/cancellation paths as well as the local throwing branch.
+      - Establish effective behavior, not merely the exception type or intended recovery described by documentation.
     applicability: conditional
-    condition_hint: The runtime implements material error propagation, retries, recovery, or fallback behavior.
+    condition_hint: Runtime components implement material recovery, cancellation, retries, fallback, or coordinated shutdown behavior.
 output_quality_expectations:
   - Describe responsibilities and interactions rather than producing a file inventory or unsupported architecture labels.
   - Make execution paths navigable and defer detailed product, persistence, interface, and operations ownership.

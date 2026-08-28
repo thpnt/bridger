@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 target_id: testing
-target_contract_version: v2
-activation: {mode: always}
+target_contract_version: v3
+activation: { mode: always }
 depends_on: []
 canonical_question: How does the repository establish correctness, and how should a contributor verify a change?
 purpose: Explain the verification strategy and practical test surfaces contributors should use.
@@ -16,39 +16,107 @@ exclusions:
 boundary_guidance:
   - Own how correctness is established, not the complete behavior under test or all individual test-writing style.
 investigation_expectations:
-  - Inspect test configuration, commands, representative test levels, fixtures, factories, doubles, external-service handling, and CI definitions.
-  - Do not infer the repository's strategy from a single directory or configuration file.
+  - >-
+    Phase A — Inventory test configuration, test trees, validation commands,
+    declared testing dependencies, CI workflows, fixtures/factories, doubles,
+    and specialized verification tooling.
+  - >-
+    Phase B — Classify what is actually exercised by test level and product area.
+    Do not treat an installed dependency, configured plugin, or empty directory as
+    evidence that a verification strategy is implemented.
+  - >-
+    Phase C — Inspect representative tests and setup paths, then compare the
+    verified surfaces against material production surfaces to derive actionable
+    verification guidance and gaps.
 evidence_expectations:
   - Use test source and configuration as primary evidence, manifest scripts for commands, and CI for automatically executed suites.
 completion_obligations:
   - obligation_id: frameworks-test-levels
-    description: Identify test frameworks and principal test levels.
+    related_obligation_ids:
+      - test-organization
+      - validation-commands
+      - specialized-test-strategies
+    description: Establish the testing frameworks and test levels that are actually implemented.
+    investigation_requirements:
+      - Inventory test runners/plugins and inspect representative collected tests.
+      - Distinguish available tooling from tooling visibly exercised by the checked-in suite.
+      - Identify unit, integration, contract, E2E, or other levels only when repository evidence supports them.
     applicability: always
   - obligation_id: test-organization
-    description: Explain test organization and layout.
+    related_obligation_ids:
+      - fixtures-factories-setup
+      - isolation-external-dependencies
+      - specialized-test-strategies
+    description: Explain how tests are organized and how that organization maps to production areas.
+    investigation_requirements:
+      - Inspect the test tree and representative files across material areas rather than one directory.
+      - Identify naming, placement, and grouping patterns actually used.
+      - Note important production areas with no corresponding test surface.
     applicability: always
   - obligation_id: fixtures-factories-setup
-    description: Explain fixtures, factories, and test setup.
+    related_obligation_ids:
+      - isolation-external-dependencies
+    description: Explain representative fixture, factory, setup, and test-data patterns.
+    investigation_requirements:
+      - Trace representative tests through their fixture/factory/setup dependencies.
+      - Distinguish repository-wide setup patterns from module-local helpers.
+      - Identify hidden prerequisites or state that materially affect reproducibility.
     applicability: always
   - obligation_id: isolation-external-dependencies
-    description: Explain isolation and external-dependency handling.
+    related_obligation_ids: []
+    description: Explain how tests isolate or provision databases, networks, providers, time, and other external dependencies.
+    investigation_requirements:
+      - Inspect representative tests that touch external boundaries or stateful infrastructure.
+      - Establish whether dependencies are mocked, monkeypatched, faked, containerized, provisioned live, or simply untested.
+      - Do not infer use from testing dependencies alone.
     applicability: always
   - obligation_id: validation-commands
-    description: Identify standard validation and test commands.
+    related_obligation_ids:
+      - change-verification-mapping
+      - ci-verification
+    description: Establish the repository-supported commands for tests and related validation.
+    investigation_requirements:
+      - Trace commands from Makefiles/scripts/package configuration into the actual runner invocation.
+      - Distinguish focused development commands from the full local verification gate.
+      - Identify prerequisites needed for those commands to succeed.
     applicability: always
   - obligation_id: change-verification-mapping
-    description: Map important change types to appropriate verification surfaces.
+    related_obligation_ids:
+      - specialized-test-strategies
+      - material-testing-gaps
+    description: Explain how representative kinds of code changes should be verified.
+    investigation_requirements:
+      - Map material production change types to the nearest existing test level and command.
+      - Base guidance on demonstrated repository patterns rather than generic testing advice.
+      - Explicitly identify when a changed production surface currently has no representative automated coverage.
     applicability: always
   - obligation_id: ci-verification
-    description: Identify CI-triggered verification when present.
+    related_obligation_ids:
+      - material-testing-gaps
+    description: Explain automated CI verification when present.
+    investigation_requirements:
+      - Trace workflow/job configuration to the exact validation commands or scripts it invokes.
+      - Establish triggers, prerequisites, and meaningful pass/fail gates.
+      - Distinguish CI-visible checks from locally available commands not run automatically.
     applicability: conditional
-    condition_hint: CI configuration executes tests, checks, or other verification.
+    condition_hint: CI or another automated verification pipeline is represented in the repository.
   - obligation_id: specialized-test-strategies
-    description: Explain end-to-end, contract, visual, accessibility, performance, security, and other specialized strategies when present.
+    related_obligation_ids:
+      - material-testing-gaps
+    description: Explain material specialized verification strategies when present.
+    investigation_requirements:
+      - Inventory property, snapshot, browser, accessibility, security, performance, contract, migration, or other specialized strategies.
+      - Inspect representative implementation before describing a strategy as established.
+      - Explain what risk or boundary the strategy actually verifies.
     applicability: conditional
-    condition_hint: One or more specialized test categories are represented in the repository.
+    condition_hint: Material specialized test or verification strategies exist.
   - obligation_id: material-testing-gaps
-    description: Surface material testing gaps discovered during investigation without claiming exhaustive gap analysis.
+    related_obligation_ids: []
+    description: Identify material testing gaps relevant to future changes.
+    investigation_requirements:
+      - Compare the material production surfaces discovered for this target with the actual checked-in verification surfaces.
+      - Prioritize missing verification for central behavior and high-risk boundaries rather than exhaustive coverage accounting.
+      - Distinguish "not found in the repository" from a claim that no external/manual testing exists.
     applicability: always
 output_quality_expectations:
   - Be practical and repository-specific so a contributor can choose tests to add or run for a change.

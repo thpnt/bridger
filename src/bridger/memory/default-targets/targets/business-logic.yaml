@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 target_id: business-logic
-target_contract_version: v2
-activation: {mode: always}
+target_contract_version: v3
+activation: { mode: always }
 depends_on: []
 canonical_question: What product or domain behavior does the software implement, and what semantic rules must remain true regardless of implementation?
 purpose: Explain product meaning, domain behavior, rules, invariants, states, transitions, and outcomes.
@@ -18,65 +18,80 @@ exclusions:
 boundary_guidance:
   - Own what the software means and guarantees, not the incidental components or storage mechanisms that implement it.
 investigation_expectations:
-  - Establish terminology, actors, actions, workflows, decisions, validations, invariants, legal transitions, and meaningful failure paths.
-  - Trace central workflows from trigger through domain decision, state transition, side effects, and alternate outcomes.
-  - Verify important rules against source and relevant tests and preserve unresolved ambiguity.
+  - >-
+    Phase A — Build a domain inventory before deep-diving: principal actors,
+    product/domain concepts, major capabilities and actions, meaningful domain
+    states, and product-significant external interactions.
+  - >-
+    Phase B — For every major capability, map what can happen, who or what
+    initiates it, under what conditions, which rules govern it, what changes
+    semantically, what product-significant side effects occur, what can prevent
+    or reject it, and where the behavior is actually implemented.
+  - >-
+    Phase C — Deeply trace the central capabilities end to end in executable
+    source. A workflow is not covered by identifying its components. Follow
+    callers and callees across files and boundaries through meaningful decisions,
+    outcomes, alternate branches, and failure paths.
+  - >-
+    Synthesize in product/domain terms. The result should read like the domain
+    manual a senior engineer carries mentally, not like an inventory of functions,
+    classes, endpoints, or files.
 evidence_expectations:
   - Ground central rules and workflows in implementation-level evidence across the relevant chain.
   - Use tests for invariants and edge cases and documentation for terminology, while surfacing conflicts with source.
 completion_obligations:
   - obligation_id: domain-concepts
-    description: Identify and relate the principal domain and product concepts.
-    applicability: always
-  - obligation_id: domain-actions
-    description: Explain the major user and system actions.
+    related_obligation_ids:
+      - domain-workflows
+      - rules-invariants
+      - domain-states-transitions
+    description: Establish the principal domain model, actors, relationships, and major product capabilities.
+    investigation_requirements:
+      - Build an inventory of major product/domain capabilities from actual behavior, entry actions, models, handlers, services, tools, and provider interactions.
+      - For each major capability, identify its initiator, semantic purpose, important concepts or actors, and implementation anchors.
+      - Do not resolve after finding representative examples; account for the repository's central capabilities or explicitly record remaining uncertainty.
     applicability: always
   - obligation_id: domain-workflows
-    description: Explain central product and domain workflows end to end semantically.
+    related_obligation_ids:
+      - rules-invariants
+      - domain-states-transitions
+      - domain-failures
+    description: Explain the central product/domain workflows end to end in semantic terms.
+    investigation_requirements:
+      - For each central capability, trace at least one concrete path from trigger through eligibility or decisions, semantic state/outcome, product-significant side effects, and terminal outcome.
+      - Follow callers and callees across files or component boundaries when the workflow crosses them.
+      - Include meaningful alternate, rejection, fallback, partial-success, and failure paths where they alter product behavior.
+      - Do not treat a component list or call graph as a completed workflow explanation.
     applicability: always
   - obligation_id: rules-invariants
-    description: Make important business and domain rules and invariants explicit.
+    related_obligation_ids:
+      - domain-states-transitions
+      - domain-failures
+    description: Make material business/domain rules, invariants, validation, eligibility, authorization, and limits explicit.
+    investigation_requirements:
+      - Inventory material decision rules attached to the major capabilities already identified.
+      - Locate the executable enforcement of important rules and trace the values or conditions that drive the decision.
+      - Distinguish semantic invariants from incidental implementation choices.
+      - Treat comments, names, and documentation as intent unless executable behavior confirms them.
     applicability: always
   - obligation_id: domain-states-transitions
-    description: Explain important domain states and allowed, forbidden, and significant transitions.
-    applicability: always
-  - obligation_id: validation-eligibility
-    description: Explain important domain validation and eligibility rules.
-    applicability: always
-  - obligation_id: domain-authorization
-    description: Explain business-significant authorization and permission rules when present.
-    applicability: conditional
-    condition_hint: Product behavior contains actor permissions, entitlements, or business-significant authorization decisions.
-  - obligation_id: domain-side-effects
-    description: Explain business-significant outcomes and side effects.
+    related_obligation_ids:
+      - domain-failures
+    description: Explain meaningful domain states, transitions, lifecycle rules, and business-significant calculations.
+    investigation_requirements:
+      - Identify the states and transitions that change product meaning rather than merely technical representation.
+      - Trace what creates, permits, prevents, or terminates each important transition and what semantic outcome follows.
+      - Capture legal and materially forbidden transitions when the implementation establishes them.
+      - Leave persistence representation, locking, and transaction mechanics to Data & State.
     applicability: always
   - obligation_id: domain-failures
-    description: Explain domain-specific failures and alternate outcomes.
+    related_obligation_ids: []
+    description: Explain product-significant outcomes, side effects, exceptional paths, and failure semantics.
+    investigation_requirements:
+      - Inventory the meaningful external or durable consequences of central capabilities.
+      - Trace successful, rejected, failed, fallback, retry-exhausted, or partially completed branches far enough to establish their product outcome.
+      - Distinguish infrastructure failure mechanics from the business/domain consequence exposed to the product.
     applicability: always
-  - obligation_id: pricing-billing
-    description: Explain pricing and billing semantics when present.
-    applicability: conditional
-    condition_hint: The product implements pricing or billing behavior.
-  - obligation_id: subscriptions-entitlements
-    description: Explain subscription and entitlement semantics when present.
-    applicability: conditional
-    condition_hint: The product implements subscriptions or entitlements.
-  - obligation_id: quotas-limits
-    description: Explain domain quotas and limits when present.
-    applicability: conditional
-    condition_hint: The product enforces business-significant quotas or limits.
-  - obligation_id: approvals-scheduling
-    description: Explain approval and scheduling rules when present.
-    applicability: conditional
-    condition_hint: The product implements approval or scheduling workflows.
-  - obligation_id: lifecycle-calculations
-    description: Explain domain lifecycle rules and business-significant calculations when present.
-    applicability: conditional
-    condition_hint: The product has specialized lifecycle rules or domain calculations beyond its central workflows.
-  - obligation_id: regulatory-provider-semantics
-    description: Explain encoded regulatory constraints and provider interactions that affect product semantics when present.
-    applicability: conditional
-    condition_hint: Regulatory constraints or external-provider behavior materially changes product outcomes.
 output_quality_expectations:
   - Use repository terminology, synthesize behavior, and separate semantic rules from implementation mechanics.
   - Be source-grounded, explicit about uncertainty, navigable, and free of generic domain-analysis filler.

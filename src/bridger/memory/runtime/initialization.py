@@ -27,7 +27,7 @@ from bridger.memory.persistence.store import (
 )
 from bridger.memory.targets import _resolve_catalog_definitions
 
-_SUPPORTED_SCHEMA_VERSION = 1
+_SUPPORTED_SCHEMA_VERSION = 2
 
 
 def initialize_fleet(

@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 target_id: data-and-state
-target_contract_version: v2
-activation: {mode: always}
+target_contract_version: v3
+activation: { mode: always }
 depends_on: []
 canonical_question: What state exists, where does truth live, who owns it, and how is it represented, read, changed, and kept consistent?
 purpose: Explain technical state authority, representation, ownership, persistence, mutation, lifecycle, and consistency.
@@ -17,43 +17,117 @@ exclusions:
 boundary_guidance:
   - Own technical truth, representation, ownership, and lifecycle rather than the product meaning of transitions.
 investigation_expectations:
-  - Trace significant state from authority and representation through readers, writers, coordination, derived copies, and lifecycle.
-  - Inspect both definitions and usage rather than documenting schemas in isolation.
+  - >-
+    Phase A — Inventory material state mechanisms before deep-diving. Explicitly
+    look for durable stores, in-memory stores, caches, queues, registries/maps/sets,
+    locks, TTL/expiry mechanisms, deduplication state, sessions, and derived or
+    replicated state.
+  - >-
+    Phase B — Classify every material state mechanism found by authority
+    (authoritative/derived), durability (durable/ephemeral), runtime scope
+    (process-local/cross-process), owner, principal readers/writers, and lifecycle.
+    - >-
+      Phase C — Deeply trace the significant mechanisms through creation → mutation
+      → reads/consumers → invalidation/expiry/deletion. Inspect definitions and
+      usage; representative examples are not sufficient evidence that the state
+      inventory is complete.
 evidence_expectations:
   - Use schemas, migrations, models, persistence configuration, and serialization for representation.
   - Use source readers and writers for ownership and lifecycle, with tests as supporting evidence.
 completion_obligations:
   - obligation_id: state-categories-stores
-    description: Identify the principal state categories and stores.
+    related_obligation_ids:
+      - sources-of-truth
+      - data-models
+      - read-write-ownership
+      - caches-derived-state
+    description: Identify the principal state categories and material state mechanisms.
+    investigation_requirements:
+      - Inventory durable stores, in-memory stores, caches, queues, registries/maps/sets, locks, TTL/expiry state, deduplication state, and derived or replicated state.
+      - Classify every material mechanism by durability and process scope before selecting the significant mechanisms for deeper analysis.
+      - Do not resolve after finding representative stores; establish a reasonable repository-wide state inventory.
     applicability: always
   - obligation_id: sources-of-truth
-    description: Distinguish authoritative sources of truth from derived and cached state.
+    related_obligation_ids:
+      - data-models
+    description: Distinguish authoritative sources of truth from derived, cached, replicated, and operational state.
+    investigation_requirements:
+      - For each significant state area, identify which representation is authoritative and which copies or projections are derived.
+      - Verify authority from write/read behavior and lifecycle, not merely model comments or names such as "source of truth."
+      - Surface ambiguous or competing authority explicitly.
     applicability: always
   - obligation_id: data-models
-    description: Explain important persisted and data models technically.
+    related_obligation_ids:
+      - read-write-ownership
+      - mutation-lifecycle
+      - migrations-schema-evolution
+      - retention-versioning-locking
+    description: Explain the important persisted and state models technically.
+    investigation_requirements:
+      - Inspect the models or schemas that define identity, representation, serialization, and material relationships.
+      - Trace representative serialization/deserialization or persistence usage so the documented model reflects runtime representation.
+      - Avoid exhaustive field dictionaries unless individual fields carry important semantics.
     applicability: always
   - obligation_id: read-write-ownership
-    description: Explain read and write ownership and data-access boundaries.
+    related_obligation_ids:
+      - mutation-lifecycle
+      - consistency-transactions
+      - caches-derived-state
+    description: Explain read/write ownership and material state-access boundaries.
+    investigation_requirements:
+      - Identify the principal readers and writers of each significant authoritative state mechanism.
+      - Follow usages across files or components rather than stopping at the storage adapter.
+      - Distinguish ownership from generic access capability.
     applicability: always
   - obligation_id: mutation-lifecycle
-    description: Explain important mutation and data lifecycle paths.
+    related_obligation_ids:
+      - consistency-transactions
+      - caches-derived-state
+      - retention-versioning-locking
+    description: Explain important state mutation and lifecycle paths.
+    investigation_requirements:
+      - For significant state, trace creation → mutation → reads/consumers → invalidation/expiry/deletion where those stages exist.
+      - Identify lifecycle transitions and which components cause them.
+      - Include partial or failure paths when they can leave materially different state.
     applicability: always
   - obligation_id: consistency-transactions
-    description: Explain consistency and transaction semantics when present.
+    related_obligation_ids:
+      - retention-versioning-locking
+    description: Explain material consistency, concurrency, and transaction semantics when present.
+    investigation_requirements:
+      - Inventory transactions, locks, compare-and-swap/version checks, idempotency gates, deduplication controls, or ordering guarantees involved in state changes.
+      - Trace what those mechanisms actually protect and their process/distribution scope.
+      - Identify non-atomic multi-step writes or races when the implementation exposes them.
     applicability: conditional
-    condition_hint: State changes use transactions or material consistency coordination.
+    condition_hint: State changes use transactions, locking, idempotency, deduplication, ordering, or other material consistency coordination.
   - obligation_id: migrations-schema-evolution
-    description: Explain migrations and schema evolution when present.
+    related_obligation_ids: []
+    description: Explain persisted representation evolution and migrations when present.
+    investigation_requirements:
+      - Determine whether explicit migrations, schema versions, compatibility adapters, backfills, or mixed-version handling exist.
+      - Trace an actual evolution mechanism from version/shape detection through transformation or compatibility behavior.
+      - Do not infer a migration system merely because schema_version fields or schema files exist.
     applicability: conditional
-    condition_hint: Persistent schemas or representations evolve through explicit migration or versioning mechanisms.
+    condition_hint: Persistent representations have explicit migration, compatibility, or version-evolution mechanisms.
   - obligation_id: caches-derived-state
-    description: Explain caches, derived or materialized state, and invalidation when present.
+    related_obligation_ids:
+      - retention-versioning-locking
+    description: Explain caches, derived/materialized state, and invalidation when present.
+    investigation_requirements:
+      - Use the state inventory to identify every material cache or derived/replicated representation.
+      - Trace source → population → reads → refresh/invalidation/expiry.
+      - Establish whether cache state is process-local or shared and what happens on restart.
     applicability: conditional
     condition_hint: Cached, derived, replicated, or materialized state exists.
   - obligation_id: retention-versioning-locking
-    description: Explain important retention, expiry, versioning, or locking mechanisms when present.
+    related_obligation_ids: []
+    description: Explain material retention, expiry, versioning, and locking behavior when present.
+    investigation_requirements:
+      - Inventory TTLs, retention windows, pruning, version markers, lock scopes, and similar lifecycle controls.
+      - Trace who creates or updates the controlling metadata and who performs expiry, pruning, or coordination.
+      - Distinguish process-local synchronization from distributed/durable guarantees.
     applicability: conditional
-    condition_hint: State has material retention, expiry, versioning, replication, or locking behavior.
+    condition_hint: State has material retention, expiry, versioning, replication, pruning, or locking behavior.
 output_quality_expectations:
   - Emphasize authority, ownership, lifecycle, consistency, and relationships without becoming an exhaustive field dictionary.
   - Keep unknown or contradictory ownership and lifecycle behavior explicit.

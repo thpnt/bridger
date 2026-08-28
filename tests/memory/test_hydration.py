@@ -37,6 +37,7 @@ from bridger.contracts.memory.hydration import (
     PermissionProfile,
     WorkerContext,
     WorkerContextMode,
+    WorkerCycleFocus,
     WorkerCycleFocusKind,
     WorkerInstructions,
     WorkerProfile,
@@ -308,6 +309,158 @@ def test_cycle_focus_is_deterministic_across_fresh_hydration() -> None:
     assert "use yield_cycle" in serialized
 
 
+def test_hydration_projects_only_unresolved_configured_related_obligations() -> None:
+    fixture = _fixture()
+    fixture.completion_state.items[0] = fixture.completion_state.items[0].model_copy(
+        update={
+            "status": CompletionStatus.UNINVESTIGATED,
+            "resolution_note": None,
+        }
+    )
+    fixture.definition.completion_obligations[0] = (
+        fixture.definition.completion_obligations[0].model_copy(
+            update={
+                "related_obligation_ids": [
+                    "first-contract-item",
+                    "covered-item",
+                    "unknown-item",
+                ]
+            }
+        )
+    )
+    fixture.definition = fixture.definition.model_copy(
+        update={
+            "completion_obligations": [
+                *fixture.definition.completion_obligations,
+                CompletionObligationDefinition(
+                    obligation_id="covered-item",
+                    description="Covered item.",
+                    investigation_requirements=["Inspect source."],
+                    applicability=ObligationApplicability.ALWAYS,
+                ),
+                CompletionObligationDefinition(
+                    obligation_id="unknown-item",
+                    description="Unknown item.",
+                    investigation_requirements=["Inspect source."],
+                    applicability=ObligationApplicability.ALWAYS,
+                ),
+                CompletionObligationDefinition(
+                    obligation_id="unrelated-item",
+                    description="Unrelated item.",
+                    investigation_requirements=["Inspect source."],
+                    applicability=ObligationApplicability.ALWAYS,
+                ),
+            ]
+        }
+    )
+    fixture.completion_state.items.extend(
+        (
+            CompletionItemState(
+                obligation_id="covered-item",
+                status=CompletionStatus.COVERED,
+                resolution_note="Covered.",
+            ),
+            CompletionItemState(
+                obligation_id="unknown-item",
+                status=CompletionStatus.UNKNOWN,
+                resolution_note="Unknown.",
+            ),
+            CompletionItemState(obligation_id="unrelated-item"),
+        )
+    )
+
+    context = fixture.compile()
+
+    assert context.cycle_focus.obligation_id == "second-contract-item"
+    assert context.cycle_focus.related_obligation_ids == ("first-contract-item",)
+    serialized = serialize_worker_context(context)
+    assert "related_unresolved_obligation_ids:\n- first-contract-item" in serialized
+    assert "investigation-reuse candidates" in serialized
+    assert "Do not launch additional repository exploration" in serialized
+
+    fixture.completion_state.items[1] = fixture.completion_state.items[1].model_copy(
+        update={
+            "status": CompletionStatus.COVERED,
+            "resolution_note": "Resolved with the primary investigation.",
+        }
+    )
+    fixture.completion_state.items[0] = fixture.completion_state.items[0].model_copy(
+        update={
+            "status": CompletionStatus.COVERED,
+            "resolution_note": "Resolved.",
+        }
+    )
+    fixture.target_state.phase = TargetPhase.SCHEDULED
+
+    next_context = fixture.compile()
+
+    assert next_context.cycle_focus.obligation_id == "unrelated-item"
+
+
+def test_worker_cycle_focus_rejects_invalid_related_obligations() -> None:
+    assert WorkerCycleFocus(
+        kind=WorkerCycleFocusKind.OBLIGATION,
+        obligation_id="a",
+        related_obligation_ids=("b", "c"),
+    ).related_obligation_ids == ("b", "c")
+
+    with pytest.raises(ValidationError, match="related_obligation_ids must be unique"):
+        WorkerCycleFocus(
+            kind=WorkerCycleFocusKind.OBLIGATION,
+            obligation_id="a",
+            related_obligation_ids=("b", "b"),
+        )
+    with pytest.raises(ValidationError, match="repair focus"):
+        WorkerCycleFocus(
+            kind=WorkerCycleFocusKind.REPAIR_FINDINGS,
+            finding_ids=("finding",),
+            related_obligation_ids=("b",),
+        )
+    with pytest.raises(ValidationError, match="finalization-readiness"):
+        WorkerCycleFocus(
+            kind=WorkerCycleFocusKind.FINALIZATION_READINESS,
+            related_obligation_ids=("b",),
+        )
+
+
+def test_worker_context_rejects_resolved_or_primary_related_obligations() -> None:
+    context = _fixture().compile()
+    context_data = context.model_dump()
+
+    context_data["cycle_focus"]["related_obligation_ids"] = ["first-contract-item"]
+    with pytest.raises(ValidationError, match="must be unresolved"):
+        WorkerContext.model_validate(context_data)
+
+    context_data["cycle_focus"]["related_obligation_ids"] = ["second-contract-item"]
+    with pytest.raises(ValidationError, match="cannot relate to its primary"):
+        WorkerContext.model_validate(context_data)
+
+
+def test_target_definition_validates_related_obligation_ids() -> None:
+    fixture = _fixture()
+    definition_data = fixture.definition.model_dump()
+    obligations = definition_data["completion_obligations"]
+    obligations[0]["related_obligation_ids"] = ["first-contract-item"]
+
+    validated = TargetDefinition.model_validate(definition_data)
+
+    assert validated.completion_obligations[1].related_obligation_ids == []
+    assert validated.completion_obligations[0].related_obligation_ids == [
+        "first-contract-item"
+    ]
+
+    for related_ids, message in (
+        (["missing-item"], "must belong"),
+        (["second-contract-item"], "cannot relate to itself"),
+        (["first-contract-item", "first-contract-item"], "must be unique"),
+    ):
+        definition_data["completion_obligations"][0]["related_obligation_ids"] = (
+            related_ids
+        )
+        with pytest.raises(ValidationError, match=message):
+            TargetDefinition.model_validate(definition_data)
+
+
 def test_shipped_architecture_contract_prevents_early_finalization() -> None:
     fixture = _fixture_with_shipped_architecture()
 
@@ -561,7 +714,6 @@ def test_unused_capacity_remains_unused_and_serialization_is_stable_first() -> N
     headings = [
         "# Shared worker instructions",
         "# Worker profile and tool surface",
-        "# Source binding and global ownership guidance",
         "# Target instructions and semantic contract",
         "# Execution mode",
         "# Current cycle objective",
@@ -645,17 +797,19 @@ def _fixture() -> HydrationFixture:
         CompletionObligationDefinition(
             obligation_id="second-contract-item",
             description="Investigate the second contract item.",
+            investigation_requirements=["Inspect the second item."],
             applicability=ObligationApplicability.ALWAYS,
         ),
         CompletionObligationDefinition(
             obligation_id="first-contract-item",
             description="Investigate the conditional first item.",
+            investigation_requirements=["Inspect the first item."],
             applicability=ObligationApplicability.CONDITIONAL,
             condition_hint="When the feature exists.",
         ),
     ]
     definition = TargetDefinition(
-        schema_version=1,
+        schema_version=2,
         target_id="architecture",
         target_contract_version="contract-v1",
         activation=TargetActivation(mode=ActivationMode.ALWAYS),
@@ -673,7 +827,7 @@ def _fixture() -> HydrationFixture:
         output_quality_expectations=["Prefer synthesis over inventories."],
     )
     catalog = MemoryTargetCatalog(
-        schema_version=1,
+        schema_version=2,
         catalog_id="memory-targets",
         catalog_version="catalog-v1",
         targets=[

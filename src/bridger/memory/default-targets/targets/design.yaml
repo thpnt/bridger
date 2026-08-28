@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 target_id: design
-target_contract_version: v2
-activation: {mode: conditional, rule_id: frontend_stack_present_v1}
+target_contract_version: v3
+activation: { mode: conditional, rule_id: frontend_stack_present_v1 }
 depends_on: []
 canonical_question: What user-facing design system, UX patterns, visual language, interaction model, and recurring design decisions does the implemented product embody?
 purpose: Explain the implemented product's visual language, design system, interaction model, and UX decisions when a frontend stack exists.
@@ -18,44 +18,111 @@ exclusions:
 boundary_guidance:
   - Own user-facing design meaning and recurring UX patterns rather than frontend implementation architecture or conventions.
 investigation_expectations:
-  - Sample tokens, themes, global styles, reusable components, representative screens and layouts, states, responsive behavior, and assets.
-  - Inspect Storybook, accessibility patterns, and visual or component tests when present; generalize only from representative evidence.
+  - >-
+    Phase A — Inventory styling primitives, tokens/themes, reusable components,
+    representative screens/layouts, interaction states, responsive mechanisms,
+    accessibility patterns, assets, and design-system tooling.
+  - >-
+    Phase B — Classify patterns as global versus local, primitive versus composite,
+    explicitly standardized versus merely repeated, and desktop/mobile/responsive
+    where applicable.
+  - >-
+    Phase C — Validate conclusions through representative component-to-screen
+    usage and interaction states. Do not derive the product design system from a
+    single component, screen, stylesheet, or Storybook story.
 evidence_expectations:
   - Use styles, themes, tokens, components, and layouts as primary evidence, supported by stories, design docs, assets, and tests.
   - Keep visual interpretations uncertain when static source cannot establish rendered fidelity.
 completion_obligations:
   - obligation_id: visual-language
-    description: Identify the core visual language.
+    related_obligation_ids:
+      - tokens-themes
+      - component-design-patterns
+    description: Explain the product's recurring visual language.
+    investigation_requirements:
+      - Sample representative screens and reusable components across materially different product areas.
+      - Identify recurring typography, spacing, color, density, shape, iconography, and hierarchy from implementation.
+      - Distinguish global visual patterns from screen-local styling.
     applicability: always
   - obligation_id: tokens-themes
-    description: Explain the design-token and theme system when present.
+    related_obligation_ids:
+      - component-design-patterns
+      - design-system-tooling
+    description: Explain formal token, theme, or shared styling systems when present.
+    investigation_requirements:
+      - Trace tokens or theme values from definition through reusable component or screen consumption.
+      - Determine whether values are centrally standardized, generated, framework defaults, or merely repeated literals.
+      - Include theme switching or variants only when executable implementation supports them.
     applicability: conditional
-    condition_hint: The frontend implements shared design tokens, theme definitions, multiple themes, or white-label styling.
+    condition_hint: A material shared token, theme, palette, typography, spacing, or styling system exists.
   - obligation_id: component-design-patterns
-    description: Explain important reusable component and design patterns.
+    related_obligation_ids:
+      - layout-navigation
+      - interaction-feedback
+      - standardized-ui-states
+      - accessibility-patterns
+      - design-system-tooling
+    description: Explain reusable UI component and composition patterns.
+    investigation_requirements:
+      - Trace representative primitives through variants/composition into real screen usage.
+      - Identify stable APIs, visual variants, and composition conventions rather than enumerating components.
+      - Distinguish reusable design-system components from one-off screen components.
     applicability: always
   - obligation_id: layout-navigation
-    description: Explain major layout, hierarchy, and navigation patterns.
+    related_obligation_ids:
+      - responsive-behavior
+    description: Explain recurring page layout and navigation structures.
+    investigation_requirements:
+      - Sample representative top-level screens/routes and their layout containers.
+      - Trace navigation hierarchy and major shell/layout relationships through actual implementation.
+      - Distinguish global application structure from local feature layout.
     applicability: always
   - obligation_id: responsive-behavior
-    description: Explain responsive and mobile adaptation when present.
+    related_obligation_ids: []
+    description: Explain material responsive behavior when present.
+    investigation_requirements:
+      - Trace representative layouts/components across implemented breakpoints or adaptive conditions.
+      - Identify actual changes in structure, visibility, sizing, or interaction rather than listing media-query values.
+      - Distinguish intentional responsive behavior from incidental flexible CSS.
     applicability: conditional
-    condition_hint: The implemented UI contains responsive layouts, breakpoints, or mobile-specific behavior.
+    condition_hint: The frontend implements material responsive or adaptive behavior.
   - obligation_id: interaction-feedback
-    description: Explain important interaction and feedback patterns.
+    related_obligation_ids:
+      - standardized-ui-states
+      - accessibility-patterns
+    description: Explain recurring interaction and feedback patterns.
+    investigation_requirements:
+      - Trace representative user action → local/application state change → visible feedback or navigation.
+      - Include confirmation, destructive action, disabled state, success, and failure feedback where materially standardized.
+      - Base conclusions on implementation across representative interactions rather than static component appearance.
     applicability: always
   - obligation_id: standardized-ui-states
-    description: Explain loading, empty, error, confirmation, and destructive states where materially standardized.
+    related_obligation_ids: []
+    description: Explain standardized loading, empty, error, success, or other UI states when present.
+    investigation_requirements:
+      - Inventory recurring state components or patterns across representative screens.
+      - Trace what application state triggers each UI state and how users can recover or proceed.
+      - Distinguish shared standardized states from one-off screen handling.
     applicability: conditional
-    condition_hint: Common user-facing states or destructive interactions use recurring product patterns.
+    condition_hint: The frontend has materially recurring loading, empty, error, success, skeleton, or similar UI-state patterns.
   - obligation_id: accessibility-patterns
-    description: Explain accessibility patterns where implemented.
+    related_obligation_ids: []
+    description: Explain implemented accessibility patterns when present.
+    investigation_requirements:
+      - Inspect representative interactive components for semantic markup, keyboard behavior, focus handling, labels/ARIA, and accessible feedback.
+      - Determine whether accessibility is enforced by shared primitives/tooling or only locally implemented.
+      - Do not infer accessibility guarantees from framework choice alone.
     applicability: conditional
-    condition_hint: The frontend represents semantic markup, keyboard, focus, ARIA, contrast, motion, or screen-reader behavior.
+    condition_hint: Material accessibility implementation, primitives, tests, or tooling are represented.
   - obligation_id: design-system-tooling
-    description: Explain design-system tooling and documentation when present.
+    related_obligation_ids: []
+    description: Explain design-system documentation, Storybook, visual tests, or other supporting tooling when present.
+    investigation_requirements:
+      - Trace tooling configuration to the components/stories/tests it actually covers.
+      - Establish whether it is authoritative, partial, stale, or merely scaffolded.
+      - Use tooling as supporting evidence rather than as a substitute for representative product implementation.
     applicability: conditional
-    condition_hint: Storybook, design documentation, visual regression, or token-generation tooling exists.
+    condition_hint: Storybook, visual regression, design-system documentation, component catalogs, or similar tooling exists.
 output_quality_expectations:
   - Enable new UI work to match established visual, interaction, responsive, state, and accessibility patterns.
   - Avoid raw component inventories, frontend architecture, and overgeneralizing one-off visual choices.
