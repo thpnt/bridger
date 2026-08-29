@@ -731,7 +731,8 @@ def _profiles(
     reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH,
 ) -> tuple[WorkerProfile, WorkerProfile]:
     reserved = 2_048 if test_budgets else 8_192
-    initial_input_cap = _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS
+    worker_input_cap = _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS
+    reviewer_input_cap = profile.model_context_window_tokens - reserved
     resolved_reasoning_effort = (
         None
         if reasoning_effort is ReasoningEffort.NONE
@@ -747,7 +748,7 @@ def _profiles(
             tokenizer_encoding="o200k_base",
             model_context_window_tokens=profile.model_context_window_tokens,
             reserved_response_tokens=reserved,
-            provider_input_hard_cap_tokens=initial_input_cap,
+            provider_input_hard_cap_tokens=worker_input_cap,
             reasoning_effort=resolved_reasoning_effort,
         ),
         WorkerProfile(
@@ -756,7 +757,7 @@ def _profiles(
             tokenizer_encoding="o200k_base",
             model_context_window_tokens=profile.model_context_window_tokens,
             reserved_response_tokens=reserved,
-            provider_input_hard_cap_tokens=initial_input_cap,
+            provider_input_hard_cap_tokens=reviewer_input_cap,
             reasoning_effort=resolved_reasoning_effort,
         ),
     )

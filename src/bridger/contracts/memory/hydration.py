@@ -89,7 +89,6 @@ class WorkerProfile(BaseModel):
     provider_input_hard_cap_tokens: int = Field(
         default=32_000,
         ge=1,
-        le=32_000,
     )
 
     @model_validator(mode="after")
