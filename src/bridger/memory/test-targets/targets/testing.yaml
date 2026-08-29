@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 target_id: testing
 target_contract_version: test-v1
 activation: {mode: always}
@@ -25,10 +25,16 @@ output_quality_expectations:
 completion_obligations:
   - obligation_id: frameworks-test-levels
     description: Identify test frameworks and principal test levels.
+    investigation_requirements:
+      - Inspect test frameworks and levels.
     applicability: always
   - obligation_id: test-organization
     description: Explain test organization and layout.
+    investigation_requirements:
+      - Inspect test organization.
     applicability: always
   - obligation_id: validation-commands
     description: Identify standard validation and test commands.
+    investigation_requirements:
+      - Inspect validation commands.
     applicability: always

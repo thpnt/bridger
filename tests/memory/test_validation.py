@@ -94,6 +94,7 @@ def test_validation_passes_exact_checkpoint_and_preserves_review_handoff(
         fixture.target_state,
         fixture.store,
     )
+    workspace.list_target_artifacts()
     workspace.write_target_artifact("architecture.md", "# Exact candidate\n")
     request = handle_finalization_request(
         fixture.store,
@@ -146,11 +147,13 @@ def test_validation_failures_persist_findings_and_route_to_repair(
         CompletionStatus.COVERED,
         evidence_refs=[evidence.evidence_id],
     )
-    TargetWorkspace(
+    workspace = TargetWorkspace(
         fixture.target_spec,
         fixture.target_state,
         fixture.store,
-    ).write_target_artifact("architecture.md", "   \n")
+    )
+    workspace.list_target_artifacts()
+    workspace.write_target_artifact("architecture.md", "   \n")
     request = handle_finalization_request(
         fixture.store,
         fixture.target_spec,
@@ -245,11 +248,13 @@ def test_validation_rejects_redundant_target_prefix_in_candidate(
 
 def test_validation_allows_legitimate_nested_artifact_path(tmp_path: Path) -> None:
     fixture = _passing_fixture(tmp_path)
-    TargetWorkspace(
+    workspace = TargetWorkspace(
         fixture.target_spec,
         fixture.target_state,
         fixture.store,
-    ).write_target_artifact("runtime/foo.md", "# Runtime\n")
+    )
+    workspace.list_target_artifacts()
+    workspace.write_target_artifact("runtime/foo.md", "# Runtime\n")
     request = handle_finalization_request(
         fixture.store,
         fixture.target_spec,
@@ -502,11 +507,13 @@ def test_multiple_finalization_rounds_keep_immutable_history(tmp_path: Path) -> 
         },
     )
     _resolve_completion(fixture, CompletionStatus.UNKNOWN)
-    TargetWorkspace(
+    workspace = TargetWorkspace(
         fixture.target_spec,
         fixture.target_state,
         fixture.store,
-    ).write_target_artifact("architecture.md", "# Repaired\n")
+    )
+    workspace.list_target_artifacts()
+    workspace.write_target_artifact("architecture.md", "# Repaired\n")
     request_b = handle_finalization_request(
         fixture.store,
         fixture.target_spec,
@@ -603,11 +610,13 @@ def _passing_fixture(tmp_path: Path) -> RuntimeFixture:
     fixture = _runtime(tmp_path)
     _enter_working(fixture)
     _resolve_completion(fixture, CompletionStatus.UNKNOWN)
-    TargetWorkspace(
+    workspace = TargetWorkspace(
         fixture.target_spec,
         fixture.target_state,
         fixture.store,
-    ).write_target_artifact("architecture.md", "# Candidate\n")
+    )
+    workspace.list_target_artifacts()
+    workspace.write_target_artifact("architecture.md", "# Candidate\n")
     return fixture
 
 

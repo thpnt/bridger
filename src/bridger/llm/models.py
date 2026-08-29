@@ -75,6 +75,7 @@ class LLMToolError(BaseModel):
         "protocol_error",
     ]
     message: str = Field(min_length=1)
+    details: dict[str, JsonValue] | None = None
 
 
 class LLMToolResult(BaseModel):
@@ -98,7 +99,7 @@ class LLMToolResult(BaseModel):
         """Convert this result to the existing provider-neutral tool message."""
         result: JsonValue = self.output
         if self.error is not None:
-            result = {"error": self.error.model_dump(mode="json")}
+            result = {"error": self.error.model_dump(mode="json", exclude_none=True)}
         return LLMMessage.tool_result_message(
             tool_call_id=self.call_id,
             tool_name=self.name,

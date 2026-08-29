@@ -43,7 +43,12 @@ from bridger.memory import (
     validate_target_candidate,
 )
 
-_WORKER_TOOLS = ("write_target_artifact", "update_completion_item")
+_WORKER_TOOLS = (
+    "list_target_artifacts",
+    "read_target_artifact",
+    "write_target_artifact",
+    "update_completion_item",
+)
 _GRAPH_OVERVIEW = GraphOverview(
     graph_snapshot_id="snapshot-1",
     graph_contract_version="bridger.graph.v1",
@@ -201,6 +206,11 @@ def test_hard_validation_failure_reenters_the_normal_worker_pipeline(
             repaired_fixture,
             [
                 _call(
+                    "list",
+                    "list_target_artifacts",
+                    {},
+                ),
+                _call(
                     "write",
                     "write_target_artifact",
                     {"path": "architecture.md", "content": "# Repaired\n"},
@@ -272,6 +282,8 @@ def test_review_failure_reenters_stage_7_before_reviewing_again(
     context = _run_repair_worker(
         fixture,
         [
+            _call("list", "list_target_artifacts", {}),
+            _call("read", "read_target_artifact", {"path": "architecture.md"}),
             _call(
                 "write",
                 "write_target_artifact",
@@ -282,7 +294,7 @@ def test_review_failure_reenters_stage_7_before_reviewing_again(
                     ),
                     "expected_revision": 1,
                 },
-            )
+            ),
         ],
     )
     repaired_request = resolve_finalization_request(
@@ -365,11 +377,13 @@ def test_recovery_does_not_substitute_a_different_pre_worker_candidate(
 ) -> None:
     fixture = _runtime(tmp_path)
     _enter_working(fixture)
-    TargetWorkspace(
+    workspace = TargetWorkspace(
         fixture.target_spec,
         fixture.target_state,
         fixture.store,
-    ).write_target_artifact("architecture.md", "# Rejected candidate\n")
+    )
+    workspace.list_target_artifacts()
+    workspace.write_target_artifact("architecture.md", "# Rejected candidate\n")
     handle_finalization_request(
         fixture.store,
         fixture.target_spec,

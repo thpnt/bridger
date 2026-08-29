@@ -480,6 +480,7 @@ def test_artifact_bytes_reference_and_checkpoint_restore_are_exact(
         fixture.target_state,
         fixture.store,
     )
+    workspace.list_target_artifacts()
     reference = workspace.write_target_artifact("architecture.md", "known good")
     checkpoint = create_checkpoint(
         fixture.store,
@@ -622,6 +623,7 @@ def test_finalization_persists_exact_fresh_candidate_and_is_idempotent(
         fixture.target_state,
         fixture.store,
     )
+    workspace.list_target_artifacts()
     artifact = workspace.write_target_artifact("architecture.md", "final candidate")
     previous_checkpoint = fixture.target_state.last_checkpoint_ref
     usage_before = fixture.target_state.usage.model_copy(deep=True)
@@ -1027,6 +1029,7 @@ def _runtime(tmp_path: Path) -> RuntimeFixture:
     runtime_root = (tmp_path / "runtime").resolve()
     output_root = (tmp_path / "output").resolve()
     spec = MemoryFleetSpec(
+        schema_version=2,
         fleet_run_id="fleet-1",
         source=_SOURCE,
         target_catalog_id="memory-targets",
@@ -1070,7 +1073,7 @@ def _runtime(tmp_path: Path) -> RuntimeFixture:
         target_task_ids=[target_spec.target_task_id],
     )
     definition = TargetDefinition(
-        schema_version=1,
+        schema_version=2,
         target_id=target_spec.target_id,
         target_contract_version=target_spec.target_contract_version,
         activation=TargetActivation(mode=ActivationMode.ALWAYS),
@@ -1088,13 +1091,14 @@ def _runtime(tmp_path: Path) -> RuntimeFixture:
             CompletionObligationDefinition(
                 obligation_id="describe-architecture",
                 description="Describe the architecture.",
+                investigation_requirements=["Inspect the source."],
                 applicability=ObligationApplicability.ALWAYS,
             )
         ],
         output_quality_expectations=[],
     )
     catalog = MemoryTargetCatalog(
-        schema_version=1,
+        schema_version=2,
         catalog_id=spec.target_catalog_id,
         catalog_version=spec.target_catalog_version,
         targets=[

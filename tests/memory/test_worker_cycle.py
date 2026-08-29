@@ -140,7 +140,9 @@ def test_complete_memory_worker_tool_surface_is_openai_strict_compatible(
     assert tuple(tool["name"] for tool in emitted_tools[: len(WORKER_TOOL_IDS)]) == (
         WORKER_TOOL_IDS
     )
-    assert not set(NAVIGATION_TOOL_IDS) & {tool["name"] for tool in emitted_tools}
+    assert set(NAVIGATION_TOOL_IDS) & {tool["name"] for tool in emitted_tools} == {
+        "list_files"
+    }
     assert all(tool["strict"] is True for tool in emitted_tools)
     for tool in emitted_tools:
         _assert_no_empty_schema_nodes(tool["parameters"])
@@ -191,7 +193,9 @@ def test_assembled_worker_request_combines_graph_strategy_context_and_tools(
     assert "Repository graph overview" in request.instructions
     assert '"node_count":1' in request.instructions
     assert {tool.name for tool in request.tools} >= set(REPOSITORY_TOOL_IDS)
-    assert not set(NAVIGATION_TOOL_IDS) & {tool.name for tool in request.tools}
+    assert set(NAVIGATION_TOOL_IDS) & {tool.name for tool in request.tools} == {
+        "list_files"
+    }
 
 
 class CountingContextWindowManager(ContextWindowManager):
@@ -373,6 +377,7 @@ def test_worker_cycle_runs_multiple_turns_and_charges_both_scopes(
     runner = fixture.runner(
         [
             _response(
+                _call("list", "list_target_artifacts", {}),
                 _call(
                     "write-1",
                     "write_target_artifact",
@@ -403,7 +408,7 @@ def test_worker_cycle_runs_multiple_turns_and_charges_both_scopes(
     assert fixture.target_state.phase is TargetPhase.WORKING
     assert fixture.target_state.usage.cycles == 1
     assert fixture.target_state.usage.model_calls == 2
-    assert fixture.target_state.usage.tool_calls == 2
+    assert fixture.target_state.usage.tool_calls == 3
     assert fixture.target_state.usage.input_tokens == 220
     assert fixture.target_state.usage.output_tokens == 25
     assert fixture.fleet_state.usage == fixture.target_state.usage
@@ -799,7 +804,7 @@ def test_local_artifact_and_worker_prompt_describe_new_handoffs(tmp_path: Path) 
 
     read_description = definitions["read_target_artifact"].description
     assert "list_target_artifacts" in read_description
-    assert "write_target_artifact" in read_description
+    assert "modifying an existing artifact" in read_description
     assert "do not repeat the target ID" in read_description
     assert "orient_repository" in prompt
     assert "inspect_graph_node" in prompt
@@ -815,6 +820,7 @@ def test_redundant_target_prefix_returns_in_band_error_and_worker_continues(
     client = DummyLLMClient(
         [
             _response(
+                _call("list", "list_target_artifacts", {}),
                 _call(
                     "bad-write",
                     "write_target_artifact",
@@ -822,7 +828,7 @@ def test_redundant_target_prefix_returns_in_band_error_and_worker_continues(
                         "path": "architecture/runtime.md",
                         "content": "# Runtime\n",
                     },
-                )
+                ),
             ),
             _response(
                 _call(
@@ -838,7 +844,7 @@ def test_redundant_target_prefix_returns_in_band_error_and_worker_continues(
     outcome = asyncio.run(fixture.runner([], client=client).run())
 
     assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
-    assert fixture.target_state.usage.tool_calls == 2
+    assert fixture.target_state.usage.tool_calls == 3
     assert len(fixture.target_state.artifact_refs) == 1
     assert (tmp_path / "workspace" / "runtime.md").is_file()
     assert not (tmp_path / "workspace" / "architecture").exists()
@@ -1033,6 +1039,7 @@ def test_yield_preserves_artifact_completion_and_summary_progress(
     runner = fixture.runner(
         [
             _response(
+                _call("list", "list_target_artifacts", {}),
                 _call(
                     "artifact",
                     "write_target_artifact",
@@ -1074,6 +1081,7 @@ def test_mixed_yield_executes_operations_and_requires_later_standalone_yield(
     client = DummyLLMClient(
         [
             _response(
+                _call("list", "list_target_artifacts", {}),
                 _call(
                     "write",
                     "write_target_artifact",
@@ -1089,7 +1097,7 @@ def test_mixed_yield_executes_operations_and_requires_later_standalone_yield(
 
     assert outcome is WorkerCycleOutcome.CYCLE_YIELDED
     assert fixture.target_state.phase is TargetPhase.SCHEDULED
-    assert fixture.target_state.usage.tool_calls == 1
+    assert fixture.target_state.usage.tool_calls == 2
     assert (tmp_path / "workspace" / "progress.md").read_text() == (
         "Persisted progress."
     )
@@ -1180,10 +1188,29 @@ def test_prompt_cache_identity_and_prefix_levels_are_deterministic(
     changed_cycle = _fixture(cycle_root)
     changed_cycle.context = changed_cycle.context.model_copy(
         update={
+            "completion_obligations": (
+                CompletionObligationView(
+                    obligation_id="describe-runtime",
+                    description="Describe the runtime.",
+                    investigation_requirements=("Inspect source.",),
+                    applicability=ObligationApplicability.ALWAYS,
+                    status=CompletionStatus.UNINVESTIGATED,
+                    evidence_refs=(),
+                ),
+                CompletionObligationView(
+                    obligation_id="another-obligation",
+                    description="Describe another runtime concern.",
+                    investigation_requirements=("Inspect source.",),
+                    applicability=ObligationApplicability.ALWAYS,
+                    status=CompletionStatus.UNINVESTIGATED,
+                    evidence_refs=(),
+                ),
+            ),
             "cycle_focus": WorkerCycleFocus(
                 kind=WorkerCycleFocusKind.OBLIGATION,
-                obligation_id="another-obligation",
-            )
+                obligation_id="describe-runtime",
+                related_obligation_ids=("another-obligation",),
+            ),
         }
     )
     cycle_client = DummyLLMClient(
@@ -1633,6 +1660,7 @@ def test_mixed_finalization_executes_operations_but_requires_later_standalone_ca
     runner = fixture.runner(
         [
             _response(
+                _call("list", "list_target_artifacts", {}),
                 _call(
                     "write",
                     "write_target_artifact",
@@ -1648,7 +1676,7 @@ def test_mixed_finalization_executes_operations_but_requires_later_standalone_ca
 
     assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
     assert fixture.target_state.usage.model_calls == 2
-    assert fixture.target_state.usage.tool_calls == 1
+    assert fixture.target_state.usage.tool_calls == 2
     assert (tmp_path / "workspace" / "candidate.md").read_text() == "Candidate"
 
 
@@ -1659,10 +1687,16 @@ def test_multi_tool_operations_execute_sequentially_in_model_order(
     runner = fixture.runner(
         [
             _response(
+                _call("list", "list_target_artifacts", {}),
                 _call(
                     "create",
                     "write_target_artifact",
                     {"path": "ordered.md", "content": "first\nsecond\n"},
+                ),
+                _call(
+                    "read",
+                    "read_target_artifact",
+                    {"path": "ordered.md"},
                 ),
                 _call(
                     "edit",
@@ -1777,7 +1811,9 @@ def test_workspace_confinement_and_optimistic_revisions(tmp_path: Path) -> None:
     fixture.target_state.phase = TargetPhase.WORKING
     workspace = TargetWorkspace(fixture.target_spec, fixture.target_state)
 
+    workspace.list_target_artifacts()
     first = workspace.write_target_artifact("notes.md", "one\ntwo\n")
+    workspace.read_target_artifact("notes.md")
     second = workspace.edit_target_artifact_range(
         "notes.md",
         expected_revision=first.revision,
@@ -1790,6 +1826,7 @@ def test_workspace_confinement_and_optimistic_revisions(tmp_path: Path) -> None:
     assert second.revision == 2
     assert second.artifact_id == first.artifact_id
     assert (tmp_path / "workspace" / "notes.md").read_text() == "one\nchanged\n"
+    workspace.list_target_artifacts()
     nested = workspace.write_target_artifact(
         "runtime/execution.md",
         "nested",
@@ -1797,17 +1834,21 @@ def test_workspace_confinement_and_optimistic_revisions(tmp_path: Path) -> None:
     assert nested.relative_path == "runtime/execution.md"
     assert (tmp_path / "workspace" / "runtime" / "execution.md").is_file()
     with pytest.raises(ValueError, match="stale expected_revision"):
+        workspace.read_target_artifact("notes.md")
         workspace.write_target_artifact(
             "notes.md", "stale", expected_revision=first.revision
         )
     with pytest.raises(ValueError, match="target-relative Markdown"):
+        workspace.list_target_artifacts()
         workspace.write_target_artifact("../escape.md", "no")
     with pytest.raises(ValueError, match="target-relative Markdown"):
+        workspace.list_target_artifacts()
         workspace.write_target_artifact("candidate.txt", "no")
     outside = tmp_path / "outside.md"
     outside.write_text("outside")
     (tmp_path / "workspace" / "linked.md").symlink_to(outside)
     with pytest.raises(ValueError, match="symlink"):
+        workspace.list_target_artifacts()
         workspace.write_target_artifact("linked.md", "no")
 
 
@@ -1965,6 +2006,7 @@ def test_new_artifact_rejects_redundant_target_prefix(
     fixture.target_state.phase = TargetPhase.WORKING
     workspace = TargetWorkspace(target_spec, fixture.target_state)
 
+    workspace.list_target_artifacts()
     with pytest.raises(ValueError, match="already relative"):
         workspace.write_target_artifact(path, "# Invalid\n")
 
@@ -1976,6 +2018,7 @@ def test_redundant_move_destination_is_rejected(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     fixture.target_state.phase = TargetPhase.WORKING
     workspace = TargetWorkspace(fixture.target_spec, fixture.target_state)
+    workspace.list_target_artifacts()
     reference = workspace.write_target_artifact("foo.md", "# Foo\n")
 
     with pytest.raises(ValueError, match="already relative"):
@@ -2401,6 +2444,7 @@ def _fixture(
                 obligation_id="describe-runtime",
                 description="Describe the runtime.",
                 investigation_requirements=("Inspect source.",),
+                applicability=ObligationApplicability.ALWAYS,
                 status=CompletionStatus.UNINVESTIGATED,
                 evidence_refs=(),
             ),

@@ -20,6 +20,11 @@ Treat information according to its authority:
 
 Use graph and index information to orient and navigate efficiently, but inspect implementation-level source evidence before making substantive behavioral interpretations.
 
+Repository file tools operate on canonical paths from the pinned FileIndex. Prefer
+paths returned by repository tools instead of reconstructing paths from memory. If
+a path is rejected, explicitly choose from the returned candidates or use
+`list_files` to recover; never assume that a suggested path is correct.
+
 Do not infer behavior solely from:
 - filenames;
 - symbol names;

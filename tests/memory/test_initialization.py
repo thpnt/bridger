@@ -70,20 +70,10 @@ _SHIPPED_OBLIGATION_IDS = {
     ],
     "business-logic": [
         "domain-concepts",
-        "domain-actions",
         "domain-workflows",
         "rules-invariants",
         "domain-states-transitions",
-        "validation-eligibility",
-        "domain-authorization",
-        "domain-side-effects",
         "domain-failures",
-        "pricing-billing",
-        "subscriptions-entitlements",
-        "quotas-limits",
-        "approvals-scheduling",
-        "lifecycle-calculations",
-        "regulatory-provider-semantics",
     ],
     "architecture": [
         "runtime-entrypoints",
@@ -332,8 +322,8 @@ def test_shipped_target_bundle_has_versioned_granular_contracts() -> None:
         ]
         for definition in definitions
     } == _SHIPPED_OBLIGATION_IDS
-    assert all(definition.target_contract_version == "v2" for definition in definitions)
-    assert all(entry.target_contract_version == "v2" for entry in catalog.targets)
+    assert all(definition.target_contract_version == "v3" for definition in definitions)
+    assert all(entry.target_contract_version == "v3" for entry in catalog.targets)
     conditional = {
         obligation.obligation_id: obligation.condition_hint
         for definition in definitions
@@ -835,7 +825,7 @@ def _target_definition(
     completion_obligations: list[CompletionObligationDefinition] | None = None,
 ) -> TargetDefinition:
     return TargetDefinition(
-        schema_version=1,
+        schema_version=2,
         target_id=target_id,
         target_contract_version="contract-v1",
         activation=activation or TargetActivation(mode=ActivationMode.ALWAYS),
@@ -867,6 +857,7 @@ def _completion_obligation(
     return CompletionObligationDefinition(
         obligation_id=obligation_id,
         description=f"Investigate {obligation_id}.",
+        investigation_requirements=["Inspect the target."],
         applicability=applicability,
         condition_hint=condition_hint,
     )
@@ -874,7 +865,7 @@ def _completion_obligation(
 
 def _catalog(*definitions: TargetDefinition) -> MemoryTargetCatalog:
     return MemoryTargetCatalog(
-        schema_version=1,
+        schema_version=2,
         catalog_id="bridger-memory",
         catalog_version="catalog-v1",
         targets=[

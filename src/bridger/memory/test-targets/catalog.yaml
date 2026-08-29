@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 catalog_id: bridger-v0-memory-test
 catalog_version: v1
 targets:

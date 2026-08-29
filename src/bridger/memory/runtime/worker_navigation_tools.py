@@ -15,6 +15,7 @@ from pydantic import (
     field_validator,
 )
 
+from bridger.contracts.files import FileIndexPath
 from bridger.contracts.memory.core import SourceBinding
 from bridger.contracts.memory.worker_cycle import (
     EvidenceKind,
@@ -25,16 +26,21 @@ from bridger.contracts.memory.worker_cycle import (
     SymbolEvidenceLocator,
 )
 from bridger.contracts.navigation import RepositorySearchHit
-from bridger.llm.tools import LLMTool, ToolExecutor
-from bridger.navigation.navigator import MAX_RANGE_LINES, RepositoryNavigator
-from bridger.repository.errors import RepositoryError
+from bridger.llm.tools import LLMTool, ToolExecutionError, ToolExecutor
+from bridger.navigation.navigator import (
+    DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT,
+    MAX_RANGE_LINES,
+    RepositoryNavigator,
+)
+from bridger.repository.errors import FileIndexPathMismatchError, RepositoryError
 
 WORKER_REPOSITORY_TOOL_IDS = (
     "orient_repository",
     "inspect_graph_node",
     "inspect_graph_community",
     "trace_graph_path",
-    "browse_files",
+    "list_files",
     "inspect_file",
     "find_symbol",
     "inspect_symbol",
@@ -95,7 +101,7 @@ class EvidenceCandidateRegistry:
         self._candidates.clear()
 
 
-def _repository_relative_path(value: str) -> str:
+def _repository_path_prefix(value: str) -> str:
     if (
         value.startswith("/")
         or value in {"", "."}
@@ -105,14 +111,14 @@ def _repository_relative_path(value: str) -> str:
         or "//" in value
         or ".." in value.split("/")
     ):
-        raise ValueError("path must be a normalized repository-relative path")
+        raise ValueError("path_prefix must be a normalized repository-relative prefix")
     return value
 
 
-RepositoryRelativePath = Annotated[
+RepositoryPathPrefix = Annotated[
     str,
     Field(min_length=1),
-    AfterValidator(_repository_relative_path),
+    AfterValidator(_repository_path_prefix),
 ]
 
 
@@ -137,17 +143,30 @@ class _TraceGraphPathArguments(_Arguments):
     target_node_id: str = Field(min_length=1)
 
 
-class _BrowseFilesArguments(_Arguments):
-    path_prefix: RepositoryRelativePath | None = None
+class _ListFilesArguments(_Arguments):
+    path_prefix: RepositoryPathPrefix | None = None
+    graph_node_id: str | None = Field(default=None, min_length=1)
+    limit: int = Field(default=DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT)
+
+    @field_validator("graph_node_id")
+    @classmethod
+    def validate_selector(
+        cls,
+        graph_node_id: str | None,
+        info: ValidationInfo,
+    ) -> str | None:
+        if graph_node_id is not None and info.data.get("path_prefix") is not None:
+            raise ValueError("path_prefix and graph_node_id are mutually exclusive")
+        return graph_node_id
 
 
 class _InspectFileArguments(_Arguments):
-    path: RepositoryRelativePath
+    path: FileIndexPath
 
 
 class _FindSymbolArguments(_Arguments):
     query: str = Field(min_length=1)
-    path: RepositoryRelativePath | None = None
+    path: FileIndexPath | None = None
 
 
 class _InspectSymbolArguments(_Arguments):
@@ -156,11 +175,11 @@ class _InspectSymbolArguments(_Arguments):
 
 class _FindSourceTextArguments(_Arguments):
     query: str = Field(min_length=1)
-    paths: list[RepositoryRelativePath] | None = None
+    paths: list[FileIndexPath] | None = None
 
 
 class _ReadSourceRangeArguments(_Arguments):
-    path: RepositoryRelativePath
+    path: FileIndexPath
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
 
@@ -290,19 +309,30 @@ class WorkerNavigationTools:
                 "inspection tools."
             ) from error
 
-    def browse_files(self, path_prefix: str | None) -> object:
-        """List a bounded view beneath an optional known repository area."""
-        return self._navigator.list_files(path_prefix=path_prefix)
+    def list_files(
+        self,
+        path_prefix: str | None,
+        graph_node_id: str | None,
+        limit: int,
+    ) -> object:
+        """List a bounded FileIndex slice by path area or graph neighborhood."""
+        return self._navigator.list_files(
+            path_prefix=path_prefix,
+            graph_node_id=graph_node_id,
+            limit=limit,
+        )
 
-    def inspect_file(self, path: str) -> dict[str, object]:
+    def inspect_file(self, path: FileIndexPath) -> dict[str, object]:
         """Inspect one file and expose its symbol and graph bridges."""
         try:
             overview = self._navigator.get_file_overview(path)
             symbols = self._navigator.list_symbols(path=path)
+        except FileIndexPathMismatchError as error:
+            raise _path_mismatch_tool_error(error) from error
         except RepositoryError as error:
             raise ValueError(
                 "Repository path is not indexed/readable. Use a path returned by "
-                "orient_repository, browse_files, find_symbol, or find_source_text."
+                "orient_repository, list_files, find_symbol, or find_source_text."
             ) from error
         handle = self._candidates.register(
             EvidenceKind.FILE,
@@ -317,10 +347,12 @@ class WorkerNavigationTools:
             "evidence_handle": handle,
         }
 
-    def find_symbol(self, query: str, path: str | None) -> object:
+    def find_symbol(self, query: str, path: FileIndexPath | None) -> object:
         """Find bounded indexed symbol matches by a known or suspected name."""
         try:
             return self._navigator.search_symbols(query, path=path)
+        except FileIndexPathMismatchError as error:
+            raise _path_mismatch_tool_error(error) from error
         except RepositoryError as error:
             raise ValueError(
                 "Repository path is not indexed. Use a path returned by a repository "
@@ -356,7 +388,7 @@ class WorkerNavigationTools:
     def find_source_text(
         self,
         query: str,
-        paths: list[str] | None,
+        paths: list[FileIndexPath] | None,
     ) -> object:
         """Search bounded literal source text and return line-addressable matches."""
         try:
@@ -365,6 +397,8 @@ class WorkerNavigationTools:
                 regex=False,
                 paths=paths,
             )
+        except FileIndexPathMismatchError as error:
+            raise _path_mismatch_tool_error(error) from error
         except RepositoryError as error:
             raise ValueError(
                 "A repository path is not indexed/readable. Use paths returned by "
@@ -373,7 +407,7 @@ class WorkerNavigationTools:
 
     def read_source_range(
         self,
-        path: str,
+        path: FileIndexPath,
         start_line: int,
         end_line: int,
     ) -> dict[str, object]:
@@ -383,6 +417,8 @@ class WorkerNavigationTools:
                 path,
                 [(start_line, end_line)],
             )[0]
+        except FileIndexPathMismatchError as error:
+            raise _path_mismatch_tool_error(error) from error
         except RepositoryError as error:
             raise ValueError(
                 "Repository path or range is not indexed/readable. Use a path and "
@@ -433,6 +469,19 @@ class WorkerNavigationTools:
             )
 
 
+def _path_mismatch_tool_error(
+    error: FileIndexPathMismatchError,
+) -> ToolExecutionError:
+    return ToolExecutionError(
+        str(error),
+        details={
+            "kind": "file_index_path_mismatch",
+            "requested_path": error.requested_path,
+            "closest_valid_paths": list(error.closest_valid_paths),
+        },
+    )
+
+
 def build_worker_navigation_tools(
     navigator: RepositoryNavigator,
     candidates: EvidenceCandidateRegistry,
@@ -443,11 +492,13 @@ def build_worker_navigation_tools(
         LLMTool.bind(
             name="orient_repository",
             description=(
-                "PRIMARY ORIENTATION TOOL. Use when a concept, responsibility, workflow, "
-                "or behavior is known but its exact source file or symbol is not. Returns "
+                "PRIMARY ORIENTATION TOOL. Use when a concept, responsibility, "
+                "workflow, or behavior is known but its exact source file or symbol "
+                "is not. Returns "
                 "ranked graph nodes, communities, files, and symbols with stable IDs. "
                 "Follow promising graph results with inspect_graph_node or "
-                "inspect_graph_community, then verify behavioral conclusions in source. "
+                "inspect_graph_community, then verify behavioral conclusions in "
+                "source. "
                 "Do not use for an exact known literal or source location."
             ),
             arguments_type=_OrientRepositoryArguments,
@@ -491,23 +542,30 @@ def build_worker_navigation_tools(
             ),
         ),
         LLMTool.bind(
-            name="browse_files",
+            name="list_files",
             description=(
-                "KNOWN-AREA FILE BROWSING. Use for repository layout, manifests, "
-                "tests, configuration, or files beneath a known path. Returns a "
-                "bounded file listing. Use orient_repository for open-ended semantic "
-                "discovery."
+                "CANONICAL FILEINDEX BROWSING. Return bounded valid repository paths "
+                "from the pinned FileIndex. Optionally restrict by a normalized path "
+                "prefix or an existing graph node and its one-hop neighbors. Use this "
+                "when the repository area is known but the exact indexed path is not."
             ),
-            arguments_type=_BrowseFilesArguments,
-            handler=lambda value: adapter.browse_files(value.path_prefix),
+            arguments_type=_ListFilesArguments,
+            handler=lambda value: adapter.list_files(
+                value.path_prefix,
+                value.graph_node_id,
+                value.limit,
+            ),
         ),
         LLMTool.bind(
             name="inspect_file",
             description=(
-                "KNOWN-FILE INSPECTION AND BRIDGE. Use when an exact repository path is "
-                "already known. Returns file metadata, indexed symbols, graph node IDs, "
+                "KNOWN-FILE INSPECTION AND BRIDGE. Use when an exact repository path "
+                "is "
+                "already known. The path must exactly match the pinned FileIndex. "
+                "Returns file metadata, indexed symbols, graph node IDs, "
                 "and a file evidence handle. Next inspect a symbol for implementation "
-                "detail or a graph node for structural context. Do not use file browsing "
+                "detail or a graph node for structural context. Do not use file "
+                "browsing "
                 "or inspection as a substitute for orient_repository when the relevant "
                 "repository area is unknown."
             ),
@@ -519,7 +577,7 @@ def build_worker_navigation_tools(
             description=(
                 "KNOWN-SYMBOL LOOKUP. Use when a class, function, type, or other "
                 "symbol name is known or strongly suspected, optionally in a known "
-                "file. "
+                "exact FileIndex path. "
                 "Returns stable symbol IDs. Next inspect a selected result with "
                 "inspect_symbol; use orient_repository for open-ended concepts."
             ),
@@ -530,8 +588,9 @@ def build_worker_navigation_tools(
             name="inspect_symbol",
             description=(
                 "IMPLEMENTATION VERIFICATION. Use a stable symbol_id returned by a "
-                "repository tool. Returns bounded exact source, graph associations, and "
-                "a symbol evidence handle. Use this for substantive implementation claims. "
+                "repository tool. Returns bounded exact source, graph associations, "
+                "and a symbol evidence handle. Use this for substantive implementation "
+                "claims. "
                 "Follow graph associations only when additional structural context is "
                 "needed."
             ),
@@ -543,8 +602,10 @@ def build_worker_navigation_tools(
             description=(
                 "SOURCE SEARCH / VERIFICATION. Use for a known literal, configuration "
                 "value, error message, method name, or concrete phrase after candidate "
-                "repository areas are known, or when the exact search target is already "
-                "known. Returns bounded line-addressable matches. Next read relevant "
+                "repository areas are known, or when the exact search target is "
+                "already "
+                "known. Any paths must exactly match the pinned FileIndex. Returns "
+                "bounded line-addressable matches. Next read relevant "
                 "matches with read_source_range. Do not use as the default open-ended "
                 "repository orientation mechanism; use orient_repository when the "
                 "implementation area is unknown."
@@ -556,7 +617,7 @@ def build_worker_navigation_tools(
             name="read_source_range",
             description=(
                 "EXACT SOURCE EVIDENCE. Read one exact bounded line range from a known "
-                "repository file. Returns revision-bound source and a transient "
+                "FileIndex path. Returns revision-bound source and a transient "
                 "evidence handle. Next pass supporting handles to record_evidence."
             ),
             arguments_type=_ReadSourceRangeArguments,

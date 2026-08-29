@@ -6,7 +6,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from bridger.contracts.enrichment import EnrichmentTargetType
-from bridger.contracts.files import ContentType, ReadMode
+from bridger.contracts.files import ContentType, FileIndexPath, ReadMode
 from bridger.contracts.navigation import GraphDirection, RepositorySearchKind
 from bridger.contracts.symbols import SymbolKind
 from bridger.llm.tools import LLMTool, ToolExecutor
@@ -53,7 +53,7 @@ NAVIGATION_TOOL_IDS = (
 )
 
 
-def _repository_relative_path(value: str) -> str:
+def _repository_path_prefix(value: str) -> str:
     if (
         value.startswith("/")
         or value in {"", "."}
@@ -63,14 +63,14 @@ def _repository_relative_path(value: str) -> str:
         or "//" in value
         or ".." in value.split("/")
     ):
-        raise ValueError("path must be a normalized repository-relative path")
+        raise ValueError("path_prefix must be a normalized repository-relative prefix")
     return value
 
 
-RepositoryRelativePath = Annotated[
+RepositoryPathPrefix = Annotated[
     str,
     Field(min_length=1),
-    AfterValidator(_repository_relative_path),
+    AfterValidator(_repository_path_prefix),
 ]
 RelationName = Annotated[str, Field(min_length=1)]
 
@@ -159,7 +159,7 @@ class _NodeArguments(_ToolArguments):
 
 
 class _PathArguments(_ToolArguments):
-    path: RepositoryRelativePath
+    path: FileIndexPath
 
 
 class _SymbolArguments(_ToolArguments):
@@ -167,10 +167,17 @@ class _SymbolArguments(_ToolArguments):
 
 
 class _ListFilesArguments(_ToolArguments):
-    path_prefix: str | None = Field(default=None, min_length=1)
+    path_prefix: RepositoryPathPrefix | None = None
+    graph_node_id: str | None = Field(default=None, min_length=1)
     content_types: list[ContentType] | None = None
     read_modes: list[ReadMode] | None = None
     limit: int = Field(default=DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT)
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> "_ListFilesArguments":
+        if self.path_prefix is not None and self.graph_node_id is not None:
+            raise ValueError("path_prefix and graph_node_id are mutually exclusive")
+        return self
 
 
 class _FileOverviewArguments(_PathArguments):
@@ -183,14 +190,14 @@ class _FileOverviewArguments(_PathArguments):
 
 
 class _ListSymbolsArguments(_ToolArguments):
-    path: RepositoryRelativePath | None = None
+    path: FileIndexPath | None = None
     kinds: list[SymbolKind] | None = None
     limit: int = Field(default=DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT)
 
 
 class _SearchSymbolsArguments(_ToolArguments):
     query: str = Field(min_length=1)
-    path: RepositoryRelativePath | None = None
+    path: FileIndexPath | None = None
     kinds: list[SymbolKind] | None = None
     limit: int = Field(default=DEFAULT_RESULT_LIMIT, ge=1, le=MAX_RESULT_LIMIT)
     min_score: float = Field(default=40, ge=0, le=100)
@@ -199,7 +206,7 @@ class _SearchSymbolsArguments(_ToolArguments):
 class _SearchSourceArguments(_ToolArguments):
     query: str = Field(min_length=1, description="Literal text or regular expression.")
     regex: bool = False
-    paths: list[RepositoryRelativePath] | None = None
+    paths: list[FileIndexPath] | None = None
     context_lines: int = Field(default=2, ge=0, le=MAX_CONTEXT_LINES)
     limit: int = Field(default=DEFAULT_RESULT_LIMIT, ge=1, le=MAX_RESULT_LIMIT)
     max_files: int = Field(
@@ -376,10 +383,15 @@ def build_navigation_tools(navigator: RepositoryNavigator) -> ToolExecutor:
         ),
         LLMTool.bind(
             name="list_files",
-            description="List a bounded filtered view of canonical indexed files.",
+            description=(
+                "CANONICAL FILEINDEX BROWSING. Return a bounded listing from the "
+                "pinned FileIndex, optionally restricted by repository path prefix "
+                "or an existing graph node and its one-hop neighbors."
+            ),
             arguments_type=_ListFilesArguments,
             handler=lambda value: navigator.list_files(
                 path_prefix=value.path_prefix,
+                graph_node_id=value.graph_node_id,
                 content_types=value.content_types,
                 read_modes=value.read_modes,
                 limit=value.limit,

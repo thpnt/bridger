@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 target_id: business-logic
 target_contract_version: test-v1
 activation: {mode: always}
@@ -26,10 +26,16 @@ output_quality_expectations:
 completion_obligations:
   - obligation_id: domain-concepts
     description: Identify and relate the principal domain and product concepts.
+    investigation_requirements:
+      - Inspect principal domain concepts.
     applicability: always
   - obligation_id: domain-workflows
     description: Explain central product and domain workflows end to end semantically.
+    investigation_requirements:
+      - Trace central domain workflows.
     applicability: always
   - obligation_id: rules-invariants
     description: Make important business and domain rules and invariants explicit.
+    investigation_requirements:
+      - Inspect business rules and invariants.
     applicability: always

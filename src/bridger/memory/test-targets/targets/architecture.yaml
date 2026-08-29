@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 target_id: architecture
 target_contract_version: test-v1
 activation: {mode: always}
@@ -25,10 +25,16 @@ output_quality_expectations:
 completion_obligations:
   - obligation_id: runtime-entrypoints
     description: Identify the principal runtime entrypoints.
+    investigation_requirements:
+      - Inspect runtime entrypoints.
     applicability: always
   - obligation_id: runtime-components
     description: Identify the major runtime applications, processes, and components.
+    investigation_requirements:
+      - Inspect runtime components.
     applicability: always
   - obligation_id: execution-paths
     description: Explain the principal execution and control paths mechanically.
+    investigation_requirements:
+      - Trace the principal execution paths.
     applicability: always

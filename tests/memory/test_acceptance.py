@@ -302,11 +302,14 @@ def test_reopening_preserves_history_and_reacceptance_creates_new_result(
             "to_phase": TargetPhase.WORKING.value,
         },
     )
-    TargetWorkspace(
+    workspace = TargetWorkspace(
         fixture.target_spec,
         fixture.target_state,
         fixture.store,
-    ).write_target_artifact(
+    )
+    workspace.list_target_artifacts()
+    workspace.read_target_artifact("architecture.md")
+    workspace.write_target_artifact(
         "architecture.md",
         "# Repaired candidate\n",
         expected_revision=1,

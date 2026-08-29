@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 target_id: repository
 target_contract_version: test-v1
 activation: {mode: always}
@@ -26,10 +26,16 @@ output_quality_expectations:
 completion_obligations:
   - obligation_id: repository-purpose
     description: Explain the repository's purpose and overall orientation.
+    investigation_requirements:
+      - Inspect the repository structure.
     applicability: always
   - obligation_id: applications-packages-workspaces
     description: Identify major applications, packages, and workspaces.
+    investigation_requirements:
+      - Inspect applications, packages, and workspaces.
     applicability: always
   - obligation_id: entry-surfaces
     description: Identify principal entry surfaces at a high level.
+    investigation_requirements:
+      - Inspect principal entry surfaces.
     applicability: always

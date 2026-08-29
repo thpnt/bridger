@@ -5,6 +5,7 @@ import re
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, cast
 
 from pydantic import JsonValue
@@ -18,6 +19,7 @@ from bridger.contracts.enrichment import (
 )
 from bridger.contracts.files import (
     FileIndex,
+    FileIndexPath,
     FileRecord,
     SourceReadRequest,
     SourceReadResult,
@@ -25,6 +27,7 @@ from bridger.contracts.files import (
 from bridger.contracts.graph import GraphBuildResult
 from bridger.contracts.navigation import (
     CompositeEntityView,
+    FileIndexListing,
     FileOverview,
     GraphCommunityView,
     GraphDirection,
@@ -39,7 +42,7 @@ from bridger.graph.lifecycle import (
     load_graph_snapshot_structural_state,
     validate_graph_snapshot,
 )
-from bridger.repository.errors import RepositoryError
+from bridger.repository.errors import FileIndexPathMismatchError, RepositoryError
 from bridger.repository.reader import read_file
 
 DEFAULT_RESULT_LIMIT = 20
@@ -400,8 +403,10 @@ class RepositoryNavigator:
     def graph_to_file(self, node_id: str) -> FileRecord | None:
         """Resolve a graph node's deterministic source_file through FileIndex."""
         self._require_node(node_id)
-        source_path = self._graph.nodes[node_id].get("source_file")
-        if not isinstance(source_path, str) or not source_path:
+        source_path = self._canonical_graph_file_path(
+            self._graph.nodes[node_id].get("source_file")
+        )
+        if source_path is None:
             return None
         return self._files_by_path.get(source_path)
 
@@ -413,13 +418,13 @@ class RepositoryNavigator:
             for symbol_id in self._node_symbol_ids[node_id]
         ]
 
-    def file_to_graph(self, path: str) -> list[str]:
+    def file_to_graph(self, path: FileIndexPath) -> list[str]:
         """Return every graph node with an exact source_file association."""
         self._require_file(path)
         return sorted(
             node_id
             for node_id, attributes in self._graph.nodes(data=True)
-            if attributes.get("source_file") == path
+            if self._canonical_graph_file_path(attributes.get("source_file")) == path
         )
 
     def symbol_to_graph(self, symbol_id: str) -> list[str]:
@@ -431,20 +436,44 @@ class RepositoryNavigator:
         self,
         *,
         path_prefix: str | None = None,
+        graph_node_id: str | None = None,
         content_types: Iterable[str] | None = None,
         read_modes: Iterable[str] | None = None,
         limit: int = DEFAULT_LIST_LIMIT,
-    ) -> list[FileRecord]:
+    ) -> FileIndexListing:
         """List a bounded filtered view of the canonical FileIndex."""
         limit = _bounded("limit", limit, maximum=MAX_LIST_LIMIT)
+        if path_prefix is not None and graph_node_id is not None:
+            raise ValueError("path_prefix and graph_node_id are mutually exclusive")
+        if path_prefix is not None:
+            _validate_path_prefix(path_prefix)
         selected_content_types = (
             set(content_types) if content_types is not None else None
         )
         selected_read_modes = set(read_modes) if read_modes is not None else None
-        return [
+        graph_paths: set[FileIndexPath] | None = None
+        if graph_node_id is not None:
+            self._require_node(graph_node_id)
+            related_node_ids = {
+                graph_node_id,
+                *self._graph.predecessors(graph_node_id),
+                *self._graph.successors(graph_node_id),
+            }
+            graph_paths = {
+                path
+                for node_id in related_node_ids
+                if (
+                    path := self._canonical_graph_file_path(
+                        self._graph.nodes[node_id].get("source_file")
+                    )
+                )
+                is not None
+            }
+        matches = [
             record
             for record in self._file_index.files
-            if (path_prefix is None or record.path.startswith(path_prefix))
+            if (path_prefix is None or _path_matches_prefix(record.path, path_prefix))
+            and (graph_paths is None or record.path in graph_paths)
             and (
                 selected_content_types is None
                 or record.content_type in selected_content_types
@@ -453,11 +482,15 @@ class RepositoryNavigator:
                 selected_read_modes is None
                 or record.disposition.read_mode in selected_read_modes
             )
-        ][:limit]
+        ]
+        return FileIndexListing(
+            files=tuple(matches[:limit]),
+            truncated=len(matches) > limit,
+        )
 
     def get_file_overview(
         self,
-        path: str,
+        path: FileIndexPath,
         *,
         max_symbols: int = DEFAULT_LIST_LIMIT,
         max_graph_nodes: int = DEFAULT_LIST_LIMIT,
@@ -485,7 +518,7 @@ class RepositoryNavigator:
     def list_symbols(
         self,
         *,
-        path: str | None = None,
+        path: FileIndexPath | None = None,
         kinds: Iterable[SymbolKind] | None = None,
         limit: int = DEFAULT_LIST_LIMIT,
     ) -> list[SymbolRecord]:
@@ -505,7 +538,7 @@ class RepositoryNavigator:
         self,
         query: str,
         *,
-        path: str | None = None,
+        path: FileIndexPath | None = None,
         kinds: Iterable[SymbolKind] | None = None,
         limit: int = DEFAULT_RESULT_LIMIT,
         min_score: float = 40,
@@ -544,7 +577,7 @@ class RepositoryNavigator:
         query: str,
         *,
         regex: bool = False,
-        paths: Iterable[str] | None = None,
+        paths: Iterable[FileIndexPath] | None = None,
         context_lines: int = 2,
         limit: int = DEFAULT_RESULT_LIMIT,
         max_files: int = SOURCE_SEARCH_MAX_FILES,
@@ -631,7 +664,7 @@ class RepositoryNavigator:
 
     def read_file_ranges(
         self,
-        path: str,
+        path: FileIndexPath,
         ranges: Sequence[tuple[int, int]],
         *,
         max_bytes_per_range: int = 64 * 1024,
@@ -667,7 +700,7 @@ class RepositoryNavigator:
 
     def read_around_match(
         self,
-        path: str,
+        path: FileIndexPath,
         line_number: int,
         *,
         context_lines: int = 5,
@@ -692,7 +725,7 @@ class RepositoryNavigator:
         hits: list[RepositorySearchHit] = []
         for node_id, attributes in self._graph.nodes(data=True):
             label = str(attributes.get("label") or node_id)
-            source_path = _existing_source_path(attributes, self._files_by_path)
+            source_path = self._canonical_graph_file_path(attributes.get("source_file"))
             fields = [
                 label,
                 node_id,
@@ -733,7 +766,7 @@ class RepositoryNavigator:
             )
         for hyperedge_id, hyperedge in sorted(self._hyperedges_by_id.items()):
             label = str(hyperedge.get("label") or hyperedge_id)
-            source_path = _existing_source_path(hyperedge, self._files_by_path)
+            source_path = self._canonical_graph_file_path(hyperedge.get("source_file"))
             hits.append(
                 RepositorySearchHit(
                     kind="hyperedge",
@@ -973,7 +1006,12 @@ class RepositoryNavigator:
         )
 
     def _read_clamped_range(
-        self, path: str, start_line: int, end_line: int, *, max_bytes: int
+        self,
+        path: FileIndexPath,
+        start_line: int,
+        end_line: int,
+        *,
+        max_bytes: int,
     ) -> SourceReadResult:
         line_count = self._source_line_count(path)
         if start_line > line_count:
@@ -989,7 +1027,7 @@ class RepositoryNavigator:
             ),
         )
 
-    def _source_line_count(self, path: str) -> int:
+    def _source_line_count(self, path: FileIndexPath) -> int:
         metadata_read = read_file(
             self._context,
             self._file_index,
@@ -999,8 +1037,8 @@ class RepositoryNavigator:
 
     def _match_symbols_for_node(self, node_id: str) -> list[SymbolRecord]:
         attributes = self._graph.nodes[node_id]
-        source_path = attributes.get("source_file")
-        if not isinstance(source_path, str) or source_path not in self._files_by_path:
+        source_path = self._canonical_graph_file_path(attributes.get("source_file"))
+        if source_path is None:
             return []
         candidates = [
             symbol
@@ -1110,10 +1148,49 @@ class RepositoryNavigator:
         if node_id not in self._graph:
             raise KeyError(f"unknown graph node: {node_id}")
 
-    def _require_file(self, path: str) -> FileRecord:
+    def _canonical_graph_file_path(
+        self,
+        source_file: object,
+    ) -> FileIndexPath | None:
+        if not isinstance(source_file, str) or not source_file:
+            return None
+        if "://" in source_file or source_file.startswith(("external:", "stdlib:")):
+            return None
+        source_path = Path(source_file)
+        if source_path.is_absolute():
+            try:
+                normalized_path = (
+                    source_path.resolve()
+                    .relative_to(self._context.root_path.resolve())
+                    .as_posix()
+                )
+            except ValueError:
+                return None
+        else:
+            normalized_path = source_path.as_posix()
+        if normalized_path not in self._files_by_path:
+            return None
+        return cast(FileIndexPath, normalized_path)
+
+    def _closest_file_index_paths(
+        self,
+        requested_path: str,
+        *,
+        limit: int = 5,
+    ) -> tuple[FileIndexPath, ...]:
+        ranked = sorted(
+            self._files_by_path,
+            key=lambda path: (-WRatio(requested_path, path), path),
+        )
+        return tuple(ranked[:limit])
+
+    def _require_file(self, path: FileIndexPath) -> FileRecord:
         record = self._files_by_path.get(path)
         if record is None:
-            raise RepositoryError(f"path is absent from the FileIndex: {path}")
+            raise FileIndexPathMismatchError(
+                requested_path=path,
+                closest_valid_paths=self._closest_file_index_paths(path),
+            )
         return record
 
     def _require_symbol(self, symbol_id: str) -> SymbolRecord:
@@ -1275,13 +1352,21 @@ def _searchable_values(value: object) -> list[str]:
     return []
 
 
-def _existing_source_path(
-    attributes: Mapping[str, object], files_by_path: Mapping[str, FileRecord]
-) -> str | None:
-    source_path = attributes.get("source_file")
-    if isinstance(source_path, str) and source_path in files_by_path:
-        return source_path
-    return None
+def _path_matches_prefix(path: FileIndexPath, prefix: str) -> bool:
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
+def _validate_path_prefix(value: str) -> None:
+    if (
+        value.startswith("/")
+        or value in {"", "."}
+        or value.startswith("./")
+        or value.endswith("/")
+        or "/./" in value
+        or "//" in value
+        or ".." in value.split("/")
+    ):
+        raise ValueError("path_prefix must be a normalized repository-relative prefix")
 
 
 def _node_source_range(
@@ -1337,7 +1422,7 @@ def _normalized_node_label(value: object) -> str | None:
     return label or None
 
 
-def _is_file_node(attributes: Mapping[str, object], source_path: str) -> bool:
+def _is_file_node(attributes: Mapping[str, object], source_path: FileIndexPath) -> bool:
     label = attributes.get("label")
     if not isinstance(label, str):
         return False

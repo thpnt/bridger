@@ -9,7 +9,7 @@ from bridger.contracts.enrichment import (
     EnrichmentTargetReference,
     EnrichmentTargetType,
 )
-from bridger.contracts.files import FileRecord
+from bridger.contracts.files import FileIndexPath, FileRecord
 
 RepositorySearchKind = Literal["node", "community", "hyperedge", "file", "symbol"]
 GraphDirection = Literal["incoming", "outgoing", "both"]
@@ -34,7 +34,7 @@ class RepositorySearchHit(BaseModel):
     kind: RepositorySearchKind
     ref: EnrichmentTargetReference
     label: str = Field(min_length=1)
-    source_path: str | None = Field(default=None, min_length=1)
+    source_path: FileIndexPath | None = None
     score: float | None = Field(default=None, ge=0, le=100)
 
 
@@ -73,12 +73,21 @@ class FileOverview(BaseModel):
     graph_nodes_truncated: bool = False
 
 
+class FileIndexListing(BaseModel):
+    """One bounded slice of the pinned canonical FileIndex."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    files: tuple[FileRecord, ...] = ()
+    truncated: bool = False
+
+
 class SourceContentMatch(BaseModel):
     """One line-addressable match from authorized repository source content."""
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(min_length=1)
+    path: FileIndexPath
     line_number: int = Field(ge=1)
     line_text: str
     context_start_line: int = Field(ge=1)
@@ -89,6 +98,7 @@ class SourceContentMatch(BaseModel):
 
 __all__ = [
     "CompositeEntityView",
+    "FileIndexListing",
     "FileOverview",
     "GraphCommunityView",
     "GraphDirection",

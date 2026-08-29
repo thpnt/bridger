@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from openai._models import construct_type
 from openai.types.responses import CompactedResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from bridger.contracts.enrichment import (
     EnrichmentGenerationSummary,
@@ -19,6 +19,7 @@ from bridger.contracts.enrichment import (
     FeatureGenerationSummary,
     GraphEnrichmentOverlay,
 )
+from bridger.contracts.files import FileIndexPath
 from bridger.contracts.graph import GraphBuildResult, GraphConstructionConfig
 from bridger.contracts.memory.core import SourceBinding
 from bridger.contracts.memory.worker_cycle import (
@@ -353,10 +354,12 @@ def test_file_and_graph_navigation_reuse_canonical_records(
         "run",
         "service",
     ]
-    assert [record.path for record in navigator.list_files(limit=2)] == [
+    listing = navigator.list_files(limit=2)
+    assert [record.path for record in listing.files] == [
         ".env",
         "README.md",
     ]
+    assert listing.truncated
     assert [record.symbol_id for record in navigator.list_symbols(path="service.py")]
     assert navigator.search_symbols("Service.run")[0].symbol_id == "symbol-run"
     assert [view.target_ref for view in neighbors.nodes] == ["run", "helper"]
@@ -430,12 +433,24 @@ def test_worker_navigation_surface_is_distinct_and_graph_node_is_composed(
             )
         )
     )
+    listing = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="list-service-files",
+                name="list_files",
+                arguments={"graph_node_id": "service", "limit": 1},
+            )
+        )
+    )
 
     assert tuple(definition.name for definition in executor.definitions) == (
         WORKER_REPOSITORY_TOOL_IDS
     )
-    assert not set(NAVIGATION_TOOL_IDS) & set(WORKER_REPOSITORY_TOOL_IDS)
+    assert set(NAVIGATION_TOOL_IDS) & set(WORKER_REPOSITORY_TOOL_IDS) == {"list_files"}
     assert result.error is None
+    assert listing.output is not None
+    assert listing.output["files"][0]["path"] == "service.py"
+    assert not listing.output["truncated"]
     assert isinstance(result.output, dict)
     assert result.output["node"]["target_ref"] == "service"
     relationships = result.output["relationships"]
@@ -453,6 +468,91 @@ def test_worker_navigation_surface_is_distinct_and_graph_node_is_composed(
         target_type="node",
         target_ref="service",
     )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/src/foo.py", "./src/foo.py", "src//foo.py", "src/../foo.py", "src/foo.py/", "."],
+)
+def test_file_index_path_rejects_noncanonical_repository_paths(path: str) -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(FileIndexPath).validate_python(path)
+
+
+def test_list_files_is_segment_aware_bounded_and_graph_related(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    navigator = RepositoryNavigator(context, file_index, symbol_index, graph_build)
+
+    prefix_listing = navigator.list_files(path_prefix="service")
+    bounded_listing = navigator.list_files(limit=1)
+    graph_listing = navigator.list_files(graph_node_id="service")
+
+    assert not prefix_listing.files
+    assert not prefix_listing.truncated
+    assert [record.path for record in bounded_listing.files] == [".env"]
+    assert bounded_listing.truncated
+    assert [record.path for record in graph_listing.files] == ["service.py"]
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        navigator.list_files(path_prefix="src", graph_node_id="service")
+    with pytest.raises(ValueError, match="normalized repository-relative prefix"):
+        navigator.list_files(path_prefix="./src")
+
+
+def test_graph_file_bridges_canonicalize_absolute_repository_paths(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    graph = graph_build.graph.copy()
+    graph.nodes["service"]["source_file"] = str(context.root_path / "service.py")
+    navigator = RepositoryNavigator(
+        context,
+        file_index,
+        symbol_index,
+        graph_build.model_copy(update={"graph": graph}),
+    )
+
+    resolved = navigator.graph_to_file("service")
+
+    assert resolved is not None
+    assert resolved.path == "service.py"
+    assert "service" in navigator.file_to_graph("service.py")
+    assert [
+        record.path for record in navigator.list_files(graph_node_id="service").files
+    ] == ["service.py"]
+
+
+def test_worker_path_mismatch_is_structured_and_never_substituted(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    executor = build_worker_navigation_tools(
+        RepositoryNavigator(context, file_index, symbol_index, graph_build),
+        _evidence_candidates(context, graph_build),
+    )
+
+    result = asyncio.run(
+        executor.execute(
+            LLMToolCall(
+                id="mismatch",
+                name="inspect_file",
+                arguments={"path": "servce.py"},
+            )
+        )
+    )
+
+    assert result.output is None
+    assert result.error is not None
+    assert (
+        result.error.message == "Repository path is absent from the pinned FileIndex."
+    )
+    assert result.error.details == {
+        "kind": "file_index_path_mismatch",
+        "requested_path": "servce.py",
+        "closest_valid_paths": ["service.py", ".env", "README.md"],
+    }
+    assert "details" in result.as_message().model_dump_json()
 
 
 def test_worker_community_composition_retains_exact_durable_identity(
@@ -776,6 +876,7 @@ def test_tool_executor_validates_before_dispatch_and_returns_ordinary_errors(
     assert denied.error.code == "tool_execution_error"
     assert "denied" in denied.error.message
     assert denied.as_message().tool_failed
+    assert "details" not in denied.as_message().model_dump_json()
 
 
 def test_llm_client_tool_call_to_navigation_result_integration(

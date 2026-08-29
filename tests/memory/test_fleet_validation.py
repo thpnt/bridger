@@ -221,11 +221,14 @@ def test_reaccepted_target_changes_exact_candidate_and_replaces_findings(
             "to_phase": TargetPhase.WORKING.value,
         },
     )
-    TargetWorkspace(
+    workspace = TargetWorkspace(
         repaired.target_spec,
         repaired.target_state,
         store,
-    ).write_target_artifact(
+    )
+    workspace.list_target_artifacts()
+    workspace.read_target_artifact("runtime.md")
+    workspace.write_target_artifact(
         "runtime.md",
         "See [persistence](../data-and-state/persistence.md).\n",
         expected_revision=1,
@@ -369,6 +372,7 @@ def _fleet_runtime(tmp_path: Path, target_ids: list[str] | None = None) -> Fleet
     runtime_root = (tmp_path / "runtime").resolve()
     output_root = (tmp_path / "output").resolve()
     spec = MemoryFleetSpec(
+        schema_version=2,
         fleet_run_id="fleet-1",
         source=_SOURCE,
         target_catalog_id="memory-targets",
@@ -421,7 +425,7 @@ def _fleet_runtime(tmp_path: Path, target_ids: list[str] | None = None) -> Fleet
         )
         definitions.append(
             TargetDefinition(
-                schema_version=1,
+                schema_version=2,
                 target_id=target_id,
                 target_contract_version="1",
                 activation=TargetActivation(mode=ActivationMode.ALWAYS),
@@ -439,6 +443,7 @@ def _fleet_runtime(tmp_path: Path, target_ids: list[str] | None = None) -> Fleet
                     CompletionObligationDefinition(
                         obligation_id=obligation_id,
                         description=f"Describe {target_id}.",
+                        investigation_requirements=["Inspect the target."],
                         applicability=ObligationApplicability.ALWAYS,
                     )
                 ],
@@ -452,7 +457,7 @@ def _fleet_runtime(tmp_path: Path, target_ids: list[str] | None = None) -> Fleet
             )
         )
     catalog = MemoryTargetCatalog(
-        schema_version=1,
+        schema_version=2,
         catalog_id=spec.target_catalog_id,
         catalog_version=spec.target_catalog_version,
         targets=entries,
@@ -532,11 +537,13 @@ def _accepted_fleet(
             },
         )
         relative_path, content = artifacts[target.target_spec.target_id]
-        TargetWorkspace(
+        workspace = TargetWorkspace(
             target.target_spec,
             target.target_state,
             target.store,
-        ).write_target_artifact(relative_path, content)
+        )
+        workspace.list_target_artifacts()
+        workspace.write_target_artifact(relative_path, content)
         _resolve_completion(target)
         _accept_current_candidate(target)
     return fixture

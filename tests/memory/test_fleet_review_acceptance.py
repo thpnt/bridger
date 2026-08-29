@@ -225,11 +225,14 @@ def test_local_reacceptance_keeps_fleet_review_finding_until_fresh_pass(
             "to_phase": TargetPhase.WORKING.value,
         },
     )
-    TargetWorkspace(
+    workspace = TargetWorkspace(
         affected.target_spec,
         affected.target_state,
         affected.store,
-    ).write_target_artifact(
+    )
+    workspace.list_target_artifacts()
+    workspace.read_target_artifact("runtime.md")
+    workspace.write_target_artifact(
         "runtime.md",
         "# Runtime\n\nRuntime structure with bounded state context.\n",
         expected_revision=1,

@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from bridger.contracts.files import FileIndexPath
+
 SymbolKind = Literal[
     "class",
     "interface",
@@ -36,28 +38,12 @@ class SymbolRecord(BaseModel):
     name: str = Field(min_length=1)
     qualified_name: str | None = Field(default=None, min_length=1)
     kind: SymbolKind
-    path: str = Field(min_length=1)
+    path: FileIndexPath
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
     parent_symbol_id: str | None = Field(default=None, min_length=1)
     signature: str | None = Field(default=None, min_length=1, max_length=500)
     language: str | None = Field(default=None, min_length=1)
-
-    @field_validator("path")
-    @classmethod
-    def validate_path(cls, value: str) -> str:
-        """Require a normalized repository-relative source path."""
-        if (
-            value.startswith("/")
-            or value in {"", "."}
-            or value.startswith("./")
-            or value.endswith("/")
-            or "/./" in value
-            or "//" in value
-            or ".." in value.split("/")
-        ):
-            raise ValueError("path must be a normalized repository-relative path")
-        return value
 
     @model_validator(mode="after")
     def validate_range(self) -> "SymbolRecord":

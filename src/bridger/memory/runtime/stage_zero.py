@@ -137,6 +137,7 @@ def bind_memory_run(
         for target_id in target_ids:
             require_path_segment(target_id, "target_id")
         spec = MemoryFleetSpec(
+            schema_version=2,
             fleet_run_id=uuid.uuid4().hex,
             source=SourceBinding(
                 repository_id=repository_context.repository_id,

@@ -416,11 +416,14 @@ def test_multiple_review_rounds_preserve_history_and_replace_open_projection(
     historical_finding = verdict_a.finding_refs[0]
 
     _reenter_working(fixture)
-    TargetWorkspace(
+    workspace = TargetWorkspace(
         fixture.target_spec,
         fixture.target_state,
         fixture.store,
-    ).write_target_artifact(
+    )
+    workspace.list_target_artifacts()
+    workspace.read_target_artifact("architecture.md")
+    workspace.write_target_artifact(
         "architecture.md",
         "# Repaired\n\nBootstrap calls the runtime coordinator.",
         expected_revision=1,

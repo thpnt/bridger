@@ -18,6 +18,7 @@ from bridger.contracts.files import (
     FileChangeSet,
     FileDisposition,
     FileIndex,
+    FileIndexPath,
     FileIndexSummary,
     FileRecord,
     IntakeConfiguration,
@@ -124,6 +125,7 @@ from bridger.contracts.memory.worker_cycle import (
 )
 from bridger.contracts.navigation import (
     CompositeEntityView,
+    FileIndexListing,
     FileOverview,
     GraphCommunityView,
     GraphDirection,
@@ -167,6 +169,8 @@ __all__ = [
     "FileChangeSet",
     "FileDisposition",
     "FileIndex",
+    "FileIndexListing",
+    "FileIndexPath",
     "FileIndexSummary",
     "FileRecord",
     "FileOverview",

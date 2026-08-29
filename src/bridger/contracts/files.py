@@ -1,15 +1,43 @@
 """File inventory and controlled-source-read contracts."""
 
 from collections import Counter
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 BOUNDED_READ_MAX_BYTES = 64 * 1024
 
 ReadMode = Literal["full", "bounded", "denied"]
 ProcessingMode = Literal["extract", "metadata_only", "skip"]
 ContentType = Literal["source", "documentation", "configuration", "binary", "unknown"]
+
+
+def _validate_file_index_path(value: str) -> str:
+    if (
+        value.startswith("/")
+        or value in {"", "."}
+        or value.startswith("./")
+        or value.endswith("/")
+        or "/./" in value
+        or "//" in value
+        or ".." in value.split("/")
+    ):
+        raise ValueError("path must be a normalized repository-relative path")
+    return value
+
+
+FileIndexPath = Annotated[
+    str,
+    Field(min_length=1),
+    AfterValidator(_validate_file_index_path),
+]
 
 
 class FileDisposition(BaseModel):
@@ -27,28 +55,12 @@ class FileRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(min_length=1)
+    path: FileIndexPath
     git_object_id: str = Field(pattern=r"^[0-9a-f]{40,64}$")
     size_bytes: int = Field(ge=0)
     content_type: ContentType
     language: str | None = Field(default=None, min_length=1)
     disposition: FileDisposition
-
-    @field_validator("path")
-    @classmethod
-    def validate_path(cls, value: str) -> str:
-        """Require a normalized repository-relative path."""
-        if (
-            value.startswith("/")
-            or value in {"", "."}
-            or value.startswith("./")
-            or value.endswith("/")
-            or "/./" in value
-            or "//" in value
-            or ".." in value.split("/")
-        ):
-            raise ValueError("path must be a normalized repository-relative path")
-        return value
 
 
 class FileIndexSummary(BaseModel):
@@ -133,7 +145,7 @@ class SourceReadRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(min_length=1)
+    path: FileIndexPath
     start_line: int | None = Field(default=None, ge=1)
     end_line: int | None = Field(default=None, ge=1)
     max_bytes: int | None = Field(default=None, ge=1)
@@ -155,7 +167,7 @@ class SourceReadResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(min_length=1)
+    path: FileIndexPath
     revision: str = Field(pattern=r"^[0-9a-f]{40,64}$")
     content: str
     start_line: int = Field(ge=1)

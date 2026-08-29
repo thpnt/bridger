@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from bridger.contracts.enrichment import EnrichmentTargetType
+from bridger.contracts.files import FileIndexPath
 from bridger.contracts.memory.core import SourceBinding
 
 
@@ -24,7 +25,7 @@ class FileEvidenceLocator(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    path: str = Field(min_length=1)
+    path: FileIndexPath
 
 
 class SourceRangeEvidenceLocator(BaseModel):
@@ -32,7 +33,7 @@ class SourceRangeEvidenceLocator(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    path: str = Field(min_length=1)
+    path: FileIndexPath
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
     content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")

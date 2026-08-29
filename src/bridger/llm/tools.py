@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Literal, TypeVar, cast
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from bridger.llm.models import (
     LLMToolCall,
@@ -17,6 +17,19 @@ from bridger.llm.models import (
 
 ToolArgumentsT = TypeVar("ToolArgumentsT", bound=BaseModel)
 ToolHandler = Callable[[BaseModel], object | Awaitable[object]]
+
+
+class ToolExecutionError(ValueError):
+    """A handled tool failure with optional provider-neutral structured details."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: dict[str, JsonValue] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.details = details
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +123,9 @@ class ToolExecutor:
                 call,
                 code="tool_execution_error",
                 message=_error_message(error),
+                details=(
+                    error.details if isinstance(error, ToolExecutionError) else None
+                ),
             )
 
         return LLMToolResult(
@@ -129,11 +145,12 @@ def _failed_result(
         "tool_execution_error",
     ],
     message: str,
+    details: dict[str, JsonValue] | None = None,
 ) -> LLMToolResult:
     return LLMToolResult(
         call_id=call.id,
         name=call.name,
-        error=LLMToolError(code=code, message=message),
+        error=LLMToolError(code=code, message=message, details=details),
     )
 
 
@@ -156,4 +173,4 @@ def _validation_error_message(tool_name: str, error: ValidationError) -> str:
     return f"Invalid arguments for {tool_name}:\n" + "\n".join(summaries)
 
 
-__all__ = ["LLMTool", "ToolExecutor"]
+__all__ = ["LLMTool", "ToolExecutionError", "ToolExecutor"]
