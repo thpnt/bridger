@@ -300,7 +300,10 @@ async def run_memory_harness(
                         fleet_spec=fleet_spec,
                         fleet_state=fleet_state,
                         catalog=catalog,
-                        target_definitions=definitions,
+                        target_definitions=[
+                            definitions_by_id[target_id]
+                            for target_id in fleet_spec.target_ids
+                        ],
                         reviewer_profile=reviewer_profile,
                         reviewer_instructions=_read_prompt(
                             _PROMPTS_ROOT / "reviewer" / "system.md"
