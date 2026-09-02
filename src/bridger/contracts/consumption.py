@@ -60,7 +60,6 @@ class ReadExpansion(StrEnum):
     CONTEXT = "context"
     DOCUMENT = "document"
     CLAIM = "claim"
-    LINKS = "links"
     EVIDENCE = "evidence"
 
 
