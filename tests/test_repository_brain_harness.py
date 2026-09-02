@@ -34,7 +34,10 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
         fleet_run_id="fleet-1",
         target_task_ids=list(task_ids),
     )
-    fleet_spec = SimpleNamespace(fleet_run_id="fleet-1")
+    fleet_spec = SimpleNamespace(
+        fleet_run_id="fleet-1",
+        target_ids=list(target_ids),
+    )
     catalog = SimpleNamespace(
         targets=[SimpleNamespace(target_id=target_id) for target_id in target_ids]
     )

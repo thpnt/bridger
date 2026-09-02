@@ -268,7 +268,9 @@ def test_recovered_harness_reuses_authorities_without_stage_zero_or_one(
     catalog = SimpleNamespace(
         targets=[SimpleNamespace(target_id=target_id) for target_id in target_ids]
     )
-    definitions = [SimpleNamespace(target_id=target_id) for target_id in target_ids]
+    definitions = [
+        SimpleNamespace(target_id=target_id) for target_id in recovery_spec.target_ids
+    ]
     started: set[str] = set()
     all_started = asyncio.Event()
 
