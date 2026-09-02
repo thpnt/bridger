@@ -152,6 +152,7 @@ from bridger.contracts.navigation import (
     SourceContentMatch,
 )
 from bridger.contracts.repository import RepositoryContext
+from bridger.contracts.repository_brain import RepositoryBrainManifest
 from bridger.contracts.symbols import (
     SymbolIndex,
     SymbolIndexSummary,
@@ -240,6 +241,7 @@ __all__ = [
     "ExtractionFailure",
     "ExtractionReport",
     "RepositoryContext",
+    "RepositoryBrainManifest",
     "RepositoryGraph",
     "RepositorySearchHit",
     "RepositorySearchKind",

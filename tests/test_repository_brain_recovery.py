@@ -331,7 +331,11 @@ def test_recovered_harness_reuses_authorities_without_stage_zero_or_one(
     monkeypatch.setattr(harness, "reconcile_fleet", reconcile)
     monkeypatch.setattr(harness, "accept_fleet", lambda *_args: object())
     expected = tmp_path / "repository-brain.json"
-    monkeypatch.setattr(harness, "publish_repository_brain", lambda *_args: expected)
+    monkeypatch.setattr(
+        harness,
+        "publish_repository_brain",
+        lambda *_args, **_kwargs: expected,
+    )
     monkeypatch.setattr(
         harness,
         "persist_token_usage_report",
