@@ -252,6 +252,67 @@ def test_community_composition_and_search_require_exact_member_signature(
     )
 
 
+def test_list_graph_communities_is_bounded_deterministic_and_composed(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, structural = layer6_state
+    navigator = RepositoryNavigator(
+        context,
+        file_index,
+        symbol_index,
+        graph_build,
+        overlay=_overlay(graph_build, structural, name="AI Service Domain"),
+    )
+
+    expected_ids = sorted(
+        structural["communities"],
+        key=lambda community_id: (
+            -len(structural["communities"][community_id]),
+            community_id,
+        ),
+    )
+    first = navigator.list_graph_communities()
+    second = navigator.list_graph_communities()
+
+    assert [view.target_ref["community_id"] for view in first] == expected_ids
+    assert [view.model_dump() for view in first] == [
+        view.model_dump() for view in second
+    ]
+    assert all(view.target_type == "community" for view in first)
+    assert all(view.deterministic["members"] == [] for view in first)
+    assert all(
+        view.deterministic["members_truncated"]
+        == (view.deterministic["member_count"] > 0)
+        for view in first
+    )
+
+    enriched = next(
+        view
+        for view in first
+        if view.target_ref["community_id"] == min(structural["communities"])
+    )
+    assert [record.value for record in enriched.enrichment] == ["AI Service Domain"]
+    assert len(navigator.list_graph_communities(limit=1)) == 1
+    with pytest.raises(ValueError, match="limit must be between"):
+        navigator.list_graph_communities(limit=0)
+
+    stale_overlay = _overlay(graph_build, structural, name="AI Service Domain")
+    stale_overlay.records[0].target_ref["member_signature"] = "stale-signature"
+    stale = RepositoryNavigator(
+        context,
+        file_index,
+        symbol_index,
+        graph_build,
+        overlay=stale_overlay,
+    )
+    stale_community = next(
+        view
+        for view in stale.list_graph_communities()
+        if view.target_ref["community_id"] == min(structural["communities"])
+    )
+    assert stale_community.enrichment == []
+
+
 def test_graph_symbol_mapping_preserves_zero_to_many_exact_matches(
     layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
 ) -> None:
@@ -287,7 +348,7 @@ def test_traversal_and_search_results_are_bounded_and_supported(
     assert len(subgraph.nodes) == 3
     assert len(subgraph.edges) == 2
     assert subgraph.truncated
-    assert path is not None
+    assert not path.truncated
     assert [view.target_ref for view in path.nodes] == [
         "file",
         "service",
@@ -301,6 +362,62 @@ def test_traversal_and_search_results_are_bounded_and_supported(
         "file",
         "symbol",
     }
+
+
+def test_graph_path_reports_exhaustive_and_incomplete_absence(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    navigator = RepositoryNavigator(context, file_index, symbol_index, graph_build)
+
+    exhaustive = navigator.get_graph_path("service", "file", direction="outgoing")
+    depth_limited = navigator.get_graph_path(
+        "file", "helper", direction="outgoing", max_depth=1
+    )
+    terminal_boundary = navigator.get_graph_path(
+        "helper", "file", direction="outgoing", max_depth=1
+    )
+    node_limited = navigator.get_graph_path(
+        "file", "orphan", direction="outgoing", max_nodes=2
+    )
+
+    assert exhaustive.nodes == []
+    assert exhaustive.edges == []
+    assert exhaustive.hyperedges == []
+    assert not exhaustive.truncated
+    assert depth_limited.nodes == []
+    assert depth_limited.edges == []
+    assert depth_limited.truncated
+    assert terminal_boundary.nodes == []
+    assert not terminal_boundary.truncated
+    assert node_limited.nodes == []
+    assert node_limited.truncated
+
+
+def test_graph_subgraph_completeness_respects_depth_and_bounds(
+    layer6_state: tuple[Any, Any, SymbolIndex, GraphBuildResult, dict[str, Any]],
+) -> None:
+    context, file_index, symbol_index, graph_build, _structural = layer6_state
+    navigator = RepositoryNavigator(context, file_index, symbol_index, graph_build)
+
+    continuing = navigator.get_graph_subgraph("file", depth=1, direction="outgoing")
+    terminal = navigator.get_graph_subgraph("orphan", depth=1, direction="outgoing")
+    relation_limited = navigator.get_graph_subgraph(
+        "file", depth=1, direction="outgoing", relations={"contains"}
+    )
+    direction_limited = navigator.get_graph_subgraph(
+        "service", depth=1, direction="incoming"
+    )
+    edge_limited = navigator.get_graph_subgraph(
+        "file", depth=4, direction="outgoing", max_edges=1
+    )
+
+    assert [view.target_ref for view in continuing.nodes] == ["file", "service"]
+    assert continuing.truncated
+    assert not terminal.truncated
+    assert not relation_limited.truncated
+    assert not direction_limited.truncated
+    assert edge_limited.truncated
 
 
 def test_source_search_and_reads_use_layer1_policy(
@@ -920,7 +1037,7 @@ def test_llm_client_tool_call_to_navigation_result_integration(
     response = asyncio.run(client.generate(request, output_type=_StructuredAnswer))
     result = asyncio.run(executor.execute(response.tool_calls[0]))
 
-    assert len(provider.requests[0]["tools"]) == 19
+    assert len(provider.requests[0]["tools"]) == 20
     assert provider.requests[0]["tools"][0]["name"] == "search_repository"
     assert response.tool_calls[0].id == "call-search"
     assert response.structured_output is None

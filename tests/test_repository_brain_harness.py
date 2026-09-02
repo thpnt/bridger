@@ -1,6 +1,8 @@
 """Repository Brain concurrent target-batch composition tests."""
 
 import asyncio
+import hashlib
+import json
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,11 +10,91 @@ from types import SimpleNamespace
 import pytest
 
 import bridger.repository_brain.harness as harness
+import bridger.repository_brain.publication as publication_module
+from bridger.contracts.enrichment import GraphEnrichmentOverlay
+from bridger.contracts.graph import GraphBuildResult
 from bridger.contracts.memory.core import FleetPhase, FleetRunState, TargetPhase
+from bridger.contracts.memory.fleet_acceptance import AcceptedMemoryFleetResult
+from bridger.contracts.repository_brain import RepositoryBrainManifest
 from bridger.init_pipeline import InitMode, resolve_init_configuration
 from bridger.llm.profiles import LLMProfile
 from bridger.memory import WorkerCycleOutcome
 from bridger.memory.errors import TargetReviewBudgetError
+
+
+def test_v2_publication_is_typed_content_addressed_and_collision_safe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(publication_module, "validate_graph_snapshot", lambda *_: None)
+    monkeypatch.setattr(
+        publication_module,
+        "validate_graph_enrichment",
+        lambda *_: None,
+    )
+    graph = GraphBuildResult.model_construct(
+        manifest=SimpleNamespace(
+            repository_id="repository-1",
+            revision="a" * 40,
+            snapshot_id="snapshot-1",
+        ),
+        snapshot_root=tmp_path / "graphs" / "snapshot-1",
+    )
+    enrichment = GraphEnrichmentOverlay.model_construct(
+        overlay_id="overlay-1",
+        graph_snapshot_id="snapshot-1",
+    )
+    accepted = AcceptedMemoryFleetResult.model_construct(
+        accepted_memory_fleet_result_id="accepted-fleet-1",
+        fleet_run_id="fleet-1",
+        source=SimpleNamespace(
+            graph_snapshot_id="snapshot-1",
+            enrichment_overlay_id="overlay-1",
+        ),
+        target_catalog_id="catalog-1",
+        target_catalog_version="1",
+        accepted_target_result_refs=["accepted-target-1"],
+    )
+    output_root = tmp_path / ".bridger" / "memory"
+    runtime_root = tmp_path / ".bridger" / "runtime"
+
+    manifest_path = publication_module.publish_repository_brain(
+        graph,
+        accepted,
+        enrichment,
+        output_root,
+        runtime_root=runtime_root,
+    )
+    manifest = RepositoryBrainManifest.model_validate_json(manifest_path.read_bytes())
+
+    assert manifest.schema_version == 2
+    assert manifest.fleet_run_id == "fleet-1"
+    assert manifest.memory_runtime_root == str(runtime_root)
+    assert manifest.memory_output_root == str(output_root)
+    assert manifest.accepted_target_result_refs == ["accepted-target-1"]
+    assert (
+        publication_module.publish_repository_brain(
+            graph,
+            accepted,
+            enrichment,
+            output_root,
+            runtime_root=runtime_root,
+        )
+        == manifest_path
+    )
+    expected_id = hashlib.sha256(manifest_path.read_bytes()).hexdigest()[:16]
+    assert manifest_path.parent.name == expected_id
+    assert not list(manifest_path.parent.parent.glob(f".{expected_id}-*"))
+
+    manifest_path.write_text(json.dumps({"collision": True}), encoding="utf-8")
+    with pytest.raises(ValueError, match="identity collision"):
+        publication_module.publish_repository_brain(
+            graph,
+            accepted,
+            enrichment,
+            output_root,
+            runtime_root=runtime_root,
+        )
 
 
 def test_memory_harness_runs_all_targets_in_concurrent_batches(
@@ -34,7 +116,11 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
         fleet_run_id="fleet-1",
         target_task_ids=list(task_ids),
     )
-    fleet_spec = SimpleNamespace(fleet_run_id="fleet-1")
+    fleet_spec = SimpleNamespace(
+        fleet_run_id="fleet-1",
+        target_ids=list(target_ids),
+        runtime_root=str(tmp_path / ".bridger" / "runtime"),
+    )
     catalog = SimpleNamespace(
         targets=[SimpleNamespace(target_id=target_id) for target_id in target_ids]
     )
@@ -125,7 +211,7 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
     monkeypatch.setattr(
         harness,
         "publish_repository_brain",
-        lambda *_args: expected,
+        lambda *_args, **_kwargs: expected,
     )
     monkeypatch.setattr(
         harness,

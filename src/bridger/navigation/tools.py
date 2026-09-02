@@ -36,6 +36,7 @@ NAVIGATION_TOOL_IDS = (
     "get_graph_neighbors",
     "get_graph_path",
     "get_graph_subgraph",
+    "list_graph_communities",
     "get_graph_community",
     "get_graph_central_nodes",
     "graph_to_file",
@@ -306,7 +307,11 @@ def build_navigation_tools(navigator: RepositoryNavigator) -> ToolExecutor:
         LLMTool.bind(
             name="get_graph_path",
             description=(
-                "Find one bounded deterministic shortest path between graph nodes."
+                "Find one bounded deterministic shortest path between graph nodes. "
+                "An empty result with truncated=false means no path exists within "
+                "the exhaustively searched topology. An empty result with "
+                "truncated=true means traversal bounds prevented an exhaustive "
+                "conclusion."
             ),
             arguments_type=_GraphPathArguments,
             handler=lambda value: navigator.get_graph_path(
@@ -333,6 +338,15 @@ def build_navigation_tools(navigator: RepositoryNavigator) -> ToolExecutor:
                 max_edges=value.max_edges,
                 max_hyperedges=value.max_hyperedges,
             ),
+        ),
+        LLMTool.bind(
+            name="list_graph_communities",
+            description=(
+                "List bounded graph communities in deterministic structural order "
+                "for discovery before inspecting a specific community."
+            ),
+            arguments_type=_LimitArguments,
+            handler=lambda value: navigator.list_graph_communities(limit=value.limit),
         ),
         LLMTool.bind(
             name="get_graph_community",

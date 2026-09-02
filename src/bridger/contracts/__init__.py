@@ -1,5 +1,22 @@
 """Typed contracts owned by Bridger."""
 
+from bridger.contracts.consumption import (
+    Authority,
+    BridgerRef,
+    BridgerRefKind,
+    Completeness,
+    IntelligenceItem,
+    IntelligenceQueryRequest,
+    IntelligenceReadRequest,
+    IntelligenceResult,
+    Lens,
+    Provenance,
+    ReadExpansion,
+    ResultOperation,
+    ScopeKind,
+    ScopeRef,
+    Substrate,
+)
 from bridger.contracts.enrichment import (
     CommunityEvidence,
     CommunityName,
@@ -135,6 +152,7 @@ from bridger.contracts.navigation import (
     SourceContentMatch,
 )
 from bridger.contracts.repository import RepositoryContext
+from bridger.contracts.repository_brain import RepositoryBrainManifest
 from bridger.contracts.symbols import (
     SymbolIndex,
     SymbolIndexSummary,
@@ -145,10 +163,13 @@ from bridger.contracts.token_usage import TokenUsage, TokenUsageReport, TokenUsa
 
 __all__ = [
     "BOUNDED_READ_MAX_BYTES",
+    "Authority",
     "AcceptedTargetResult",
     "AcceptedMemoryFleetResult",
     "ActivationMode",
     "ArtifactReference",
+    "BridgerRef",
+    "BridgerRefKind",
     "CandidateArtifactRef",
     "CommunityEvidence",
     "CommunityName",
@@ -159,6 +180,7 @@ __all__ = [
     "CompletionObligationView",
     "CompletionObligationDefinition",
     "CompletionStatus",
+    "Completeness",
     "ContextWindowDiagnostics",
     "EnrichmentGenerationSummary",
     "EnrichmentRecord",
@@ -202,6 +224,11 @@ __all__ = [
     "GraphTraversalView",
     "GraphEntityEvidenceLocator",
     "IntakeConfiguration",
+    "IntelligenceItem",
+    "IntelligenceQueryRequest",
+    "IntelligenceReadRequest",
+    "IntelligenceResult",
+    "Lens",
     "MemoryFleetSpec",
     "MemoryTargetCatalog",
     "ObligationApplicability",
@@ -214,6 +241,7 @@ __all__ = [
     "ExtractionFailure",
     "ExtractionReport",
     "RepositoryContext",
+    "RepositoryBrainManifest",
     "RepositoryGraph",
     "RepositorySearchHit",
     "RepositorySearchKind",
@@ -224,6 +252,9 @@ __all__ = [
     "ReviewFindingDraft",
     "ReviewerInstructions",
     "ReviewVerdict",
+    "Provenance",
+    "ReadExpansion",
+    "ResultOperation",
     "RuntimeErrorRecord",
     "SourceReadRequest",
     "SourceReadResult",
@@ -261,4 +292,7 @@ __all__ = [
     "WorkerCycleFocusKind",
     "WorkerInstructions",
     "WorkerProfile",
+    "ScopeKind",
+    "ScopeRef",
+    "Substrate",
 ]

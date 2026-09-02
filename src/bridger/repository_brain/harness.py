@@ -333,6 +333,7 @@ async def run_memory_harness(
                             accepted,
                             enrichment,
                             output_root,
+                            runtime_root=Path(fleet_spec.runtime_root),
                         )
                         return RepositoryBrainModelBuildResult(
                             publication_path=publication_path,
