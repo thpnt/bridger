@@ -184,7 +184,6 @@ def test_result_validates_items_completeness_and_revisions() -> None:
         completeness=Completeness(returned_count=1),
     )
     assert result.items == [item]
-
     invalid_results = [
         {
             "operation": ResultOperation.QUERY,
@@ -230,3 +229,10 @@ def test_result_validates_items_completeness_and_revisions() -> None:
             items=[mismatched_provenance],
             completeness=Completeness(returned_count=1),
         )
+
+
+def test_intelligence_item_accepts_optional_structured_data() -> None:
+    item = _item().model_copy(update={"data": {"node_id": "target-1"}})
+
+    assert item.content is None
+    assert item.data == {"node_id": "target-1"}

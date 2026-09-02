@@ -11,12 +11,14 @@ from bridger.contracts.navigation import (
     SourceContentMatch,
 )
 from bridger.navigation.brain import BrainNavigator
+from bridger.navigation.bridger import BridgerNavigator
 from bridger.navigation.navigator import RepositoryNavigator
 from bridger.navigation.tools import NAVIGATION_TOOL_IDS, build_navigation_tools
 
 __all__ = [
     "CompositeEntityView",
     "BrainNavigator",
+    "BridgerNavigator",
     "FileOverview",
     "GraphCommunityView",
     "GraphDirection",
