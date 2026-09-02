@@ -20,6 +20,32 @@ Before implementing:
 - No error handling for impossible scenarios.
 - If you write 200 lines and it could be 50, rewrite it.
 
+## Core principles
+
+- Write code that is easy to scan and easy to maintain.
+- Keep files under 500 lines; when a file grows beyond that, reorganize the module and split the code into clear, cohesive, logically named components.
+- Prefer explicit code over framework tricks.
+- Prefer local clarity over DRY abstractions.
+- Do not introduce unnecessary abstraction layers.
+- Only create abstractions when repetition is visible and justified.
+- Keep functions short and focused.
+- One function or method should do one thing.
+- Follow SOLID principles when using OOP.
+- Reuse existing patterns in the codebase before inventing new ones.
+- Do not mix competing architectural styles in the same area of the codebase.
+
+
+---
+
+## Scope of changes
+
+- Keep changes tightly scoped to the request.
+- Do not refactor unrelated code.
+- Do not rename files unless explicitly requested.
+- Do not move files or reorganize folders unless the task requires it.
+- Preserve backward compatibility for API contracts unless explicitly asked to change them.
+- Prefer minimal diffs.
+
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
 
 ## 3. Surgical Changes
