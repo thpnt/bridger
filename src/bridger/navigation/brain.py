@@ -152,6 +152,11 @@ class BrainNavigator:
         self._dense_chunk_ids: tuple[str, ...] | None = None
         self._dense_matrix: np.ndarray | None = None
 
+    @property
+    def repository_revision(self) -> str:
+        """Return the immutable repository revision bound to this Brain."""
+        return self._repository_revision
+
     def search(self, request: IntelligenceQueryRequest) -> IntelligenceResult:
         """Retrieve bounded contextual Brain passages for one consumption request."""
         limit = request.limit or DEFAULT_BRAIN_RESULT_LIMIT

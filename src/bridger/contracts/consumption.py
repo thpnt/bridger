@@ -6,6 +6,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     PositiveInt,
     TypeAdapter,
     model_validator,
@@ -220,6 +221,7 @@ class IntelligenceItem(BaseModel):
 
     title: str = Field(min_length=1)
     content: str | None = None
+    data: JsonValue | None = None
 
     document_ref: BridgerRef | None = None
     context_ref: BridgerRef | None = None
