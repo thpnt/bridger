@@ -71,7 +71,7 @@ def _item() -> IntelligenceItem:
             ["brain", "deterministic_graph", "graph_enrichment", "source"],
         ),
         (Authority, ["deterministic", "derived"]),
-        (ReadExpansion, ["context", "document", "claim", "links", "evidence"]),
+        (ReadExpansion, ["context", "document", "claim", "evidence"]),
         (ResultOperation, ["query", "read"]),
     ],
 )
