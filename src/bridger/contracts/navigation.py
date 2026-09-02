@@ -39,7 +39,13 @@ class RepositorySearchHit(BaseModel):
 
 
 class GraphTraversalView(BaseModel):
-    """Bounded composite graph materialization returned by traversal methods."""
+    """Bounded graph materialization with an explicit completeness signal.
+
+    ``truncated`` is true when eligible graph topology was omitted because a
+    configured traversal or materialization bound prevented exhaustive
+    representation. It is false when no known eligible topology was omitted
+    under the requested traversal constraints.
+    """
 
     model_config = ConfigDict(extra="forbid")
 

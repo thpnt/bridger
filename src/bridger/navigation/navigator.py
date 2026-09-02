@@ -252,8 +252,8 @@ class RepositoryNavigator:
         relations: Iterable[str] | None = None,
         max_depth: int = MAX_GRAPH_DEPTH,
         max_nodes: int = DEFAULT_MAX_NODES,
-    ) -> GraphTraversalView | None:
-        """Return one bounded deterministic shortest path, or None when absent."""
+    ) -> GraphTraversalView:
+        """Return one bounded deterministic shortest path or an empty view."""
         self._require_node(source_node_id)
         self._require_node(target_node_id)
         _require_direction(direction)
@@ -271,7 +271,12 @@ class RepositoryNavigator:
                 path = candidate
                 break
             if len(candidate) - 1 >= max_depth:
-                truncated = True
+                truncated = truncated or self._has_unseen_graph_topology(
+                    current,
+                    direction=direction,
+                    relations=relation_filter,
+                    seen_nodes=visited,
+                )
                 continue
             for neighbor in self._adjacent_nodes(current, direction, relation_filter):
                 if neighbor in visited:
@@ -282,7 +287,7 @@ class RepositoryNavigator:
                 visited.add(neighbor)
                 queue.append([*candidate, neighbor])
         if path is None:
-            return None
+            return GraphTraversalView(truncated=truncated)
         path_edges = [
             self._edge_between(path[index], path[index + 1], direction, relation_filter)
             for index in range(len(path) - 1)
@@ -322,6 +327,13 @@ class RepositoryNavigator:
         while queue:
             current, current_depth = queue.popleft()
             if current_depth >= depth:
+                truncated = truncated or self._has_unseen_graph_topology(
+                    current,
+                    direction=direction,
+                    relations=relation_filter,
+                    seen_nodes=seen_nodes,
+                    seen_edges=seen_edges,
+                )
                 continue
             for edge in self._incident_edges(current, direction, relation_filter):
                 if edge not in seen_edges and len(selected_edges) >= max_edges:
@@ -349,6 +361,27 @@ class RepositoryNavigator:
             hyperedges=hyperedges,
             truncated=truncated or hyperedges_truncated,
         )
+
+    def list_graph_communities(
+        self, *, limit: int = DEFAULT_RESULT_LIMIT
+    ) -> list[CompositeEntityView]:
+        """List persisted graph communities in deterministic structural order."""
+        limit = _bounded("limit", limit, maximum=MAX_RESULT_LIMIT)
+        community_ids = sorted(
+            self._communities,
+            key=lambda community_id: (
+                -len(self._communities[community_id]),
+                community_id,
+            ),
+        )
+        return [
+            self._community_view(
+                community_id,
+                self._community_signature(community_id),
+                max_members=0,
+            )
+            for community_id in community_ids[:limit]
+        ]
 
     def get_graph_community(
         self,
@@ -965,6 +998,27 @@ class RepositoryNavigator:
                 )
             }
         )
+
+    def _has_unseen_graph_topology(
+        self,
+        node_id: str,
+        *,
+        direction: GraphDirection,
+        relations: set[str] | None,
+        seen_nodes: set[str],
+        seen_edges: set[tuple[str, str, str]] | None = None,
+    ) -> bool:
+        """Return whether eligible incident topology remains unrepresented."""
+        for edge in self._incident_edges(node_id, direction, relations):
+            if seen_edges is not None:
+                if edge not in seen_edges:
+                    return True
+                continue
+            source, target, _relation = edge
+            neighbor = target if source == node_id else source
+            if neighbor not in seen_nodes:
+                return True
+        return False
 
     def _edge_between(
         self,
