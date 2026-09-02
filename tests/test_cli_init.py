@@ -383,12 +383,16 @@ def test_init_worker_profiles_keep_initial_input_within_v0_cap(
     )
 
     assert worker.provider_input_hard_cap_tokens <= 32_000
-    assert reviewer.provider_input_hard_cap_tokens <= 32_000
+    assert reviewer.provider_input_hard_cap_tokens == (
+        reviewer.model_context_window_tokens - reviewer.reserved_response_tokens
+    )
     assert worker.reasoning_effort == reviewer.reasoning_effort == "xhigh"
     assert worker.model_context_window_tokens == 1_050_000
     assert reviewer.model_context_window_tokens == 1_050_000
     assert worker.provider_input_hard_cap_tokens == 32_000
-    assert reviewer.provider_input_hard_cap_tokens == 32_000
+    assert reviewer.provider_input_hard_cap_tokens == (
+        reviewer.model_context_window_tokens - reviewer.reserved_response_tokens
+    )
     limits = _worker_runtime_limits(test_budgets)
     assert limits.active_context_soft_limit_tokens == (
         32_000 if test_budgets else 256_000

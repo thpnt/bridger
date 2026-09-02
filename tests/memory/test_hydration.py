@@ -529,7 +529,10 @@ def test_init_profiles_preflight_a_real_shipped_worker_context(
 
     assert diagnostics.within_provider_input_limit is True
     assert worker_profile.provider_input_hard_cap_tokens <= 32_000
-    assert reviewer_profile.provider_input_hard_cap_tokens <= 32_000
+    assert reviewer_profile.provider_input_hard_cap_tokens == (
+        reviewer_profile.model_context_window_tokens
+        - reviewer_profile.reserved_response_tokens
+    )
     assert worker_profile.model_context_window_tokens == 1_050_000
     assert worker_profile.provider_input_hard_cap_tokens == 32_000
     assert (
