@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from types import TracebackType
 from typing import cast
 
 from bridger.contracts.consumption import (
@@ -67,6 +68,20 @@ class BridgerNavigator:
         self._repository_revision = repository.source_identity[1]
         if brain.repository_revision != self._repository_revision:
             raise ValueError("Brain and repository navigators use different revisions")
+
+    def close(self) -> None:
+        self._brain.close()
+
+    def __enter__(self) -> BridgerNavigator:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
 
     def query(self, request: IntelligenceQueryRequest) -> IntelligenceResult:
         """Run the deterministic recipe selected by lens and explicit scope."""
