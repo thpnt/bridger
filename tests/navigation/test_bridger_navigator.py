@@ -58,6 +58,10 @@ class _FakeBrain:
     search_calls: list[IntelligenceQueryRequest] = field(default_factory=list)
     read_calls: list[IntelligenceReadRequest] = field(default_factory=list)
     truncated: bool = False
+    close_calls: int = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
 
     def search(self, request: IntelligenceQueryRequest) -> IntelligenceResult:
         self.search_calls.append(request)
@@ -205,6 +209,30 @@ def _graph_ref(kind: BridgerRefKind = BridgerRefKind.NODE) -> BridgerRef:
         target_ref=target,  # type: ignore[arg-type]
         repository_revision=REVISION,
     )
+
+
+def test_close_delegates_to_owned_brain_and_is_idempotent() -> None:
+    navigator, brain, _repository = _navigator()
+
+    navigator.close()
+    navigator.close()
+
+    assert brain.close_calls == 2
+
+
+def test_context_manager_returns_self_closes_brain_and_propagates_exception() -> None:
+    navigator, brain, _repository = _navigator()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with navigator as entered:
+            assert entered is navigator
+            result = navigator.query(
+                IntelligenceQueryRequest(lens=Lens.GUARDRAILS, query="find")
+            )
+            assert result.items
+            raise RuntimeError("boom")
+
+    assert brain.close_calls == 1
 
 
 @pytest.mark.parametrize(
@@ -436,6 +464,7 @@ def test_revisions_expansions_and_required_failures_are_rejected() -> None:
     brain = _FakeBrain(repository_revision="b" * 40)
     with pytest.raises(ValueError, match="different revisions"):
         BridgerNavigator(brain, _FakeRepository())  # type: ignore[arg-type]
+    assert brain.close_calls == 0
 
     navigator, _brain, _repository = _navigator()
     with pytest.raises(ValueError, match="different repository revision"):

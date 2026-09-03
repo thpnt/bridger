@@ -16,10 +16,16 @@ from bridger.contracts.repository import RepositoryContext
 from bridger.contracts.symbols import SymbolIndex
 from bridger.extraction.service import extract_repository_facts
 from bridger.graph.intelligence import build_graph_intelligence
-from bridger.graph.lifecycle import create_graph_snapshot
+from bridger.graph.lifecycle import (
+    create_graph_snapshot,
+    load_graph_snapshot,
+    validate_graph_snapshot,
+)
 from bridger.llm.profiles import LLMProfile
 from bridger.progress import InitProgressObserver, InitStage, notify_stage_started
 from bridger.repository.service import prepare_repository
+from bridger.repository_brain.loader import load_repository_brain
+from bridger.repository_brain.publication import resolve_current_repository_brain
 
 _LEGACY_STAGE_LABELS = {
     InitStage.PREPARE_REPOSITORY: "Preparing repository",
@@ -67,6 +73,7 @@ class InitRunConfiguration:
     enable_model_stages: bool
     test_budgets: bool
     reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH
+    fresh: bool = False
 
     @property
     def graph_root(self) -> Path:
@@ -82,6 +89,7 @@ class RepositoryBrainBuildResult:
     graph_build: GraphBuildResult
     publication_path: Path | None = None
     token_usage_report_path: Path | None = None
+    reused: bool = False
 
 
 @dataclass(frozen=True)
@@ -188,6 +196,7 @@ def resolve_init_configuration(
     repository_root: Path | None = None,
     model_profile_name: str = "balanced",
     reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH,
+    fresh: bool = False,
 ) -> InitRunConfiguration:
     """Resolve all mode-specific behavior at the CLI/application boundary."""
     root = (repository_root or Path.cwd()).resolve()
@@ -199,6 +208,7 @@ def resolve_init_configuration(
         enable_model_stages=mode is not InitMode.DETERMINISTIC,
         test_budgets=mode is InitMode.TEST,
         reasoning_effort=reasoning_effort,
+        fresh=fresh,
     )
 
 
@@ -211,8 +221,20 @@ def build_repository_brain(
     """Run the documented Repository Brain pipeline for one repository."""
     _report_stage(on_stage, progress, InitStage.PREPARE_REPOSITORY)
     context, file_index = prepare_repository(configuration.repository_root)
+    if configuration.mode is InitMode.FULL and not configuration.fresh:
+        try:
+            reused = _reuse_current_repository_brain(
+                configuration,
+                context,
+                file_index,
+            )
+        except Exception as error:
+            message = format_repository_brain_error(error)
+            raise RepositoryBrainBuildError(message) from error
+        if reused is not None:
+            return reused
     recovery_spec = None
-    if configuration.enable_model_stages:
+    if configuration.enable_model_stages and not configuration.fresh:
         try:
             from bridger.repository_brain.harness import discover_resumable_fleet
 
@@ -300,6 +322,47 @@ def build_repository_brain(
         graph_build=graph_build,
         publication_path=publication_path,
         token_usage_report_path=token_usage_report_path,
+    )
+
+
+def _reuse_current_repository_brain(
+    configuration: InitRunConfiguration,
+    context: RepositoryContext,
+    file_index: FileIndex,
+) -> RepositoryBrainBuildResult | None:
+    """Return the compatible authoritative current Brain, if one exists."""
+    publication_path = resolve_current_repository_brain(configuration.bridger_root)
+    if publication_path is None:
+        return None
+
+    brain = load_repository_brain(publication_path)
+    from bridger.repository_brain.harness import load_memory_target_catalog
+
+    catalog = load_memory_target_catalog(configuration)
+    if (
+        brain.manifest.repository_id != context.repository_id
+        or brain.manifest.repository_revision != context.revision
+        or brain.manifest.memory_target_catalog_id != catalog.catalog_id
+        or brain.manifest.memory_target_catalog_version != catalog.catalog_version
+    ):
+        return None
+
+    graph_build = load_graph_snapshot(
+        configuration.graph_root,
+        brain.manifest.graph_snapshot_id,
+    )
+    validate_graph_snapshot(
+        graph_build.snapshot_root,
+        expected_context=context,
+        expected_file_index=file_index,
+        expected_config=GraphConstructionConfig(),
+    )
+    return RepositoryBrainBuildResult(
+        mode=configuration.mode,
+        graph_build=graph_build,
+        publication_path=publication_path,
+        token_usage_report_path=None,
+        reused=True,
     )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from pathlib import Path
 
 import numpy as np
@@ -179,6 +180,76 @@ def _navigator(
     )
     assert expected_index.is_file()
     return navigator
+
+
+def test_close_closes_the_owned_sqlite_connection_and_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loaded_brain: LoadedRepositoryBrain,
+) -> None:
+    navigator = _navigator(
+        tmp_path,
+        monkeypatch,
+        loaded_brain,
+        _FakeEmbeddingProvider(),
+    )
+    connection = navigator._connection
+
+    navigator.close()
+    navigator.close()
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
+
+
+def test_context_manager_preserves_search_and_read_and_closes_on_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loaded_brain: LoadedRepositoryBrain,
+) -> None:
+    navigator = _navigator(
+        tmp_path,
+        monkeypatch,
+        loaded_brain,
+        _FakeEmbeddingProvider(),
+    )
+    connection = navigator._connection
+    ref = BridgerRef(
+        kind=BridgerRefKind.BRAIN_DOCUMENT,
+        target_ref={"document_id": "repository-doc"},
+        repository_revision="revision-1",
+    )
+
+    with navigator as entered:
+        assert entered is navigator
+        assert navigator.search(
+            IntelligenceQueryRequest(lens=Lens.UNDERSTAND, query="TargetPhase")
+        ).items
+        assert navigator.read(IntelligenceReadRequest(ref=ref)).items
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
+
+
+def test_context_manager_propagates_exception_and_still_closes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loaded_brain: LoadedRepositoryBrain,
+) -> None:
+    navigator = _navigator(
+        tmp_path,
+        monkeypatch,
+        loaded_brain,
+        _FakeEmbeddingProvider(),
+    )
+    connection = navigator._connection
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with navigator:
+            raise RuntimeError("boom")
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
 
 
 def test_bm25_fallback_is_safe_weighted_bounded_and_deterministic(

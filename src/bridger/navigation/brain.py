@@ -9,6 +9,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import TracebackType
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -151,6 +152,20 @@ class BrainNavigator:
         self._dense_available = runtime_available and self._index_has_dense_vectors()
         self._dense_chunk_ids: tuple[str, ...] | None = None
         self._dense_matrix: np.ndarray | None = None
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def __enter__(self) -> BrainNavigator:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
 
     @property
     def repository_revision(self) -> str:

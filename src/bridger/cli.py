@@ -43,9 +43,21 @@ def init(
             rich_help_panel="Execution",
         ),
     ] = ReasoningEffort.XHIGH,
+    fresh: Annotated[
+        bool,
+        typer.Option(
+            "--fresh",
+            help="Ignore compatible persisted state and run a new pipeline.",
+            rich_help_panel="Execution",
+        ),
+    ] = False,
 ) -> None:
     """Build the Repository Brain for the current Git repository."""
-    configuration = resolve_init_configuration(mode, reasoning_effort=reasoning)
+    configuration = resolve_init_configuration(
+        mode,
+        reasoning_effort=reasoning,
+        fresh=fresh,
+    )
     presenter = RichInitProgressPresenter(
         console=console,
         mode=mode,
