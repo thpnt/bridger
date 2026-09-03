@@ -293,7 +293,7 @@ class RichInitProgressPresenter:
             )
             return
         self._complete_current_stage()
-        if result.token_usage_report_path is not None:
+        if not result.reused and result.token_usage_report_path is not None:
             try:
                 self._render_token_usage_report(result.token_usage_report_path)
             except Exception:
@@ -304,10 +304,12 @@ class RichInitProgressPresenter:
                         style="bridger.warning",
                     )
                 )
-        self._console.print(
-            Text(f"Repository Brain published at {result.publication_path}"),
-            soft_wrap=True,
+        message = (
+            f"Repository Brain reused from {result.publication_path}"
+            if result.reused
+            else f"Repository Brain published at {result.publication_path}"
         )
+        self._console.print(Text(message), soft_wrap=True)
 
     def failed(self, error: BaseException) -> None:
         """Render the active stage and normal build failure."""

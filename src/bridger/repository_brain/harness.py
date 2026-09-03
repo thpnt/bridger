@@ -550,6 +550,14 @@ def prepare_model_layers(
     return profile, enrichment
 
 
+def load_memory_target_catalog(
+    configuration: InitRunConfiguration,
+) -> MemoryTargetCatalog:
+    """Load the active memory target catalog for one init configuration."""
+    catalog, _definitions = load_target_artifacts(_target_artifacts_root(configuration))
+    return catalog
+
+
 def discover_resumable_fleet(
     configuration: InitRunConfiguration,
     context: RepositoryContext,
