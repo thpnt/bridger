@@ -14,6 +14,9 @@ from bridger.contracts.memory.fleet_acceptance import AcceptedMemoryFleetResult
 from bridger.contracts.repository_brain import RepositoryBrainManifest
 from bridger.graph.enrichment.validation import validate_graph_enrichment
 from bridger.graph.lifecycle import validate_graph_snapshot
+from bridger.memory.persistence.store import require_path_segment
+
+_MANIFEST_NAME = "repository-brain.json"
 
 
 def publish_repository_brain(
@@ -78,3 +81,91 @@ def publish_repository_brain(
             staging.rmdir()
         raise
     return destination / "repository-brain.json"
+
+
+def resolve_current_repository_brain(bridger_root: Path) -> Path | None:
+    """Resolve and validate the explicitly selected Repository Brain."""
+    current_path = bridger_root / "current"
+    if current_path.is_symlink():
+        raise ValueError("current pointer is not a regular file")
+    if not current_path.exists():
+        return None
+    if not current_path.is_file():
+        raise ValueError("current pointer is not a regular file")
+
+    try:
+        pointer = current_path.read_bytes().decode("ascii")
+    except (OSError, UnicodeError) as error:
+        raise ValueError("current pointer is not valid") from error
+    if pointer.endswith("\n"):
+        pointer = pointer[:-1]
+    if not pointer or "\n" in pointer or "\r" in pointer:
+        raise ValueError("current pointer is not a single publication ID")
+    require_path_segment(pointer, "publication_id")
+
+    publication_path = bridger_root / "published" / pointer / _MANIFEST_NAME
+    _publication_id_from_path(bridger_root, publication_path)
+    return publication_path
+
+
+def set_current_repository_brain(
+    bridger_root: Path,
+    publication_path: Path,
+) -> None:
+    """Atomically select one existing immutable Repository Brain publication."""
+    publication_id = _publication_id_from_path(bridger_root, publication_path)
+    current_path = bridger_root / "current"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=current_path.parent,
+            prefix=f".{current_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(f"{publication_id}\n".encode("ascii"))
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, current_path)
+        _fsync_directory(current_path.parent)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _publication_id_from_path(bridger_root: Path, publication_path: Path) -> str:
+    """Validate a publication path and return its content-addressed identity."""
+    root = bridger_root.resolve()
+    candidate = publication_path.resolve()
+    published_root = root / "published"
+    try:
+        relative = candidate.relative_to(published_root)
+    except ValueError as error:
+        raise ValueError("publication must be under the published directory") from error
+    if (
+        publication_path.name != _MANIFEST_NAME
+        or len(relative.parts) != 2
+        or relative.parts[1] != _MANIFEST_NAME
+        or candidate != published_root / relative.parts[0] / _MANIFEST_NAME
+        or not publication_path.is_file()
+    ):
+        raise ValueError("publication path is not canonical")
+
+    publication_id = relative.parts[0]
+    require_path_segment(publication_id, "publication_id")
+    try:
+        encoded = publication_path.read_bytes()
+    except OSError as error:
+        raise ValueError("could not read published Repository Brain") from error
+    if hashlib.sha256(encoded).hexdigest()[:16] != publication_id:
+        raise ValueError("publication path does not match manifest identity")
+    return publication_id
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
