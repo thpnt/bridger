@@ -29,6 +29,8 @@ def test_compatible_current_brain_wins_before_recovery_and_rebuild(
     graph_build = SimpleNamespace(snapshot_root=tmp_path / "graph-snapshot")
     manifest = _manifest(context)
     validated: list[tuple[object, ...]] = []
+    prepared: list[Path] = []
+    stages: list[str] = []
 
     monkeypatch.setattr(
         init_pipeline,
@@ -68,6 +70,11 @@ def test_compatible_current_brain_wins_before_recovery_and_rebuild(
 
     monkeypatch.setattr(init_pipeline, "validate_graph_snapshot", validate)
     monkeypatch.setattr(
+        init_pipeline,
+        "_ensure_repository_brain_index",
+        lambda _configuration, path: prepared.append(path),
+    )
+    monkeypatch.setattr(
         harness,
         "discover_resumable_fleet",
         lambda *_args: pytest.fail("current reuse must precede recovery"),
@@ -79,7 +86,8 @@ def test_compatible_current_brain_wins_before_recovery_and_rebuild(
     )
 
     result = init_pipeline.build_repository_brain(
-        resolve_init_configuration(InitMode.FULL, repository_root=tmp_path)
+        resolve_init_configuration(InitMode.FULL, repository_root=tmp_path),
+        on_stage=stages.append,
     )
 
     assert result == RepositoryBrainBuildResult(
@@ -99,6 +107,8 @@ def test_compatible_current_brain_wins_before_recovery_and_rebuild(
             },
         )
     ]
+    assert prepared == [publication_path]
+    assert stages[-1] == "Preparing Repository Brain index"
 
 
 def test_missing_current_falls_through_to_incomplete_fleet_recovery(
@@ -416,6 +426,185 @@ def test_cli_reports_reuse_without_historical_token_usage(
     assert "Token usage" not in result.output
 
 
+def test_reused_current_index_failure_fails_without_brain_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    publication_path = tmp_path / ".bridger" / "published" / "brain.json"
+    reused = RepositoryBrainBuildResult(
+        mode=InitMode.FULL,
+        graph_build=SimpleNamespace(snapshot_root=tmp_path / "graph"),
+        publication_path=publication_path,
+        reused=True,
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "prepare_repository",
+        lambda _root: (_context(tmp_path), object()),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "_reuse_current_repository_brain",
+        lambda *_args: reused,
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "_ensure_repository_brain_index",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("index failed")),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "extract_repository_facts",
+        lambda *_args, **_kwargs: pytest.fail("index failure must not rebuild Brain"),
+    )
+
+    with pytest.raises(RepositoryBrainBuildError, match="index failed"):
+        init_pipeline.build_repository_brain(
+            resolve_init_configuration(InitMode.FULL, repository_root=tmp_path)
+        )
+
+
+def test_index_readiness_loads_the_exact_publication_and_canonical_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    configuration = resolve_init_configuration(InitMode.FULL, repository_root=tmp_path)
+    publication_path = tmp_path / ".bridger" / "published" / "brain.json"
+    brain = object()
+    calls: list[tuple[object, Path]] = []
+    monkeypatch.setattr(
+        init_pipeline,
+        "load_repository_brain",
+        lambda path: brain if path == publication_path else pytest.fail("wrong Brain"),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "ensure_brain_index",
+        lambda loaded, cache: calls.append((loaded, cache)),
+    )
+
+    init_pipeline._ensure_repository_brain_index(configuration, publication_path)
+
+    assert calls == [(brain, configuration.bridger_root / "cache")]
+
+
+def test_fresh_publication_is_indexed_before_current_promotion(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    publication_path = tmp_path / ".bridger" / "published" / "brain.json"
+    events: list[tuple[str, Path]] = []
+    _patch_pipeline_completion(monkeypatch, tmp_path)
+
+    async def publish(*_args: object) -> Path:
+        events.append(("publish", publication_path))
+        return publication_path
+
+    monkeypatch.setattr(init_pipeline, "_run_model_driven_pipeline", publish)
+    monkeypatch.setattr(
+        init_pipeline,
+        "_ensure_repository_brain_index",
+        lambda _configuration, path: events.append(("ensure", path)),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "set_current_repository_brain",
+        lambda _root, path: events.append(("current", path)),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "prepare_repository",
+        lambda _root: (_context(tmp_path), object()),
+    )
+
+    init_pipeline.build_repository_brain(
+        resolve_init_configuration(
+            InitMode.FULL,
+            repository_root=tmp_path,
+            fresh=True,
+        )
+    )
+
+    assert events == [
+        ("publish", publication_path),
+        ("ensure", publication_path),
+        ("current", publication_path),
+    ]
+
+
+def test_failed_new_index_preserves_previous_current(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    current = tmp_path / ".bridger" / "current"
+    current.parent.mkdir()
+    current.write_text("publication-a\n", encoding="ascii")
+    _patch_pipeline_completion(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        init_pipeline,
+        "prepare_repository",
+        lambda _root: (_context(tmp_path), object()),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "_ensure_repository_brain_index",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("index failed")),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "set_current_repository_brain",
+        lambda *_args: pytest.fail("failed index must not promote publication"),
+    )
+
+    with pytest.raises(RepositoryBrainBuildError, match="index failed"):
+        init_pipeline.build_repository_brain(
+            resolve_init_configuration(
+                InitMode.FULL,
+                repository_root=tmp_path,
+                fresh=True,
+            )
+        )
+
+    assert current.read_text(encoding="ascii") == "publication-a\n"
+
+
+def test_recovery_publication_uses_shared_index_and_promotion_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    recovery_spec = object()
+    events: list[str] = []
+    monkeypatch.setattr(
+        init_pipeline,
+        "prepare_repository",
+        lambda _root: (context, object()),
+    )
+    monkeypatch.setattr(
+        harness,
+        "discover_resumable_fleet",
+        lambda *_args: recovery_spec,
+    )
+    received_recovery = _patch_pipeline_completion(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        init_pipeline,
+        "_ensure_repository_brain_index",
+        lambda *_args: events.append("ensure"),
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "set_current_repository_brain",
+        lambda *_args: events.append("current"),
+    )
+
+    init_pipeline.build_repository_brain(
+        resolve_init_configuration(InitMode.TEST, repository_root=tmp_path)
+    )
+
+    assert received_recovery == [recovery_spec]
+    assert events == ["ensure", "current"]
+
+
 def _patch_pipeline_completion(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -453,6 +642,16 @@ def _patch_pipeline_completion(
         return tmp_path / "new-publication.json"
 
     monkeypatch.setattr(init_pipeline, "_run_model_driven_pipeline", run_model)
+    monkeypatch.setattr(
+        init_pipeline,
+        "_ensure_repository_brain_index",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "set_current_repository_brain",
+        lambda *_args: None,
+    )
     return received_recovery
 
 

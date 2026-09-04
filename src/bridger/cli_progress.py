@@ -57,6 +57,7 @@ _ACTIVE_STAGE_LABELS = {
     InitStage.MODEL_ENRICHMENT: "Generating graph enrichment",
     InitStage.INITIALIZE_MEMORY_FLEET: "Initializing memory fleet",
     InitStage.PUBLISH_REPOSITORY_BRAIN: "Publishing Repository Brain",
+    InitStage.PREPARE_BRAIN_INDEX: "Preparing Repository Brain index",
 }
 _COMPLETED_STAGE_LABELS = {
     InitStage.PREPARE_REPOSITORY: "Repository prepared",
@@ -66,6 +67,7 @@ _COMPLETED_STAGE_LABELS = {
     InitStage.MODEL_ENRICHMENT: "Graph enrichment generated",
     InitStage.INITIALIZE_MEMORY_FLEET: "Memory fleet initialized",
     InitStage.PUBLISH_REPOSITORY_BRAIN: "Repository Brain published",
+    InitStage.PREPARE_BRAIN_INDEX: "Repository Brain index prepared",
 }
 _ERROR_TARGET_PHASES = {
     TargetPhase.BLOCKED,

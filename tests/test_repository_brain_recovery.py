@@ -198,6 +198,16 @@ def test_init_resume_skips_new_graph_enrichment_and_memory_binding(
         return tmp_path / "published.json"
 
     monkeypatch.setattr(init_pipeline, "_run_model_driven_pipeline", run_model)
+    monkeypatch.setattr(
+        init_pipeline,
+        "_ensure_repository_brain_index",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "set_current_repository_brain",
+        lambda *_args: None,
+    )
 
     result = init_pipeline.build_repository_brain(configuration)
 

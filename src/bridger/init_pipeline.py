@@ -24,8 +24,12 @@ from bridger.graph.lifecycle import (
 from bridger.llm.profiles import LLMProfile
 from bridger.progress import InitProgressObserver, InitStage, notify_stage_started
 from bridger.repository.service import prepare_repository
+from bridger.repository_brain.index import ensure_brain_index
 from bridger.repository_brain.loader import load_repository_brain
-from bridger.repository_brain.publication import resolve_current_repository_brain
+from bridger.repository_brain.publication import (
+    resolve_current_repository_brain,
+    set_current_repository_brain,
+)
 
 _LEGACY_STAGE_LABELS = {
     InitStage.PREPARE_REPOSITORY: "Preparing repository",
@@ -37,6 +41,7 @@ _LEGACY_STAGE_LABELS = {
         "Running memory fleet validation and publication"
     ),
     InitStage.PUBLISH_REPOSITORY_BRAIN: "Publishing Repository Brain",
+    InitStage.PREPARE_BRAIN_INDEX: "Preparing Repository Brain index",
 }
 
 
@@ -232,6 +237,15 @@ def build_repository_brain(
             message = format_repository_brain_error(error)
             raise RepositoryBrainBuildError(message) from error
         if reused is not None:
+            _report_stage(on_stage, progress, InitStage.PREPARE_BRAIN_INDEX)
+            try:
+                _ensure_repository_brain_index(
+                    configuration,
+                    reused.publication_path,
+                )
+            except Exception as error:
+                message = format_repository_brain_error(error)
+                raise RepositoryBrainBuildError(message) from error
             return reused
     recovery_spec = None
     if configuration.enable_model_stages and not configuration.fresh:
@@ -314,6 +328,12 @@ def build_repository_brain(
         else:
             publication_path = model_result.publication_path
             token_usage_report_path = model_result.token_usage_report_path
+        _report_stage(on_stage, progress, InitStage.PREPARE_BRAIN_INDEX)
+        _ensure_repository_brain_index(configuration, publication_path)
+        set_current_repository_brain(
+            configuration.bridger_root,
+            publication_path,
+        )
     except Exception as error:
         message = format_repository_brain_error(error)
         raise RepositoryBrainBuildError(message) from error
@@ -323,6 +343,17 @@ def build_repository_brain(
         publication_path=publication_path,
         token_usage_report_path=token_usage_report_path,
     )
+
+
+def _ensure_repository_brain_index(
+    configuration: InitRunConfiguration,
+    publication_path: Path | None,
+) -> Path:
+    """Ensure the derived index for one exact Repository Brain publication."""
+    if publication_path is None:
+        raise ValueError("Repository Brain publication path is unavailable")
+    brain = load_repository_brain(publication_path)
+    return ensure_brain_index(brain, configuration.bridger_root / "cache")
 
 
 def _reuse_current_repository_brain(

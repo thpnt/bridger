@@ -26,6 +26,7 @@ class InitStage(StrEnum):
     MODEL_ENRICHMENT = "model-enrichment"
     INITIALIZE_MEMORY_FLEET = "initialize-memory-fleet"
     PUBLISH_REPOSITORY_BRAIN = "publish-repository-brain"
+    PREPARE_BRAIN_INDEX = "prepare-brain-index"
 
 
 class InitProgressObserver(Protocol):

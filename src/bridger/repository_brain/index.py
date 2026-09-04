@@ -16,7 +16,12 @@ from uuid import uuid4
 
 import numpy as np
 
-from bridger.repository_brain.embeddings import EmbeddingProvider
+from bridger.repository_brain.embeddings import (
+    EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL_ID,
+    EmbeddingProvider,
+    resolve_embedding_provider,
+)
 from bridger.repository_brain.loader import BrainDocument, LoadedRepositoryBrain
 
 BRAIN_INDEX_SCHEMA_VERSION = 1
@@ -92,17 +97,47 @@ def build_brain_index(
 def ensure_brain_index(
     brain: LoadedRepositoryBrain,
     cache_root: Path,
-    embedding_provider: EmbeddingProvider,
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> Path:
     """Reuse an identity-matching index, otherwise rebuild it completely."""
     destination = _index_path(brain, cache_root)
+    model_id, dimension = _embedding_identity(embedding_provider)
     if destination.is_file() and _metadata_matches(
         destination,
         brain,
-        embedding_provider,
+        model_id,
+        dimension,
     ):
         return destination
+    if embedding_provider is None:
+        embedding_provider, _runtime_available = resolve_embedding_provider()
     return build_brain_index(brain, cache_root, embedding_provider)
+
+
+def require_brain_index(
+    brain: LoadedRepositoryBrain,
+    cache_root: Path,
+    embedding_provider: EmbeddingProvider,
+) -> Path:
+    """Return a compatible existing index without creating or repairing one."""
+    destination = _index_path(brain, cache_root)
+    model_id, dimension = _embedding_identity(embedding_provider)
+    if destination.is_file() and _metadata_matches(
+        destination,
+        brain,
+        model_id,
+        dimension,
+    ):
+        return destination
+    raise BrainIndexError("compatible Repository Brain index is unavailable")
+
+
+def _embedding_identity(
+    embedding_provider: EmbeddingProvider | None,
+) -> tuple[str, int]:
+    if embedding_provider is None:
+        return EMBEDDING_MODEL_ID, EMBEDDING_DIMENSION
+    return embedding_provider.model_id, embedding_provider.dimension
 
 
 def _index_path(brain: LoadedRepositoryBrain, cache_root: Path) -> Path:
@@ -305,10 +340,14 @@ def _base_metadata(brain: LoadedRepositoryBrain) -> dict[str, str]:
 def _metadata_matches(
     index_path: Path,
     brain: LoadedRepositoryBrain,
-    embedding_provider: EmbeddingProvider,
+    embedding_model_id: str,
+    embedding_dimension: int,
 ) -> bool:
     try:
-        connection = sqlite3.connect(index_path)
+        connection = sqlite3.connect(
+            f"{index_path.resolve().as_uri()}?mode=ro",
+            uri=True,
+        )
         try:
             existing = dict(connection.execute("SELECT key, value FROM metadata"))
         finally:
@@ -322,9 +361,7 @@ def _metadata_matches(
     dimension = existing.get("embedding_dimension")
     if model_id is None and dimension is None:
         return True
-    return model_id == embedding_provider.model_id and dimension == str(
-        embedding_provider.dimension
-    )
+    return model_id == embedding_model_id and dimension == str(embedding_dimension)
 
 
 def _chunk_document(
@@ -573,4 +610,5 @@ __all__ = [
     "BrainIndexError",
     "build_brain_index",
     "ensure_brain_index",
+    "require_brain_index",
 ]

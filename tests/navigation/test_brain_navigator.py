@@ -25,6 +25,7 @@ from bridger.contracts.consumption import (
 )
 from bridger.contracts.repository_brain import RepositoryBrainManifest
 from bridger.navigation import BrainNavigator
+from bridger.repository_brain.index import BrainIndexError, build_brain_index
 from bridger.repository_brain.loader import BrainDocument, LoadedRepositoryBrain
 
 
@@ -161,6 +162,8 @@ def _navigator(
     loaded_brain: LoadedRepositoryBrain,
     provider: _FakeEmbeddingProvider,
 ) -> BrainNavigator:
+    cache_root = tmp_path / ".bridger" / "cache"
+    build_brain_index(loaded_brain, cache_root, provider)
     monkeypatch.setattr(
         brain_module,
         "_load_repository_brain",
@@ -180,6 +183,34 @@ def _navigator(
     )
     assert expected_index.is_file()
     return navigator
+
+
+def test_construction_requires_prepared_index_without_creating_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loaded_brain: LoadedRepositoryBrain,
+) -> None:
+    monkeypatch.setattr(
+        brain_module,
+        "_load_repository_brain",
+        lambda _publication_path: loaded_brain,
+    )
+    expected_index = (
+        tmp_path
+        / ".bridger"
+        / "cache"
+        / "brain"
+        / loaded_brain.publication_id
+        / "brain.sqlite3"
+    )
+
+    with pytest.raises(BrainIndexError, match="compatible.*unavailable"):
+        BrainNavigator(
+            tmp_path / "repository-brain.json",
+            embedding_provider=_FakeEmbeddingProvider(),
+        )
+
+    assert not expected_index.exists()
 
 
 def test_close_closes_the_owned_sqlite_connection_and_is_idempotent(

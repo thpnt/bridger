@@ -6,7 +6,6 @@ import json
 import logging
 import re
 import sqlite3
-from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import TracebackType
@@ -30,6 +29,7 @@ from bridger.contracts.consumption import (
     ScopeKind,
     Substrate,
 )
+from bridger.repository_brain.embeddings import resolve_embedding_provider
 
 if TYPE_CHECKING:
     from bridger.repository_brain.embeddings import EmbeddingProvider
@@ -95,29 +95,6 @@ class _BrainConstraint:
     end_line: int | None = None
 
 
-class _UnavailableEmbeddingProvider:
-    """Token-counting boundary used only to build a lexical PR 1A.1 index."""
-
-    @property
-    def model_id(self) -> str:
-        from bridger.repository_brain.embeddings import EMBEDDING_MODEL_ID
-
-        return EMBEDDING_MODEL_ID
-
-    @property
-    def dimension(self) -> int:
-        return _embedding_dimension()
-
-    def count_tokens(self, text: str) -> int:
-        return len(re.findall(r"\S+", text))
-
-    def embed_documents(self, texts: Sequence[str]) -> np.ndarray:
-        raise RuntimeError("dense embedding runtime is unavailable")
-
-    def embed_query(self, text: str) -> np.ndarray:
-        raise RuntimeError("dense embedding runtime is unavailable")
-
-
 class BrainNavigator:
     """Read-only semantic navigation over one exact Repository Brain publication."""
 
@@ -128,9 +105,9 @@ class BrainNavigator:
         embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         brain = _load_repository_brain(publication_path)
-        provider, runtime_available = _resolve_embedding_provider(embedding_provider)
+        provider, runtime_available = resolve_embedding_provider(embedding_provider)
         cache_root = Path(brain.manifest.memory_output_root).resolve().parent / "cache"
-        index_path = _ensure_brain_index(brain, cache_root, provider)
+        index_path = _require_brain_index(brain, cache_root, provider)
 
         self._brain = brain
         self._repository_revision = brain.manifest.repository_revision
@@ -823,32 +800,6 @@ class BrainNavigator:
         )
 
 
-def _resolve_embedding_provider(
-    provider: EmbeddingProvider | None,
-) -> tuple[EmbeddingProvider, bool]:
-    if provider is None:
-        try:
-            from bridger.repository_brain.embeddings import EmbeddingGemmaProvider
-
-            provider = EmbeddingGemmaProvider()
-        except _DENSE_FAILURES:
-            _LOGGER.warning(
-                "EmbeddingGemma unavailable; initializing BrainNavigator with BM25",
-                exc_info=True,
-            )
-            return _UnavailableEmbeddingProvider(), False
-    try:
-        if provider.dimension != _embedding_dimension():
-            raise ValueError("Brain embeddings must have 512 dimensions")
-    except _DENSE_FAILURES:
-        _LOGGER.warning(
-            "embedding provider is incompatible; initializing BrainNavigator with BM25",
-            exc_info=True,
-        )
-        return _UnavailableEmbeddingProvider(), False
-    return provider, True
-
-
 def _fts_query(retrieval_text: str) -> str | None:
     tokens: list[str] = []
     seen: set[str] = set()
@@ -954,14 +905,14 @@ def _load_repository_brain(publication_path: Path) -> LoadedRepositoryBrain:
     return load_repository_brain(publication_path)
 
 
-def _ensure_brain_index(
+def _require_brain_index(
     brain: LoadedRepositoryBrain,
     cache_root: Path,
     provider: EmbeddingProvider,
 ) -> Path:
-    from bridger.repository_brain.index import ensure_brain_index
+    from bridger.repository_brain.index import require_brain_index
 
-    return ensure_brain_index(brain, cache_root, provider)
+    return require_brain_index(brain, cache_root, provider)
 
 
 __all__ = ["BrainNavigator"]
