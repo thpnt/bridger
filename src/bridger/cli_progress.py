@@ -181,10 +181,7 @@ class RichInitProgressPresenter:
             )
             return
         self._console.print(
-            Text(
-                f"Bridger init: {self._mode.value}, "
-                f"reasoning {self._reasoning.value}"
-            )
+            Text(f"Bridger init: {self._mode.value}, reasoning {self._reasoning.value}")
         )
 
     def stage_started(self, stage: InitStage) -> None:

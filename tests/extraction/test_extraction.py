@@ -100,7 +100,7 @@ def test_cold_and_warm_cache_produce_identical_symbol_indexes(
 ) -> None:
     repository = _initialize_repository(tmp_path)
     (repository / "module.py").write_text(
-        "class Example:\n" "    def method(self) -> None:\n" "        pass\n",
+        "class Example:\n    def method(self) -> None:\n        pass\n",
         encoding="utf-8",
     )
     _commit(repository)
