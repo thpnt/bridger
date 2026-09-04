@@ -26,6 +26,7 @@ from bridger.graph.intelligence import (
 from bridger.graph.lifecycle import (
     create_graph_snapshot,
     load_graph_snapshot,
+    load_graph_snapshot_from_path,
     load_graph_snapshot_structural_state,
     update_graph_snapshot,
     validate_graph_snapshot,
@@ -54,6 +55,7 @@ __all__ = [
     "enrich_graph_snapshot",
     "load_graph_enrichment",
     "load_graph_snapshot",
+    "load_graph_snapshot_from_path",
     "load_graph_snapshot_structural_state",
     "update_graph_snapshot",
     "validate_graph_enrichment",
