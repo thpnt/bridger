@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from collections.abc import Sequence
 from importlib import import_module
 from typing import Protocol, cast
@@ -15,6 +17,8 @@ EMBEDDING_DIMENSION = 512
 _DOCUMENT_PROMPT = "title: none | text: "
 _QUERY_PROMPT = "task: search result | query: "
 _EMBEDDING_BATCH_SIZE = 16
+_DENSE_FAILURES = (RuntimeError, TypeError, ValueError)
+_LOGGER = logging.getLogger(__name__)
 
 
 class EmbeddingError(RuntimeError):
@@ -127,10 +131,57 @@ class EmbeddingGemmaProvider:
             raise EmbeddingError("could not load local Q4 EmbeddingGemma") from error
 
 
+class _UnavailableEmbeddingProvider:
+    """Token-counting fallback used when dense embeddings are unavailable."""
+
+    @property
+    def model_id(self) -> str:
+        return EMBEDDING_MODEL_ID
+
+    @property
+    def dimension(self) -> int:
+        return EMBEDDING_DIMENSION
+
+    def count_tokens(self, text: str) -> int:
+        return len(re.findall(r"\S+", text))
+
+    def embed_documents(self, texts: Sequence[str]) -> np.ndarray:
+        raise RuntimeError("dense embedding runtime is unavailable")
+
+    def embed_query(self, text: str) -> np.ndarray:
+        raise RuntimeError("dense embedding runtime is unavailable")
+
+
+def resolve_embedding_provider(
+    provider: EmbeddingProvider | None = None,
+) -> tuple[EmbeddingProvider, bool]:
+    """Resolve the canonical provider or its lexical-only fallback."""
+    if provider is None:
+        try:
+            provider = EmbeddingGemmaProvider()
+        except _DENSE_FAILURES:
+            _LOGGER.warning(
+                "EmbeddingGemma unavailable; using BM25-only Brain indexing",
+                exc_info=True,
+            )
+            return _UnavailableEmbeddingProvider(), False
+    try:
+        if provider.dimension != EMBEDDING_DIMENSION:
+            raise ValueError("Brain embeddings must have 512 dimensions")
+    except _DENSE_FAILURES:
+        _LOGGER.warning(
+            "embedding provider is incompatible; using BM25-only Brain indexing",
+            exc_info=True,
+        )
+        return _UnavailableEmbeddingProvider(), False
+    return provider, True
+
+
 __all__ = [
     "EMBEDDING_DIMENSION",
     "EMBEDDING_MODEL_ID",
     "EmbeddingError",
     "EmbeddingGemmaProvider",
     "EmbeddingProvider",
+    "resolve_embedding_provider",
 ]

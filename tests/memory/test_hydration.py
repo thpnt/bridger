@@ -317,16 +317,16 @@ def test_hydration_projects_only_unresolved_configured_related_obligations() -> 
             "resolution_note": None,
         }
     )
-    fixture.definition.completion_obligations[0] = (
-        fixture.definition.completion_obligations[0].model_copy(
-            update={
-                "related_obligation_ids": [
-                    "first-contract-item",
-                    "covered-item",
-                    "unknown-item",
-                ]
-            }
-        )
+    fixture.definition.completion_obligations[
+        0
+    ] = fixture.definition.completion_obligations[0].model_copy(
+        update={
+            "related_obligation_ids": [
+                "first-contract-item",
+                "covered-item",
+                "unknown-item",
+            ]
+        }
     )
     fixture.definition = fixture.definition.model_copy(
         update={
@@ -454,9 +454,9 @@ def test_target_definition_validates_related_obligation_ids() -> None:
         (["second-contract-item"], "cannot relate to itself"),
         (["first-contract-item", "first-contract-item"], "must be unique"),
     ):
-        definition_data["completion_obligations"][0]["related_obligation_ids"] = (
-            related_ids
-        )
+        definition_data["completion_obligations"][0][
+            "related_obligation_ids"
+        ] = related_ids
         with pytest.raises(ValidationError, match=message):
             TargetDefinition.model_validate(definition_data)
 

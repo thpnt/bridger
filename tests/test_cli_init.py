@@ -637,6 +637,16 @@ def test_model_modes_enter_the_shared_full_pipeline(
         return tmp_path / "published" / "repository-brain.json"
 
     monkeypatch.setattr(init_pipeline, "_run_model_driven_pipeline", model_stage)
+    monkeypatch.setattr(
+        init_pipeline,
+        "_ensure_repository_brain_index",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "set_current_repository_brain",
+        lambda *_args: None,
+    )
 
     result = init_pipeline.build_repository_brain(
         resolve_init_configuration(mode, repository_root=tmp_path)
@@ -828,6 +838,16 @@ def test_model_pipeline_prepares_enrichment_before_entering_memory_loop(
 
     monkeypatch.setattr(harness, "prepare_model_layers", prepare_layers)
     monkeypatch.setattr(harness, "run_memory_harness", run_memory)
+    monkeypatch.setattr(
+        init_pipeline,
+        "_ensure_repository_brain_index",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        init_pipeline,
+        "set_current_repository_brain",
+        lambda *_args: None,
+    )
 
     result = init_pipeline.build_repository_brain(
         resolve_init_configuration(mode, repository_root=tmp_path)

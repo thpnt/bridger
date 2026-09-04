@@ -11,6 +11,7 @@ import pytest
 
 import bridger.repository_brain.index as index_module
 from bridger.contracts.repository_brain import RepositoryBrainManifest
+from bridger.repository_brain.embeddings import EMBEDDING_MODEL_ID
 from bridger.repository_brain.index import (
     BRAIN_CHUNK_OVERLAP_TOKENS,
     BRAIN_CHUNK_TARGET_TOKENS,
@@ -18,6 +19,7 @@ from bridger.repository_brain.index import (
     _chunk_document,
     build_brain_index,
     ensure_brain_index,
+    require_brain_index,
 )
 from bridger.repository_brain.loader import BrainDocument, LoadedRepositoryBrain
 
@@ -184,6 +186,73 @@ def test_ensure_reuses_valid_cache_and_rebuilds_stale_metadata(
         assert connection.execute(
             "SELECT value FROM metadata WHERE key = 'chunk_target_tokens'"
         ).fetchone() == (str(BRAIN_CHUNK_TARGET_TOKENS),)
+
+
+def test_ensure_reuses_canonical_index_without_resolving_embedding_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    brain = _brain()
+    provider = _FakeEmbeddingProvider()
+    provider.model_id = EMBEDDING_MODEL_ID
+    index_path = build_brain_index(brain, tmp_path, provider)
+    monkeypatch.setattr(
+        index_module,
+        "resolve_embedding_provider",
+        lambda: pytest.fail("compatible metadata must avoid provider resolution"),
+    )
+
+    assert ensure_brain_index(brain, tmp_path) == index_path
+
+
+def test_require_returns_compatible_index_without_building(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    brain = _brain()
+    provider = _FakeEmbeddingProvider()
+    index_path = build_brain_index(brain, tmp_path, provider)
+    monkeypatch.setattr(
+        index_module,
+        "build_brain_index",
+        lambda *_args: pytest.fail("require must not build an index"),
+    )
+
+    assert require_brain_index(brain, tmp_path, provider) == index_path
+
+
+def test_require_rejects_missing_index_without_creating_it(tmp_path: Path) -> None:
+    brain = _brain()
+    expected = tmp_path / "brain" / brain.publication_id / "brain.sqlite3"
+
+    with pytest.raises(BrainIndexError, match="compatible.*unavailable"):
+        require_brain_index(brain, tmp_path, _FakeEmbeddingProvider())
+
+    assert not expected.exists()
+
+
+def test_require_rejects_incompatible_index_without_rebuilding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    brain = _brain()
+    provider = _FakeEmbeddingProvider()
+    index_path = build_brain_index(brain, tmp_path, provider)
+    with sqlite3.connect(index_path) as connection:
+        connection.execute(
+            "UPDATE metadata SET value = '999' WHERE key = 'chunk_target_tokens'"
+        )
+    stale = index_path.read_bytes()
+    monkeypatch.setattr(
+        index_module,
+        "build_brain_index",
+        lambda *_args: pytest.fail("require must not rebuild an index"),
+    )
+
+    with pytest.raises(BrainIndexError, match="compatible.*unavailable"):
+        require_brain_index(brain, tmp_path, provider)
+
+    assert index_path.read_bytes() == stale
 
 
 def test_failed_atomic_rebuild_does_not_replace_valid_index(
