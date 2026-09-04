@@ -146,13 +146,18 @@ def load_graph_snapshot(
     if not selected_id or Path(selected_id).name != selected_id:
         raise InvalidGraphSnapshot("invalid graph snapshot id")
     snapshot_root = storage_root / "snapshots" / selected_id
+    return load_graph_snapshot_from_path(snapshot_root)
+
+
+def load_graph_snapshot_from_path(snapshot_root: Path) -> GraphBuildResult:
+    """Strictly load one explicit immutable graph snapshot directory."""
     graph, manifest, diagnostics, _structural = _read_validated_snapshot(snapshot_root)
     return GraphBuildResult(
         operation_mode="loaded",
         graph=graph,
         manifest=manifest,
         diagnostics=diagnostics,
-        snapshot_root=snapshot_root,
+        snapshot_root=Path(snapshot_root),
     )
 
 
