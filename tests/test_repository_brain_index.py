@@ -188,6 +188,24 @@ def test_ensure_reuses_valid_cache_and_rebuilds_stale_metadata(
         ).fetchone() == (str(BRAIN_CHUNK_TARGET_TOKENS),)
 
 
+def test_ensure_rebuilds_index_with_old_gguf_model_identity(tmp_path: Path) -> None:
+    brain = _brain()
+    provider = _FakeEmbeddingProvider()
+    provider.model_id = EMBEDDING_MODEL_ID
+    index_path = ensure_brain_index(brain, tmp_path, provider)
+    with sqlite3.connect(index_path) as connection:
+        connection.execute(
+            "UPDATE metadata SET value = ? WHERE key = 'embedding_model_id'",
+            ("ggml-org/embeddinggemma-300M-qat-q4_0-GGUF",),
+        )
+
+    assert ensure_brain_index(brain, tmp_path, provider) == index_path
+    assert provider.embed_calls == 2
+    with sqlite3.connect(index_path) as connection:
+        metadata = dict(connection.execute("SELECT key, value FROM metadata"))
+    assert metadata["embedding_model_id"] == EMBEDDING_MODEL_ID
+
+
 def test_ensure_reuses_canonical_index_without_resolving_embedding_runtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -110,7 +110,9 @@ def ensure_brain_index(
     ):
         return destination
     if embedding_provider is None:
-        embedding_provider, _runtime_available = resolve_embedding_provider()
+        embedding_provider, _runtime_available = resolve_embedding_provider(
+            require_runtime=True
+        )
     return build_brain_index(brain, cache_root, embedding_provider)
 
 
