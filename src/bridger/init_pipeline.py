@@ -239,10 +239,17 @@ def build_repository_brain(
         if reused is not None:
             _report_stage(on_stage, progress, InitStage.PREPARE_BRAIN_INDEX)
             try:
-                _ensure_repository_brain_index(
-                    configuration,
-                    reused.publication_path,
-                )
+                if progress is None:
+                    _ensure_repository_brain_index(
+                        configuration,
+                        reused.publication_path,
+                    )
+                else:
+                    _ensure_repository_brain_index(
+                        configuration,
+                        reused.publication_path,
+                        progress=progress,
+                    )
             except Exception as error:
                 message = format_repository_brain_error(error)
                 raise RepositoryBrainBuildError(message) from error
@@ -329,7 +336,14 @@ def build_repository_brain(
             publication_path = model_result.publication_path
             token_usage_report_path = model_result.token_usage_report_path
         _report_stage(on_stage, progress, InitStage.PREPARE_BRAIN_INDEX)
-        _ensure_repository_brain_index(configuration, publication_path)
+        if progress is None:
+            _ensure_repository_brain_index(configuration, publication_path)
+        else:
+            _ensure_repository_brain_index(
+                configuration,
+                publication_path,
+                progress=progress,
+            )
         set_current_repository_brain(
             configuration.bridger_root,
             publication_path,
@@ -348,12 +362,18 @@ def build_repository_brain(
 def _ensure_repository_brain_index(
     configuration: InitRunConfiguration,
     publication_path: Path | None,
+    *,
+    progress: InitProgressObserver | None = None,
 ) -> Path:
     """Ensure the derived index for one exact Repository Brain publication."""
     if publication_path is None:
         raise ValueError("Repository Brain publication path is unavailable")
     brain = load_repository_brain(publication_path)
-    return ensure_brain_index(brain, configuration.bridger_root / "cache")
+    return ensure_brain_index(
+        brain,
+        configuration.bridger_root / "cache",
+        progress=progress,
+    )
 
 
 def _reuse_current_repository_brain(

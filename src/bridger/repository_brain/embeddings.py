@@ -10,13 +10,9 @@ from typing import Protocol, cast
 
 import numpy as np
 
-EMBEDDING_MODEL_ID = "ggml-org/embeddinggemma-300M-qat-q4_0-GGUF"
-EMBEDDING_MODEL_FILE = "embeddinggemma-300M-qat-Q4_0.gguf"
+EMBEDDING_MODEL_ID = "google/embeddinggemma-300m"
 EMBEDDING_DIMENSION = 512
 
-_DOCUMENT_PROMPT = "title: none | text: "
-_QUERY_PROMPT = "task: search result | query: "
-_EMBEDDING_BATCH_SIZE = 16
 _DENSE_FAILURES = (RuntimeError, TypeError, ValueError)
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,27 +37,41 @@ class EmbeddingProvider(Protocol):
     def embed_query(self, text: str) -> np.ndarray: ...
 
 
-class _EmbeddingRuntime(Protocol):
-    def tokenize(
+class _EmbeddingTokenizer(Protocol):
+    def encode(
         self,
-        text: bytes,
-        add_bos: bool = True,
-        special: bool = False,
+        text: str,
+        *,
+        add_special_tokens: bool = True,
     ) -> list[int]: ...
 
-    def embed(
+
+class _EmbeddingRuntime(Protocol):
+    @property
+    def tokenizer(self) -> _EmbeddingTokenizer: ...
+
+    def encode_document(
         self,
-        input: str | list[str],
-        normalize: bool = False,
-        truncate: bool = True,
+        inputs: list[str],
+        *,
+        normalize_embeddings: bool,
+        convert_to_numpy: bool,
+    ) -> object: ...
+
+    def encode_query(
+        self,
+        inputs: str,
+        *,
+        normalize_embeddings: bool,
+        convert_to_numpy: bool,
     ) -> object: ...
 
 
 class EmbeddingGemmaProvider:
-    """In-process provider backed by the locked Q4 EmbeddingGemma GGUF."""
+    """Lazy in-process provider backed by canonical Sentence Transformers."""
 
     def __init__(self, *, _runtime: _EmbeddingRuntime | None = None) -> None:
-        self._runtime = _runtime or self._load_runtime()
+        self._runtime = _runtime
 
     @property
     def model_id(self) -> str:
@@ -73,62 +83,86 @@ class EmbeddingGemmaProvider:
 
     def count_tokens(self, text: str) -> int:
         try:
-            return len(self._runtime.tokenize(text.encode("utf-8")))
+            return len(
+                self._get_runtime().tokenizer.encode(
+                    text,
+                    add_special_tokens=True,
+                )
+            )
         except Exception as error:
             raise EmbeddingError("EmbeddingGemma tokenization failed") from error
 
     def embed_documents(self, texts: Sequence[str]) -> np.ndarray:
         if not texts:
             return np.empty((0, self.dimension), dtype=np.float32)
-        batches: list[np.ndarray] = []
-        for start in range(0, len(texts), _EMBEDDING_BATCH_SIZE):
-            prompted = [
-                f"{_DOCUMENT_PROMPT}{text}"
-                for text in texts[start : start + _EMBEDDING_BATCH_SIZE]
-            ]
-            batches.append(self._embed(prompted))
-        return np.concatenate(batches, axis=0)
-
-    def embed_query(self, text: str) -> np.ndarray:
-        return self._embed(f"{_QUERY_PROMPT}{text}")[0]
-
-    def _embed(self, texts: str | list[str]) -> np.ndarray:
         try:
-            raw = self._runtime.embed(texts, normalize=False, truncate=True)
-            vectors = np.asarray(raw, dtype=np.float32)
-            if vectors.ndim == 1:
-                vectors = vectors.reshape(1, -1)
-            if vectors.ndim != 2 or vectors.shape[1] < self.dimension:
-                raise ValueError(
-                    "EmbeddingGemma returned an invalid embedding dimension"
-                )
-            vectors = np.ascontiguousarray(vectors[:, : self.dimension])
-            if not np.isfinite(vectors).all():
-                raise ValueError("EmbeddingGemma returned non-finite values")
-            norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-            if np.any(norms == 0):
-                raise ValueError("EmbeddingGemma returned a zero vector")
-            return np.ascontiguousarray(vectors / norms, dtype=np.float32)
+            inputs = list(texts)
+            raw = self._get_runtime().encode_document(
+                inputs,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+            )
+            return self._validated_embeddings(raw, (len(inputs), self.dimension))
         except EmbeddingError:
             raise
         except Exception as error:
             raise EmbeddingError("EmbeddingGemma encoding failed") from error
 
+    def embed_query(self, text: str) -> np.ndarray:
+        try:
+            raw = self._get_runtime().encode_query(
+                text,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+            )
+            return self._validated_embeddings(raw, (self.dimension,))
+        except EmbeddingError:
+            raise
+        except Exception as error:
+            raise EmbeddingError("EmbeddingGemma encoding failed") from error
+
+    def _get_runtime(self) -> _EmbeddingRuntime:
+        if self._runtime is None:
+            self._runtime = self._load_runtime()
+        return self._runtime
+
+    @staticmethod
+    def _validated_embeddings(raw: object, shape: tuple[int, ...]) -> np.ndarray:
+        vectors = np.asarray(raw, dtype=np.float32)
+        if vectors.shape != shape:
+            raise EmbeddingError(
+                f"EmbeddingGemma returned shape {vectors.shape}; expected {shape}"
+            )
+        if not np.isfinite(vectors).all():
+            raise EmbeddingError("EmbeddingGemma returned non-finite values")
+        norms = np.linalg.norm(vectors, axis=-1)
+        if not np.allclose(norms, 1.0, rtol=1e-4, atol=1e-5):
+            raise EmbeddingError("EmbeddingGemma returned unnormalized vectors")
+        return np.ascontiguousarray(vectors, dtype=np.float32)
+
     @staticmethod
     def _load_runtime() -> _EmbeddingRuntime:
         try:
-            llama = import_module("llama_cpp").Llama
-            runtime = llama.from_pretrained(
-                repo_id=EMBEDDING_MODEL_ID,
-                filename=EMBEDDING_MODEL_FILE,
-                embedding=True,
-                n_ctx=2048,
-                n_batch=2048,
-                verbose=False,
+            _configure_model_output()
+            sentence_transformer = import_module(
+                "sentence_transformers"
+            ).SentenceTransformer
+            runtime = sentence_transformer(
+                EMBEDDING_MODEL_ID,
+                truncate_dim=EMBEDDING_DIMENSION,
             )
             return cast(_EmbeddingRuntime, runtime)
         except Exception as error:
-            raise EmbeddingError("could not load local Q4 EmbeddingGemma") from error
+            raise EmbeddingError("could not load EmbeddingGemma") from error
+
+
+def _configure_model_output() -> None:
+    """Keep routine model-library output out of Bridger's CLI presentation."""
+    huggingface_utils = import_module("huggingface_hub.utils")
+    huggingface_utils.disable_progress_bars()
+    transformers_logging = import_module("transformers.utils.logging")
+    transformers_logging.set_verbosity_error()
+    logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 
 
 class _UnavailableEmbeddingProvider:
@@ -154,17 +188,12 @@ class _UnavailableEmbeddingProvider:
 
 def resolve_embedding_provider(
     provider: EmbeddingProvider | None = None,
+    *,
+    require_runtime: bool = False,
 ) -> tuple[EmbeddingProvider, bool]:
     """Resolve the canonical provider or its lexical-only fallback."""
     if provider is None:
-        try:
-            provider = EmbeddingGemmaProvider()
-        except _DENSE_FAILURES:
-            _LOGGER.warning(
-                "EmbeddingGemma unavailable; using BM25-only Brain indexing",
-                exc_info=True,
-            )
-            return _UnavailableEmbeddingProvider(), False
+        provider = EmbeddingGemmaProvider()
     try:
         if provider.dimension != EMBEDDING_DIMENSION:
             raise ValueError("Brain embeddings must have 512 dimensions")
@@ -174,6 +203,15 @@ def resolve_embedding_provider(
             exc_info=True,
         )
         return _UnavailableEmbeddingProvider(), False
+    if require_runtime:
+        try:
+            provider.count_tokens("")
+        except _DENSE_FAILURES:
+            _LOGGER.warning(
+                "EmbeddingGemma unavailable; using BM25-only Brain indexing",
+                exc_info=True,
+            )
+            return _UnavailableEmbeddingProvider(), False
     return provider, True
 
 

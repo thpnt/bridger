@@ -480,12 +480,36 @@ def test_index_readiness_loads_the_exact_publication_and_canonical_cache(
     monkeypatch.setattr(
         init_pipeline,
         "ensure_brain_index",
-        lambda loaded, cache: calls.append((loaded, cache)),
+        lambda loaded, cache, *, progress=None: calls.append((loaded, cache, progress)),
     )
 
     init_pipeline._ensure_repository_brain_index(configuration, publication_path)
 
-    assert calls == [(brain, configuration.bridger_root / "cache")]
+    assert calls == [(brain, configuration.bridger_root / "cache", None)]
+
+
+def test_index_readiness_threads_the_init_progress_observer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    configuration = resolve_init_configuration(InitMode.FULL, repository_root=tmp_path)
+    publication_path = tmp_path / ".bridger" / "published" / "brain.json"
+    observer = object()
+    calls: list[object] = []
+    monkeypatch.setattr(init_pipeline, "load_repository_brain", lambda _path: object())
+    monkeypatch.setattr(
+        init_pipeline,
+        "ensure_brain_index",
+        lambda *_args, progress: calls.append(progress),
+    )
+
+    init_pipeline._ensure_repository_brain_index(
+        configuration,
+        publication_path,
+        progress=observer,
+    )
+
+    assert calls == [observer]
 
 
 def test_fresh_publication_is_indexed_before_current_promotion(

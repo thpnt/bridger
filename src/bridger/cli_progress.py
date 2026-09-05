@@ -130,6 +130,14 @@ class FleetProgressView:
     targets: dict[str, TargetProgressView]
 
 
+@dataclass(slots=True)
+class BrainIndexProgressView:
+    """Transient CLI projection of Repository Brain dense embedding."""
+
+    completed_chunks: int
+    total_chunks: int
+
+
 class RichInitProgressPresenter:
     """Project init observations into interactive or append-only Rich output."""
 
@@ -145,6 +153,7 @@ class RichInitProgressPresenter:
         self._reasoning = reasoning
         self._interactive = console.is_terminal
         self._fleet: FleetProgressView | None = None
+        self._brain_index: BrainIndexProgressView | None = None
         self._live: Live | None = None
         self._status: Status | None = None
         self._current_stage: InitStage | None = None
@@ -159,6 +168,11 @@ class RichInitProgressPresenter:
     def fleet(self) -> FleetProgressView | None:
         """Return the current transient projection for tests and inspection."""
         return self._fleet
+
+    @property
+    def brain_index(self) -> BrainIndexProgressView | None:
+        """Return the current dense embedding projection for inspection."""
+        return self._brain_index
 
     def start(self) -> None:
         """Render the init heading once."""
@@ -271,6 +285,46 @@ class RichInitProgressPresenter:
             self._emit_target_line(target_task_id)
         if fleet_changed and self._fleet is not None:
             self._emit_fleet_line(self._fleet.phase)
+
+    def brain_index_started(self, total_chunks: int) -> None:
+        """Replace the index-stage spinner with dense embedding progress."""
+        if total_chunks <= 0:
+            return
+        with self._lock:
+            self._brain_index = BrainIndexProgressView(0, total_chunks)
+            renderable = self._render_brain_index()
+        self._stop_status()
+        if self._interactive:
+            self._finish_live_dashboard()
+            self._live = Live(
+                renderable,
+                console=self._console,
+                refresh_per_second=8,
+                transient=False,
+            )
+            self._live.start(refresh=True)
+            return
+        self._console.print(Text(f"[index] Embedding {total_chunks} chunks"))
+
+    def brain_index_progress(
+        self,
+        completed_chunks: int,
+        total_chunks: int,
+    ) -> None:
+        """Update dense embedding progress after a completed batch."""
+        with self._lock:
+            if self._brain_index is None:
+                return
+            self._brain_index = BrainIndexProgressView(completed_chunks, total_chunks)
+            renderable = self._render_brain_index()
+        if self._interactive:
+            if self._live is not None:
+                self._live.update(renderable, refresh=False)
+            return
+        if completed_chunks == total_chunks:
+            self._console.print(
+                Text(f"[index] {completed_chunks}/{total_chunks} chunks embedded")
+            )
 
     def succeeded(self, result: RepositoryBrainBuildResult) -> None:
         """Render final artifacts and the persisted model-token audit."""
@@ -465,6 +519,25 @@ class RichInitProgressPresenter:
         )
         return Group(heading, table, footer)
 
+    def _render_brain_index(self) -> Table:
+        progress = self._brain_index
+        if progress is None:
+            return Table.grid()
+        table = Table.grid(expand=True)
+        table.add_column(style="bridger.brand")
+        table.add_column(ratio=1)
+        table.add_column(justify="right", style="bridger.muted")
+        total = progress.total_chunks or 1
+        completed = min(progress.completed_chunks, total)
+        width = max(8, min(32, self._console.width - 50))
+        percentage = round(completed * 100 / total)
+        table.add_row(
+            "Embedding Repository Brain",
+            ProgressBar(total=total, completed=completed, width=width),
+            f"{completed}/{progress.total_chunks} {percentage}%",
+        )
+        return table
+
     @staticmethod
     def _target_status(phase: TargetPhase) -> Text | Spinner:
         if phase is TargetPhase.ACCEPTED:
@@ -581,6 +654,7 @@ class RichInitProgressPresenter:
 
 __all__ = [
     "BRIDGER_THEME",
+    "BrainIndexProgressView",
     "FleetProgressView",
     "RichInitProgressPresenter",
     "TargetProgressView",
