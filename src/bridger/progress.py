@@ -51,6 +51,18 @@ class InitProgressObserver(Protocol):
         """Observe one newly committed runtime event."""
         ...
 
+    def brain_index_started(self, total_chunks: int) -> None:
+        """Observe the start of dense Repository Brain embedding."""
+        ...
+
+    def brain_index_progress(
+        self,
+        completed_chunks: int,
+        total_chunks: int,
+    ) -> None:
+        """Observe one successfully embedded Repository Brain batch."""
+        ...
+
 
 def notify_stage_started(
     observer: InitProgressObserver | None,
@@ -88,9 +100,38 @@ def notify_fleet_initialized(
         pass
 
 
+def notify_brain_index_started(
+    observer: InitProgressObserver | None,
+    total_chunks: int,
+) -> None:
+    """Best-effort notify an observer that dense embedding has started."""
+    if observer is None:
+        return
+    try:
+        observer.brain_index_started(total_chunks)
+    except Exception:
+        pass
+
+
+def notify_brain_index_progress(
+    observer: InitProgressObserver | None,
+    completed_chunks: int,
+    total_chunks: int,
+) -> None:
+    """Best-effort notify an observer after one dense embedding batch."""
+    if observer is None:
+        return
+    try:
+        observer.brain_index_progress(completed_chunks, total_chunks)
+    except Exception:
+        pass
+
+
 __all__ = [
     "InitProgressObserver",
     "InitStage",
+    "notify_brain_index_progress",
+    "notify_brain_index_started",
     "notify_fleet_initialized",
     "notify_stage_started",
 ]

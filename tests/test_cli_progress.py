@@ -24,6 +24,7 @@ from bridger.contracts.memory.core import (
 )
 from bridger.contracts.memory.persistence import TaskEvent
 from bridger.init_pipeline import InitMode, ReasoningEffort
+from bridger.progress import InitStage
 
 _SOURCE = SourceBinding(
     repository_id="repository-1",
@@ -308,6 +309,35 @@ def test_fleet_failure_renders_a_terminal_failure_marker() -> None:
     output = buffer.getvalue()
     assert "[fleet] execution failed" in output
     assert "Repository Brain build failed: provider unavailable" in output
+
+
+def test_brain_index_progress_reuses_init_presentation_lifecycle() -> None:
+    presenter, buffer = _presenter(interactive=True)
+    presenter.stage_started(InitStage.PREPARE_BRAIN_INDEX)
+    presenter.brain_index_started(64)
+    presenter.brain_index_progress(32, 64)
+    presenter.brain_index_progress(64, 64)
+    presenter.stage_started(InitStage.PUBLISH_REPOSITORY_BRAIN)
+    presenter.close()
+
+    output = buffer.getvalue()
+    assert "Embedding Repository Brain" in output
+    assert "64/64 100%" in output
+    assert "Repository Brain index prepared" in output
+
+
+def test_noninteractive_brain_index_progress_is_coarse() -> None:
+    presenter, buffer = _presenter()
+    presenter.stage_started(InitStage.PREPARE_BRAIN_INDEX)
+    presenter.brain_index_started(64)
+    presenter.brain_index_progress(32, 64)
+    presenter.brain_index_progress(64, 64)
+    presenter.close()
+
+    output = buffer.getvalue()
+    assert "[index] Embedding 64 chunks" in output
+    assert "[index] 64/64 chunks embedded" in output
+    assert "32/64" not in output
 
 
 def test_interactive_rendering_preserves_target_ids_at_80_columns() -> None:

@@ -143,6 +143,7 @@ class EmbeddingGemmaProvider:
     @staticmethod
     def _load_runtime() -> _EmbeddingRuntime:
         try:
+            _configure_model_output()
             sentence_transformer = import_module(
                 "sentence_transformers"
             ).SentenceTransformer
@@ -153,6 +154,15 @@ class EmbeddingGemmaProvider:
             return cast(_EmbeddingRuntime, runtime)
         except Exception as error:
             raise EmbeddingError("could not load EmbeddingGemma") from error
+
+
+def _configure_model_output() -> None:
+    """Keep routine model-library output out of Bridger's CLI presentation."""
+    huggingface_utils = import_module("huggingface_hub.utils")
+    huggingface_utils.disable_progress_bars()
+    transformers_logging = import_module("transformers.utils.logging")
+    transformers_logging.set_verbosity_error()
+    logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 
 
 class _UnavailableEmbeddingProvider:

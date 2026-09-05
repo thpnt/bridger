@@ -15,6 +15,7 @@ from bridger.repository_brain.embeddings import EMBEDDING_MODEL_ID
 from bridger.repository_brain.index import (
     BRAIN_CHUNK_OVERLAP_TOKENS,
     BRAIN_CHUNK_TARGET_TOKENS,
+    BRAIN_EMBEDDING_BATCH_SIZE,
     BrainIndexError,
     _chunk_document,
     build_brain_index,
@@ -45,6 +46,46 @@ class _FakeEmbeddingProvider:
     def embed_query(self, text: str) -> np.ndarray:
         vector = np.ones(self.dimension, dtype=np.float32)
         return vector / np.linalg.norm(vector)
+
+
+class _RecordingProgress:
+    def __init__(self) -> None:
+        self.events: list[tuple[object, ...]] = []
+
+    def brain_index_started(self, total_chunks: int) -> None:
+        self.events.append(("started", total_chunks))
+
+    def brain_index_progress(
+        self,
+        completed_chunks: int,
+        total_chunks: int,
+    ) -> None:
+        self.events.append(("progress", completed_chunks, total_chunks))
+
+
+class _BatchRecordingProvider(_FakeEmbeddingProvider):
+    def __init__(self, *, fail_on_call: int | None = None) -> None:
+        super().__init__()
+        self.fail_on_call = fail_on_call
+        self.batches: list[list[str]] = []
+
+    def embed_documents(self, texts: list[str]) -> np.ndarray:
+        self.embed_calls += 1
+        self.batches.append(texts)
+        if self.embed_calls == self.fail_on_call:
+            raise RuntimeError("dense runtime unavailable")
+        vectors = np.ones((len(texts), self.dimension), dtype=np.float32)
+        return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+
+
+class _OrderedBatchProvider(_BatchRecordingProvider):
+    def embed_documents(self, texts: list[str]) -> np.ndarray:
+        self.embed_calls += 1
+        self.batches.append(texts)
+        vectors = np.zeros((len(texts), self.dimension), dtype=np.float32)
+        for index, text in enumerate(texts):
+            vectors[index, 0] = int(re.search(r"Heading (\d+)", text).group(1)) + 1
+        return vectors
 
 
 def test_markdown_chunking_is_deterministic_and_preserves_provenance() -> None:
@@ -162,6 +203,72 @@ def test_embedding_failure_keeps_valid_searchable_lexical_index(
         metadata = dict(connection.execute("SELECT key, value FROM metadata"))
         assert "embedding_model_id" not in metadata
         assert "embedding_dimension" not in metadata
+
+
+def test_dense_embedding_reports_each_successful_batch(tmp_path: Path) -> None:
+    brain = _many_chunk_brain(BRAIN_EMBEDDING_BATCH_SIZE + 3)
+    provider = _BatchRecordingProvider()
+    progress = _RecordingProgress()
+
+    build_brain_index(brain, tmp_path, provider, progress=progress)
+
+    assert progress.events == [
+        ("started", BRAIN_EMBEDDING_BATCH_SIZE + 3),
+        ("progress", BRAIN_EMBEDDING_BATCH_SIZE, BRAIN_EMBEDDING_BATCH_SIZE + 3),
+        (
+            "progress",
+            BRAIN_EMBEDDING_BATCH_SIZE + 3,
+            BRAIN_EMBEDDING_BATCH_SIZE + 3,
+        ),
+    ]
+    assert [len(batch) for batch in provider.batches] == [
+        BRAIN_EMBEDDING_BATCH_SIZE,
+        3,
+    ]
+
+
+def test_reused_index_does_not_emit_embedding_progress(tmp_path: Path) -> None:
+    brain = _brain()
+    provider = _FakeEmbeddingProvider()
+    ensure_brain_index(brain, tmp_path, provider)
+    progress = _RecordingProgress()
+
+    ensure_brain_index(brain, tmp_path, provider, progress=progress)
+
+    assert progress.events == []
+
+
+def test_batched_embeddings_preserve_chunk_vector_order(tmp_path: Path) -> None:
+    brain = _many_chunk_brain(BRAIN_EMBEDDING_BATCH_SIZE + 2)
+    index_path = build_brain_index(brain, tmp_path, _OrderedBatchProvider())
+
+    with sqlite3.connect(index_path) as connection:
+        rows = list(
+            connection.execute("SELECT text, embedding FROM chunks ORDER BY rowid")
+        )
+
+    assert [
+        int(re.search(r"Heading (\d+)", text).group(1)) + 1 for text, _ in rows
+    ] == [int(np.frombuffer(embedding, dtype=np.float32)[0]) for _, embedding in rows]
+
+
+def test_failed_batch_keeps_the_index_lexical_only(tmp_path: Path) -> None:
+    brain = _many_chunk_brain(BRAIN_EMBEDDING_BATCH_SIZE + 1)
+    provider = _BatchRecordingProvider(fail_on_call=2)
+    progress = _RecordingProgress()
+
+    index_path = build_brain_index(brain, tmp_path, provider, progress=progress)
+
+    with sqlite3.connect(index_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL"
+        ).fetchone() == (0,)
+        metadata = dict(connection.execute("SELECT key, value FROM metadata"))
+    assert "embedding_model_id" not in metadata
+    assert progress.events == [
+        ("started", BRAIN_EMBEDDING_BATCH_SIZE + 1),
+        ("progress", BRAIN_EMBEDDING_BATCH_SIZE, BRAIN_EMBEDDING_BATCH_SIZE + 1),
+    ]
 
 
 def test_ensure_reuses_valid_cache_and_rebuilds_stale_metadata(
@@ -326,6 +433,16 @@ def _brain() -> LoadedRepositoryBrain:
         publication_id="publication-1",
         manifest=manifest,
         documents=documents,
+    )
+
+
+def _many_chunk_brain(count: int) -> LoadedRepositoryBrain:
+    content = "\n".join(f"# Heading {index}\nbody {index}" for index in range(count))
+    brain = _brain()
+    return LoadedRepositoryBrain(
+        publication_id=brain.publication_id,
+        manifest=brain.manifest,
+        documents=(_document("many", "many.md", content),),
     )
 
 

@@ -107,7 +107,13 @@ def test_embeddinggemma_runtime_construction_is_lazy_and_device_agnostic(
     monkeypatch.setattr(
         embeddings_module,
         "import_module",
-        lambda name: SimpleNamespace(SentenceTransformer=sentence_transformer),
+        lambda name: (
+            SimpleNamespace(disable_progress_bars=lambda: None)
+            if name == "huggingface_hub.utils"
+            else SimpleNamespace(set_verbosity_error=lambda: None)
+            if name == "transformers.utils.logging"
+            else SimpleNamespace(SentenceTransformer=sentence_transformer)
+        ),
     )
 
     provider = EmbeddingGemmaProvider()
@@ -121,6 +127,29 @@ def test_embeddinggemma_runtime_construction_is_lazy_and_device_agnostic(
     assert "device" not in calls[0][1]
     assert provider.count_tokens("same runtime") == 3
     assert len(calls) == 1
+
+
+def test_model_output_configuration_disables_only_routine_library_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def import_fake(name: str) -> SimpleNamespace:
+        if name == "huggingface_hub.utils":
+            return SimpleNamespace(disable_progress_bars=lambda: calls.append("hub"))
+        if name == "transformers.utils.logging":
+            return SimpleNamespace(
+                set_verbosity_error=lambda: calls.append("transformers")
+            )
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(embeddings_module, "import_module", import_fake)
+    logger = embeddings_module.logging.getLogger("sentence_transformers")
+    monkeypatch.setattr(logger, "setLevel", lambda level: calls.append(str(level)))
+
+    embeddings_module._configure_model_output()
+
+    assert calls == ["hub", "transformers", str(embeddings_module.logging.ERROR)]
 
 
 def test_empty_document_sequence_does_not_load_runtime(

@@ -16,6 +16,11 @@ from uuid import uuid4
 
 import numpy as np
 
+from bridger.progress import (
+    InitProgressObserver,
+    notify_brain_index_progress,
+    notify_brain_index_started,
+)
 from bridger.repository_brain.embeddings import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL_ID,
@@ -27,6 +32,7 @@ from bridger.repository_brain.loader import BrainDocument, LoadedRepositoryBrain
 BRAIN_INDEX_SCHEMA_VERSION = 1
 BRAIN_CHUNK_TARGET_TOKENS = 512
 BRAIN_CHUNK_OVERLAP_TOKENS = 64
+BRAIN_EMBEDDING_BATCH_SIZE = 32
 
 _HEADING_PATTERN = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _H1_PATTERN = re.compile(r"^#[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -66,6 +72,8 @@ def build_brain_index(
     brain: LoadedRepositoryBrain,
     cache_root: Path,
     embedding_provider: EmbeddingProvider,
+    *,
+    progress: InitProgressObserver | None = None,
 ) -> Path:
     """Build and atomically publish one complete derived Brain index."""
     destination = _index_path(brain, cache_root)
@@ -77,7 +85,12 @@ def build_brain_index(
             connection.execute("PRAGMA foreign_keys = ON")
             with connection:
                 _create_schema(connection)
-                _populate_index(connection, brain, embedding_provider)
+                _populate_index(
+                    connection,
+                    brain,
+                    embedding_provider,
+                    progress=progress,
+                )
                 _validate_index(connection, len(brain.documents))
         finally:
             connection.close()
@@ -98,6 +111,8 @@ def ensure_brain_index(
     brain: LoadedRepositoryBrain,
     cache_root: Path,
     embedding_provider: EmbeddingProvider | None = None,
+    *,
+    progress: InitProgressObserver | None = None,
 ) -> Path:
     """Reuse an identity-matching index, otherwise rebuild it completely."""
     destination = _index_path(brain, cache_root)
@@ -113,7 +128,12 @@ def ensure_brain_index(
         embedding_provider, _runtime_available = resolve_embedding_provider(
             require_runtime=True
         )
-    return build_brain_index(brain, cache_root, embedding_provider)
+    return build_brain_index(
+        brain,
+        cache_root,
+        embedding_provider,
+        progress=progress,
+    )
 
 
 def require_brain_index(
@@ -210,6 +230,8 @@ def _populate_index(
     connection: sqlite3.Connection,
     brain: LoadedRepositoryBrain,
     embedding_provider: EmbeddingProvider,
+    *,
+    progress: InitProgressObserver | None = None,
 ) -> None:
     metadata = _base_metadata(brain)
     chunks: list[_Chunk] = []
@@ -243,10 +265,7 @@ def _populate_index(
     embeddings: np.ndarray | None = None
     if chunks:
         try:
-            candidate = np.asarray(
-                embedding_provider.embed_documents([chunk.text for chunk in chunks]),
-                dtype=np.float32,
-            )
+            candidate = _embed_chunks(chunks, embedding_provider, progress)
             expected_shape = (len(chunks), embedding_provider.dimension)
             if candidate.shape != expected_shape:
                 raise ValueError(
@@ -321,6 +340,34 @@ def _populate_index(
         "INSERT INTO metadata (key, value) VALUES (?, ?)",
         sorted(metadata.items()),
     )
+
+
+def _embed_chunks(
+    chunks: list[_Chunk],
+    embedding_provider: EmbeddingProvider,
+    progress: InitProgressObserver | None,
+) -> np.ndarray:
+    total_chunks = len(chunks)
+    notify_brain_index_started(progress, total_chunks)
+    batches: list[np.ndarray] = []
+    completed_chunks = 0
+    for start in range(0, total_chunks, BRAIN_EMBEDDING_BATCH_SIZE):
+        batch = chunks[start : start + BRAIN_EMBEDDING_BATCH_SIZE]
+        vectors = np.asarray(
+            embedding_provider.embed_documents([chunk.text for chunk in batch]),
+            dtype=np.float32,
+        )
+        expected_shape = (len(batch), embedding_provider.dimension)
+        if vectors.shape != expected_shape:
+            raise ValueError(
+                f"embedding shape {vectors.shape} does not match {expected_shape}"
+            )
+        if not np.isfinite(vectors).all():
+            raise ValueError("embeddings contain non-finite values")
+        batches.append(np.ascontiguousarray(vectors, dtype=np.float32))
+        completed_chunks += len(batch)
+        notify_brain_index_progress(progress, completed_chunks, total_chunks)
+    return np.concatenate(batches)
 
 
 def _base_metadata(brain: LoadedRepositoryBrain) -> dict[str, str]:
@@ -607,6 +654,7 @@ def _fsync_directory(directory: Path) -> None:
 
 __all__ = [
     "BRAIN_CHUNK_OVERLAP_TOKENS",
+    "BRAIN_EMBEDDING_BATCH_SIZE",
     "BRAIN_CHUNK_TARGET_TOKENS",
     "BRAIN_INDEX_SCHEMA_VERSION",
     "BrainIndexError",
