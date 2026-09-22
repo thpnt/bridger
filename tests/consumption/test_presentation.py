@@ -1,6 +1,6 @@
 """Focused tests for the stateless Bridger presentation layer."""
 
-from bridger.contracts import (
+from bridger.contracts._legacy_consumption import (
     Authority,
     BridgerRef,
     BridgerRefKind,

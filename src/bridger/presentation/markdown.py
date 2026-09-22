@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, TypeGuard
 
-from bridger.contracts.consumption import (
+from bridger.contracts._legacy_consumption import (
     BridgerRef,
     BridgerRefKind,
     IntelligenceItem,

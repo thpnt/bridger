@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import bridger.navigation.bootstrap as bootstrap_module
-from bridger.contracts.consumption import (
+from bridger.contracts._legacy_consumption import (
     Authority,
     BridgerRef,
     BridgerRefKind,

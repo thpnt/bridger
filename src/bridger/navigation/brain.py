@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from bridger.contracts.consumption import (
+from bridger.contracts._legacy_consumption import (
     Authority,
     BridgerRef,
     BridgerRefKind,

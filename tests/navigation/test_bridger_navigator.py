@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from bridger.contracts.consumption import (
+from bridger.contracts._legacy_consumption import (
     Authority,
     BridgerRef,
     BridgerRefKind,

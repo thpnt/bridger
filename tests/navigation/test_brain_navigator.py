@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import bridger.navigation.brain as brain_module
-from bridger.contracts.consumption import (
+from bridger.contracts._legacy_consumption import (
     Authority,
     BridgerRef,
     BridgerRefKind,

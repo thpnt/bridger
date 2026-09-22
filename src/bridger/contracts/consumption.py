@@ -1,292 +1,253 @@
-"""Shared contracts for the Bridger consumption interface."""
+"""Typed contracts for the simplified Bridger V0 consumption interface."""
 
-from enum import StrEnum
+from typing import Literal
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    JsonValue,
-    PositiveInt,
-    TypeAdapter,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from bridger.contracts.enrichment import EnrichmentTargetReference
 from bridger.contracts.files import FileIndexPath
+from bridger.contracts.symbols import SymbolRecord
 
 
-class Lens(StrEnum):
-    UNDERSTAND = "understand"
-    GUARDRAILS = "guardrails"
-    IMPACT = "impact"
-
-
-class ScopeKind(StrEnum):
-    REPOSITORY = "repository"
-    PATH = "path"
-    SYMBOL = "symbol"
-    GRAPH_ENTITY = "graph_entity"
-    BRAIN_REF = "brain_ref"
-
-
-class BridgerRefKind(StrEnum):
-    NODE = "node"
-    EDGE = "edge"
-    HYPEREDGE = "hyperedge"
-    COMMUNITY = "community"
-    GRAPH = "graph"
-    FILE = "file"
-    SYMBOL = "symbol"
-
-    BRAIN_DOCUMENT = "brain_document"
-    BRAIN_CONTEXT = "brain_context"
-    BRAIN_CLAIM = "brain_claim"
-    EVIDENCE = "evidence"
-
-
-class Substrate(StrEnum):
-    BRAIN = "brain"
-    DETERMINISTIC_GRAPH = "deterministic_graph"
-    GRAPH_ENRICHMENT = "graph_enrichment"
-    SOURCE = "source"
-
-
-class Authority(StrEnum):
-    DETERMINISTIC = "deterministic"
-    DERIVED = "derived"
-
-
-class ReadExpansion(StrEnum):
-    CONTEXT = "context"
-    DOCUMENT = "document"
-    CLAIM = "claim"
-    EVIDENCE = "evidence"
-
-
-class ResultOperation(StrEnum):
-    QUERY = "query"
-    READ = "read"
-
-
-class BridgerRef(BaseModel):
-    """Addressable reference to one exact Bridger intelligence object."""
-
+class ConsumptionRevision(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    kind: BridgerRefKind
-    target_ref: EnrichmentTargetReference
-    repository_revision: str = Field(min_length=1)
-
-
-_FILE_INDEX_PATH_ADAPTER = TypeAdapter(FileIndexPath)
-
-_GRAPH_REF_KINDS = frozenset(
-    {
-        BridgerRefKind.NODE,
-        BridgerRefKind.EDGE,
-        BridgerRefKind.HYPEREDGE,
-        BridgerRefKind.COMMUNITY,
-        BridgerRefKind.GRAPH,
-    }
-)
-
-_BRAIN_REF_KINDS = frozenset(
-    {
-        BridgerRefKind.BRAIN_DOCUMENT,
-        BridgerRefKind.BRAIN_CONTEXT,
-        BridgerRefKind.BRAIN_CLAIM,
-    }
-)
-
-
-class ScopeRef(BaseModel):
-    """Concrete repository or Bridger object constraining retrieval."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    kind: ScopeKind
-    value: BridgerRef | EnrichmentTargetReference | None = None
-
-    @model_validator(mode="after")
-    def validate_scope(self) -> "ScopeRef":
-        if self.kind is ScopeKind.REPOSITORY:
-            if self.value is not None:
-                raise ValueError("repository scope cannot declare a value")
-            return self
-
-        if self.kind is ScopeKind.PATH:
-            if not isinstance(self.value, str):
-                raise ValueError("path scope requires a FileIndexPath")
-            _FILE_INDEX_PATH_ADAPTER.validate_python(self.value)
-            return self
-
-        if self.kind is ScopeKind.SYMBOL:
-            if not isinstance(self.value, str) or not self.value.strip():
-                raise ValueError("symbol scope requires a canonical symbol_id")
-            return self
-
-        if self.kind is ScopeKind.GRAPH_ENTITY:
-            if isinstance(self.value, BridgerRef):
-                if self.value.kind not in _GRAPH_REF_KINDS:
-                    raise ValueError("graph_entity scope requires a graph BridgerRef")
-                return self
-
-            if self.value is None:
-                raise ValueError("graph_entity scope requires a graph target reference")
-            return self
-
-        if self.kind is ScopeKind.BRAIN_REF:
-            if (
-                not isinstance(self.value, BridgerRef)
-                or self.value.kind not in _BRAIN_REF_KINDS
-            ):
-                raise ValueError("brain_ref scope requires a Brain BridgerRef")
-            return self
-
-        raise ValueError("unsupported scope kind")
-
-
-class IntelligenceQueryRequest(BaseModel):
-    """Request to locate relevant repository intelligence."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    lens: Lens
-    query: str | None = Field(default=None, min_length=1)
-    scope: ScopeRef | None = None
-    limit: PositiveInt | None = None
-
-    @model_validator(mode="after")
-    def validate_request(self) -> "IntelligenceQueryRequest":
-        if self.query is not None and not self.query.strip():
-            raise ValueError("query must contain non-whitespace content")
-
-        if self.lens in {Lens.UNDERSTAND, Lens.GUARDRAILS}:
-            if self.query is None and self.scope is None:
-                raise ValueError("UNDERSTAND and GUARDRAILS require query or scope")
-
-        if self.lens is Lens.IMPACT:
-            if self.scope is None:
-                raise ValueError("IMPACT requires concrete scope")
-
-            if self.scope.kind not in {
-                ScopeKind.PATH,
-                ScopeKind.SYMBOL,
-                ScopeKind.GRAPH_ENTITY,
-            }:
-                raise ValueError("IMPACT scope must be path, symbol, or graph_entity")
-
-        return self
-
-
-class IntelligenceReadRequest(BaseModel):
-    """Request to inspect or expand an existing Bridger reference."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    ref: BridgerRef
-    expand: ReadExpansion | None = None
-
-
-class Provenance(BaseModel):
-    """Origin and authority metadata for returned intelligence."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    repository_revision: str = Field(min_length=1)
-    substrate: Substrate
-    authority: Authority
-    confidence: float | None = Field(default=None, ge=0, le=1)
-    uncertainty: str | None = Field(default=None, min_length=1)
+    repository_id: str = Field(min_length=1)
+    repository_revision: str = Field(pattern=r"^[0-9a-f]{40,64}$")
+    graph_snapshot_id: str = Field(min_length=1)
+    enrichment_overlay_id: str = Field(min_length=1)
 
 
 class Completeness(BaseModel):
-    """Completeness metadata for one bounded intelligence result."""
-
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    returned_count: int = Field(ge=0)
-    truncated: bool = False
-    more_available: bool = False
+    brain_truncated: bool = False
+    graph_truncated: bool = False
 
 
-class IntelligenceItem(BaseModel):
-    """One addressable repository-intelligence result."""
-
+class BrainContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    ref: BridgerRef
-    kind: BridgerRefKind
-
-    title: str = Field(min_length=1)
-    content: str | None = None
-    data: JsonValue | None = None
-
-    document_ref: BridgerRef | None = None
-    context_ref: BridgerRef | None = None
-
-    matched_claim_refs: list[BridgerRef] = Field(default_factory=list)
-    evidence_refs: list[BridgerRef] = Field(default_factory=list)
-    related_refs: list[BridgerRef] = Field(default_factory=list)
-
-    semantic_owner: str | None = Field(default=None, min_length=1)
-    provenance: Provenance
+    path: str = Field(min_length=1)
+    heading: str | None = Field(default=None, min_length=1)
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    excerpt: str = Field(min_length=1)
+    semantic_owner: str = Field(min_length=1)
 
     @model_validator(mode="after")
-    def validate_item(self) -> "IntelligenceItem":
-        if self.kind is not self.ref.kind:
-            raise ValueError("item kind must match ref kind")
+    def validate_range(self) -> "BrainContext":
+        if self.end_line < self.start_line:
+            raise ValueError("end_line must not be before start_line")
         return self
 
 
-class IntelligenceResult(BaseModel):
-    """Canonical result envelope for Bridger consumption operations."""
-
+class GraphNode(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    operation: ResultOperation
-    repository_revision: str = Field(min_length=1)
-
-    lens: Lens | None = None
-    query: str | None = None
-    scope: ScopeRef | None = None
-
-    items: list[IntelligenceItem] = Field(default_factory=list)
-    completeness: Completeness
+    node_id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    symbol_ids: list[str] = Field(default_factory=list)
+    source_path: FileIndexPath | None = None
+    source_start_line: int | None = Field(default=None, ge=1)
+    source_end_line: int | None = Field(default=None, ge=1)
+    community_id: int | None = None
 
     @model_validator(mode="after")
-    def validate_result(self) -> "IntelligenceResult":
-        if self.operation is ResultOperation.QUERY and self.lens is None:
-            raise ValueError("QUERY result requires lens")
+    def validate_source_range(self) -> "GraphNode":
+        if (self.source_start_line is None) != (self.source_end_line is None):
+            raise ValueError(
+                "source_start_line and source_end_line must be provided together"
+            )
 
-        if self.completeness.returned_count != len(self.items):
-            raise ValueError("completeness.returned_count must match items")
+        if self.source_start_line is not None:
+            if self.source_path is None:
+                raise ValueError("source line range requires source_path")
+            if self.source_end_line < self.source_start_line:
+                raise ValueError(
+                    "source_end_line must not be before source_start_line"
+                )
 
-        for item in self.items:
-            if item.ref.repository_revision != self.repository_revision:
-                raise ValueError("item ref revision must match result revision")
+        return self
 
-            if item.provenance.repository_revision != self.repository_revision:
-                raise ValueError("item provenance revision must match result revision")
+
+class GraphEdge(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_node_id: str = Field(min_length=1)
+    target_node_id: str = Field(min_length=1)
+    relation: str = Field(min_length=1)
+    evidence: str | None = Field(default=None, min_length=1)
+    evidence_path: FileIndexPath | None = None
+    evidence_start_line: int | None = Field(default=None, ge=1)
+    evidence_end_line: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_evidence_range(self) -> "GraphEdge":
+        if (self.evidence_start_line is None) != (self.evidence_end_line is None):
+            raise ValueError(
+                "evidence_start_line and evidence_end_line must be provided together"
+            )
+
+        if self.evidence_start_line is not None:
+            if self.evidence_path is None:
+                raise ValueError("evidence line range requires evidence_path")
+            if self.evidence_end_line < self.evidence_start_line:
+                raise ValueError(
+                    "evidence_end_line must not be before evidence_start_line"
+                )
+
+        return self
+
+
+class GraphCommunity(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    community_id: int
+    label: str = Field(min_length=1)
+
+
+class UnderstandGraphContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    seed_node_ids: list[str] = Field(default_factory=list)
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
+    communities: list[GraphCommunity] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_context(self) -> "UnderstandGraphContext":
+        node_ids = {node.node_id for node in self.nodes}
+
+        if any(seed_id not in node_ids for seed_id in self.seed_node_ids):
+            raise ValueError("every seed_node_id must exist in nodes")
+
+        if any(
+            edge.source_node_id not in node_ids
+            or edge.target_node_id not in node_ids
+            for edge in self.edges
+        ):
+            raise ValueError("every graph edge endpoint must exist in nodes")
+
+        community_ids = {community.community_id for community in self.communities}
+
+        if any(
+            node.community_id is not None
+            and node.community_id not in community_ids
+            for node in self.nodes
+        ):
+            raise ValueError("every referenced community_id must exist in communities")
+
+        return self
+
+
+class UnderstandResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query: str = Field(min_length=1)
+    revision: ConsumptionRevision
+    brain_context: list[BrainContext] = Field(default_factory=list)
+    graph_context: UnderstandGraphContext
+    completeness: Completeness
+    warnings: list[str] = Field(default_factory=list)
+
+
+ImpactResolutionFailure = Literal["not_found", "ambiguous", "not_in_graph"]
+
+
+class ResolvedImpactRoot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    selector: str = Field(min_length=1)
+    graph_node_ids: list[str] = Field(min_length=1)
+    symbol: SymbolRecord | None = None
+
+
+class ImpactResolutionIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    selector: str = Field(min_length=1)
+    reason: ImpactResolutionFailure
+    candidates: list[SymbolRecord] = Field(default_factory=list)
+
+
+class ImpactNode(GraphNode):
+    depth: int = Field(ge=0)
+
+
+class ImpactGraph(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    nodes: list[ImpactNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
+    communities: list[GraphCommunity] = Field(default_factory=list)
+    important_node_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_graph(self) -> "ImpactGraph":
+        node_ids = {node.node_id for node in self.nodes}
+
+        if any(
+            edge.source_node_id not in node_ids
+            or edge.target_node_id not in node_ids
+            for edge in self.edges
+        ):
+            raise ValueError("every graph edge endpoint must exist in nodes")
+
+        if any(node_id not in node_ids for node_id in self.important_node_ids):
+            raise ValueError("every important_node_id must exist in nodes")
+
+        community_ids = {community.community_id for community in self.communities}
+
+        if any(
+            node.community_id is not None
+            and node.community_id not in community_ids
+            for node in self.nodes
+        ):
+            raise ValueError("every referenced community_id must exist in communities")
+
+        return self
+
+
+class ImpactResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    revision: ConsumptionRevision
+    requested_symbols: list[str] = Field(min_length=1)
+    resolved_roots: list[ResolvedImpactRoot] = Field(default_factory=list)
+    resolution_issues: list[ImpactResolutionIssue] = Field(default_factory=list)
+    affected_graph: ImpactGraph | None = None
+    brain_enrichment: list[BrainContext] = Field(default_factory=list)
+    completeness: Completeness
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_result(self) -> "ImpactResult":
+        if self.resolution_issues:
+            if self.affected_graph is not None:
+                raise ValueError("affected_graph must be absent when resolution fails")
+            if self.brain_enrichment:
+                raise ValueError(
+                    "brain_enrichment must be empty when resolution fails"
+                )
+        elif self.affected_graph is None:
+            raise ValueError("affected_graph is required after successful resolution")
 
         return self
 
 
 __all__ = [
-    "Authority",
-    "BridgerRef",
-    "BridgerRefKind",
+    "BrainContext",
     "Completeness",
-    "IntelligenceItem",
-    "IntelligenceQueryRequest",
-    "IntelligenceReadRequest",
-    "IntelligenceResult",
-    "Lens",
-    "Provenance",
-    "ReadExpansion",
-    "ResultOperation",
-    "ScopeKind",
-    "ScopeRef",
-    "Substrate",
+    "ConsumptionRevision",
+    "GraphCommunity",
+    "GraphEdge",
+    "GraphNode",
+    "ImpactGraph",
+    "ImpactNode",
+    "ImpactResolutionFailure",
+    "ImpactResolutionIssue",
+    "ImpactResult",
+    "ResolvedImpactRoot",
+    "UnderstandGraphContext",
+    "UnderstandResult",
 ]

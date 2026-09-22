@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import cast
 
-from bridger.contracts.consumption import (
+from bridger.contracts._legacy_consumption import (
     Authority,
     BridgerRef,
     BridgerRefKind,

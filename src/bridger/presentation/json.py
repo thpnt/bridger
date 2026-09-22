@@ -4,7 +4,7 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from bridger.contracts.consumption import IntelligenceResult
+from bridger.contracts._legacy_consumption import IntelligenceResult
 
 
 def render_intelligence_json(result: IntelligenceResult) -> dict[str, JsonValue]:
