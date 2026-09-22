@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import TracebackType
@@ -29,6 +30,7 @@ from bridger.contracts._legacy_consumption import (
     ScopeKind,
     Substrate,
 )
+from bridger.contracts.consumption import BrainContext
 from bridger.repository_brain.embeddings import resolve_embedding_provider
 
 if TYPE_CHECKING:
@@ -95,6 +97,13 @@ class _BrainConstraint:
     end_line: int | None = None
 
 
+@dataclass(frozen=True)
+class BrainSearchResult:
+    contexts: tuple[BrainContext, ...]
+    truncated: bool
+    warnings: tuple[str, ...] = ()
+
+
 class BrainNavigator:
     """Read-only semantic navigation over one exact Repository Brain publication."""
 
@@ -102,6 +111,7 @@ class BrainNavigator:
         self,
         publication_path: Path,
         *,
+        repository_root: Path,
         embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         brain = _load_repository_brain(publication_path)
@@ -110,6 +120,7 @@ class BrainNavigator:
         index_path = _require_brain_index(brain, cache_root, provider)
 
         self._brain = brain
+        self._repository_root = repository_root.resolve()
         self._repository_revision = brain.manifest.repository_revision
         self._documents = {
             document.document_id: document for document in brain.documents
@@ -148,6 +159,73 @@ class BrainNavigator:
     def repository_revision(self) -> str:
         """Return the immutable repository revision bound to this Brain."""
         return self._repository_revision
+
+    def search_hybrid(
+        self,
+        query: str,
+        *,
+        limit: int = DEFAULT_BRAIN_RESULT_LIMIT,
+    ) -> BrainSearchResult:
+        """Retrieve bounded Brain context with lexical and dense ranking."""
+        query = query.strip()
+        if not query:
+            raise ValueError("Brain search query must be non-empty")
+        _validate_result_limit(limit)
+
+        bm25_candidates = self._bm25_candidates(query, None)
+        dense_candidates = self._dense_candidates(query, None)
+        warnings = (
+            ("dense Brain retrieval unavailable; used BM25 only",)
+            if dense_candidates is None
+            else ()
+        )
+        ranked = self._rank_candidates(
+            bm25_candidates,
+            dense_candidates or [],
+            Lens.UNDERSTAND,
+            hybrid=bool(dense_candidates),
+        )
+        passages = self._collapse_candidates(
+            ranked,
+            Lens.UNDERSTAND,
+            hybrid=bool(dense_candidates),
+            constraint=None,
+        )
+        return BrainSearchResult(
+            contexts=tuple(self._brain_context(item) for item in passages[:limit]),
+            truncated=len(passages) > limit,
+            warnings=warnings,
+        )
+
+    def search_lexical(
+        self,
+        identifiers: Sequence[str],
+        *,
+        limit: int = DEFAULT_BRAIN_RESULT_LIMIT,
+    ) -> BrainSearchResult:
+        """Retrieve Brain context mentioning concrete repository identifiers."""
+        _validate_result_limit(limit)
+        expression = _fts_identifier_query(identifiers)
+        if expression is None:
+            return BrainSearchResult(contexts=(), truncated=False)
+
+        candidates = self._bm25_expression_candidates(expression, None)
+        ranked = self._rank_candidates(
+            candidates,
+            [],
+            Lens.UNDERSTAND,
+            hybrid=False,
+        )
+        passages = self._collapse_candidates(
+            ranked,
+            Lens.UNDERSTAND,
+            hybrid=False,
+            constraint=None,
+        )
+        return BrainSearchResult(
+            contexts=tuple(self._brain_context(item) for item in passages[:limit]),
+            truncated=len(passages) > limit,
+        )
 
     def search(self, request: IntelligenceQueryRequest) -> IntelligenceResult:
         """Retrieve bounded contextual Brain passages for one consumption request."""
@@ -294,6 +372,13 @@ class BrainNavigator:
         expression = _fts_query(retrieval_text)
         if expression is None:
             return []
+        return self._bm25_expression_candidates(expression, constraint)
+
+    def _bm25_expression_candidates(
+        self,
+        expression: str,
+        constraint: _BrainConstraint | None,
+    ) -> list[_Candidate]:
         sql = f"""
             SELECT
                 chunks_fts.chunk_id,
@@ -575,6 +660,35 @@ class BrainNavigator:
             heading_path=passage.heading_path,
         )
 
+    def _brain_context(self, passage: _Passage) -> BrainContext:
+        document = self._require_document(passage.document_id)
+        document_path = (
+            Path(self._brain.manifest.memory_output_root) / document.relative_path
+        ).resolve()
+        try:
+            path = document_path.relative_to(self._repository_root).as_posix()
+        except ValueError:
+            raise ValueError(
+                "Brain artifact is outside the repository root: " f"{document_path}"
+            ) from None
+        heading = passage.heading_path or self._heading_for_range(
+            passage.document_id,
+            passage.start_line,
+            passage.end_line,
+        )
+        return BrainContext(
+            path=path,
+            heading=heading,
+            start_line=passage.start_line,
+            end_line=passage.end_line,
+            excerpt=_canonical_range(
+                document,
+                passage.start_line,
+                passage.end_line,
+            ),
+            semantic_owner=document.semantic_owner,
+        )
+
     def _context_item(
         self,
         document_id: str,
@@ -815,6 +929,31 @@ def _fts_query(retrieval_text: str) -> str | None:
     return " OR ".join(f'"{token}"' for token in tokens)
 
 
+def _fts_identifier_query(identifiers: Sequence[str]) -> str | None:
+    phrases: list[str] = []
+    seen: set[str] = set()
+    for identifier in identifiers:
+        tokens = [match.group(0) for match in _FTS_TOKEN.finditer(identifier.strip())]
+        if not tokens:
+            continue
+        phrase = " ".join(tokens)
+        identity = phrase.casefold()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        phrases.append(phrase.replace('"', '""'))
+    if not phrases:
+        return None
+    return " OR ".join(f'"{phrase}"' for phrase in phrases)
+
+
+def _validate_result_limit(limit: int) -> None:
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("Brain result limit must be a positive integer")
+    if limit > MAX_BRAIN_RESULT_LIMIT:
+        raise ValueError(f"Brain result limit must be at most {MAX_BRAIN_RESULT_LIMIT}")
+
+
 def _stable_scope_text(value: object) -> str:
     if isinstance(value, str):
         return value
@@ -915,4 +1054,4 @@ def _require_brain_index(
     return require_brain_index(brain, cache_root, provider)
 
 
-__all__ = ["BrainNavigator"]
+__all__ = ["BrainNavigator", "BrainSearchResult"]

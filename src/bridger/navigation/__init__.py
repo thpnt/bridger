@@ -12,7 +12,7 @@ from bridger.contracts.navigation import (
     RepositorySearchKind,
     SourceContentMatch,
 )
-from bridger.navigation.brain import BrainNavigator
+from bridger.navigation.brain import BrainNavigator, BrainSearchResult
 from bridger.navigation.bridger import BridgerNavigator
 from bridger.navigation.navigator import RepositoryNavigator
 from bridger.navigation.tools import NAVIGATION_TOOL_IDS, build_navigation_tools
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 __all__ = [
     "CompositeEntityView",
     "BrainNavigator",
+    "BrainSearchResult",
     "BridgerNavigator",
     "FileOverview",
     "GraphCommunityView",

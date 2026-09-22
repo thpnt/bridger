@@ -23,6 +23,7 @@ from bridger.contracts._legacy_consumption import (
     ScopeRef,
     Substrate,
 )
+from bridger.contracts.consumption import BrainContext
 from bridger.contracts.repository_brain import RepositoryBrainManifest
 from bridger.navigation import BrainNavigator
 from bridger.repository_brain.index import BrainIndexError, build_brain_index
@@ -171,6 +172,7 @@ def _navigator(
     )
     navigator = BrainNavigator(
         tmp_path / "repository-brain.json",
+        repository_root=tmp_path,
         embedding_provider=provider,
     )
     expected_index = (
@@ -207,6 +209,7 @@ def test_construction_requires_prepared_index_without_creating_it(
     with pytest.raises(BrainIndexError, match="compatible.*unavailable"):
         BrainNavigator(
             tmp_path / "repository-brain.json",
+            repository_root=tmp_path,
             embedding_provider=_FakeEmbeddingProvider(),
         )
 
@@ -341,6 +344,63 @@ def test_lexical_index_without_vectors_never_attempts_dense_retrieval(
 
     assert result.items[0].title == "Retry Policy"
     assert provider.query_calls == []
+
+
+def test_hybrid_search_returns_native_brain_context_and_dense_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loaded_brain: LoadedRepositoryBrain,
+) -> None:
+    provider = _FakeEmbeddingProvider(fail_queries=True)
+    navigator = _navigator(tmp_path, monkeypatch, loaded_brain, provider)
+
+    result = navigator.search_hybrid("  TargetPhase  ", limit=1)
+
+    assert result.contexts == (
+        BrainContext(
+            path=".bridger/memory/architecture/target-phase.md",
+            heading="TargetPhase",
+            start_line=1,
+            end_line=3,
+            excerpt="# TargetPhase\n\nLifecycle details live here.\n",
+            semantic_owner="architecture",
+        ),
+    )
+    assert result.truncated
+    assert result.warnings == ("dense Brain retrieval unavailable; used BM25 only",)
+    assert provider.query_calls == ["TargetPhase"]
+
+
+def test_lexical_search_uses_identifier_phrases_and_never_embeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loaded_brain: LoadedRepositoryBrain,
+) -> None:
+    provider = _FakeEmbeddingProvider(fail_queries=True)
+    navigator = _navigator(tmp_path, monkeypatch, loaded_brain, provider)
+
+    result = navigator.search_lexical(
+        [
+            " src/bridger/navigation/brain.py ",
+            "SRC/BRIDGER/NAVIGATION/BRAIN.PY",
+            "",
+        ]
+    )
+
+    assert [context.heading for context in result.contexts] == ["Navigation Module"]
+    assert result.contexts[0].path == ".bridger/memory/interfaces/navigation.md"
+    assert not result.truncated
+    assert result.warnings == ()
+    assert provider.query_calls == []
+
+
+def test_identifier_query_keeps_each_identifier_as_one_phrase() -> None:
+    assert (
+        brain_module._fts_identifier_query(
+            ["CallManager", "CallSession", "src/calls/CallManager.py"]
+        )
+        == '"CallManager" OR "CallSession" OR "src calls CallManager py"'
+    )
 
 
 def test_hybrid_search_retrieves_lexical_and_semantic_passages_with_stable_refs(

@@ -59,7 +59,10 @@ def load_bridger_navigator(
         graph_build,
         overlay,
     )
-    brain_navigator = BrainNavigator(selected_publication)
+    brain_navigator = BrainNavigator(
+        selected_publication,
+        repository_root=context.root_path,
+    )
     try:
         return BridgerNavigator(brain_navigator, repository_navigator)
     except BaseException:
