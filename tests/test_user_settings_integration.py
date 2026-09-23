@@ -24,8 +24,7 @@ def test_init_reasoning_precedence(
     expected: ReasoningEffort,
 ) -> None:
     (tmp_path / "config.toml").write_text(
-        "schema_version = 1\n[openai]\n"
-        'model = "configured-model"\nreasoning = "medium"\n'
+        'schema_version = 1\n[openai]\nmodel = "gpt-5.6-terra"\nreasoning = "medium"\n'
     )
     monkeypatch.setattr(config.platformdirs, "user_config_path", lambda _: tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -36,7 +35,7 @@ def test_init_reasoning_precedence(
     result = runner.invoke(cli.app, ["init", *arguments])
     assert result.exit_code == 0, result.output
     assert captured[0].reasoning_effort is expected  # type: ignore[union-attr]
-    assert captured[0].openai_model == "configured-model"  # type: ignore[union-attr]
+    assert captured[0].openai_model == "gpt-5.6-terra"  # type: ignore[union-attr]
 
 
 def test_invalid_config_fails_before_init_work(
