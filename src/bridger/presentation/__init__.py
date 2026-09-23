@@ -1,4 +1,4 @@
-"""Stateless presentation of canonical Bridger intelligence results."""
+"""Stateless presentation of canonical Bridger consumption results."""
 
 from bridger.presentation.json import render_intelligence_json
 from bridger.presentation.markdown import render_intelligence_markdown

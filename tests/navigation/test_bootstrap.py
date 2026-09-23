@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import bridger.navigation.bootstrap as bootstrap_module
-from bridger.contracts.consumption import (
+from bridger.contracts._legacy_consumption import (
     Authority,
     BridgerRef,
     BridgerRefKind,
@@ -32,8 +32,9 @@ REVISION = "a" * 40
 class _FakeBrain:
     repository_revision = REVISION
 
-    def __init__(self, publication_path: Path) -> None:
+    def __init__(self, publication_path: Path, *, repository_root: Path) -> None:
         self.publication_path = publication_path
+        self.repository_root = repository_root
         self.closed = False
 
     def close(self) -> None:
@@ -115,7 +116,7 @@ def _install_runtime(
     manifest: SimpleNamespace,
 ) -> tuple[list[Path], _FakeBrain]:
     selected_paths: list[Path] = []
-    brain = _FakeBrain(publication)
+    brain = _FakeBrain(publication, repository_root=repository_root)
     context = SimpleNamespace(root_path=repository_root, revision=REVISION)
 
     monkeypatch.setattr(bootstrap_module, "resolve_repository", lambda _root: context)
@@ -156,7 +157,12 @@ def _install_runtime(
         lambda *_args: None,
     )
     monkeypatch.setattr(bootstrap_module, "RepositoryNavigator", _FakeRepository)
-    monkeypatch.setattr(bootstrap_module, "BrainNavigator", lambda _path: brain)
+
+    def open_brain(_path: Path, *, repository_root: Path) -> _FakeBrain:
+        assert repository_root == context.root_path
+        return brain
+
+    monkeypatch.setattr(bootstrap_module, "BrainNavigator", open_brain)
     return selected_paths, brain
 
 

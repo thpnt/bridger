@@ -8,6 +8,7 @@ dependencies = [
     "black>=26.5.1",
     "graspologic>=3.4,<4",
     "huggingface-hub>=0.34",
+    "mcp>=2,<3",
     "networkx>=3.4",
     "numpy>=1.21,<2.5",
     "openai>=2.43.0",

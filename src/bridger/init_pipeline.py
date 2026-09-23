@@ -282,6 +282,7 @@ def build_repository_brain(
         graph_build = create_graph_snapshot(
             context,
             file_index,
+            symbol_index,
             graph,
             diagnostics,
             derived_state,

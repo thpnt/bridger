@@ -1,267 +1,213 @@
-"""Deterministic Markdown presentation for Bridger intelligence results."""
+"""Deterministic Markdown presentation for canonical consumption results."""
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping, Sequence
-from typing import Any, TypeGuard
+from collections.abc import Sequence
 
 from bridger.contracts.consumption import (
-    BridgerRef,
-    BridgerRefKind,
-    IntelligenceItem,
-    IntelligenceResult,
-    ScopeRef,
+    BrainContext,
+    GraphEdge,
+    GraphNode,
+    ImpactGraph,
+    ImpactNode,
+    ImpactResult,
+    UnderstandGraphContext,
+    UnderstandResult,
 )
 
-_GRAPH_KINDS = frozenset(
-    {
-        BridgerRefKind.NODE,
-        BridgerRefKind.EDGE,
-        BridgerRefKind.HYPEREDGE,
-        BridgerRefKind.COMMUNITY,
-        BridgerRefKind.GRAPH,
-    }
-)
-
-_FIELD_LABELS = {
-    "deterministic_label": "Label",
-    "in_degree": "In degree",
-    "out_degree": "Out degree",
-    "source_node_id": "Source node",
-    "target_node_id": "Target node",
-    "source_path": "File",
-    "symbol_ids": "Symbols",
-    "graph_node_ids": "Graph nodes",
-    "members_truncated": "Members truncated",
-    "symbols_truncated": "Symbols truncated",
-    "graph_nodes_truncated": "Graph nodes truncated",
-}
+_IMPACT_NOTE = "Potential structural impact; not guaranteed semantic breakage."
 
 
-def render_intelligence_markdown(result: IntelligenceResult) -> str:
-    """Render an already-complete result without retrieval or interpretation."""
+def render_intelligence_markdown(
+    result: UnderstandResult | ImpactResult,
+) -> str:
+    """Render a canonical UNDERSTAND or IMPACT result as compact Markdown."""
+    if isinstance(result, UnderstandResult):
+        return _render_understand(result)
+    return _render_impact(result)
+
+
+def _render_understand(result: UnderstandResult) -> str:
     lines = [
-        _result_heading(result),
-        "",
-        f"Repository revision: {result.repository_revision}",
+        "# UNDERSTAND",
+        _state_line(result),
+        _completeness_line(result),
     ]
-
-    for item in result.items:
-        lines.extend(["", *_render_item(item)])
-
-    lines.extend(["", "## Completeness", "", *_render_completeness(result)])
+    _append_truncation_note(lines, result)
+    _append_warnings(lines, result.warnings)
+    lines.extend(["", "## Brain", ""])
+    lines.extend(_render_brain_contexts(result.brain_context) or ["No matches."])
+    lines.extend(["", "## Graph", ""])
+    lines.extend(_render_graph(result.graph_context) or ["No matches."])
     return "\n".join(lines) + "\n"
 
 
-def _result_heading(result: IntelligenceResult) -> str:
-    if result.operation.value == "read":
-        read_descriptor = f" — {result.items[0].title}" if result.items else ""
-        return f"# READ{read_descriptor}"
+def _render_impact(result: ImpactResult) -> str:
+    lines = ["# IMPACT", _IMPACT_NOTE, _state_line(result)]
 
-    lens = result.lens.value.upper() if result.lens is not None else "RESULT"
-    descriptor: str | None = result.query or _scope_descriptor(result.scope)
-    return f"# {lens}{f' — {descriptor}' if descriptor else ''}"
+    if result.resolution_issues:
+        _append_warnings(lines, result.warnings)
+        lines.extend(["", "Resolution failed; traversal not executed.", "", "Issues:"])
+        for issue in result.resolution_issues:
+            lines.append(f"{issue.selector} | {issue.reason}")
+            for candidate in issue.candidates:
+                name = candidate.qualified_name or candidate.name
+                coordinate = _format_coordinate(
+                    candidate.path, candidate.start_line, candidate.end_line
+                )
+                line = f"  {candidate.symbol_id} | {name} | {candidate.kind}"
+                if coordinate:
+                    line += f" | {coordinate}"
+                lines.append(line)
+        return "\n".join(lines) + "\n"
 
+    graph = result.affected_graph
+    assert graph is not None
+    aliases = _node_aliases(graph.nodes)
+    lines.append(_completeness_line(result))
+    _append_truncation_note(lines, result)
+    _append_warnings(lines, result.warnings)
+    lines.extend(["", "Roots:"])
+    for root in result.resolved_roots:
+        root_aliases = " ".join(aliases[node_id] for node_id in root.graph_node_ids)
+        lines.append(f"{root.selector} -> {root_aliases}")
 
-def _scope_descriptor(scope: ScopeRef | None) -> str | None:
-    if scope is None:
-        return None
-    if scope.value is None:
-        return scope.kind.value
-    if isinstance(scope.value, str):
-        return f"{scope.kind.value}: {scope.value}"
-    return f"{scope.kind.value}: {_compact_json(scope.value)}"
-
-
-def _render_item(item: IntelligenceItem) -> list[str]:
-    lines = [f"## {item.title}", "", f"**Kind:** {_kind_label(item.kind)}"]
-    lines.extend(_optional_metadata(item))
-
-    if item.kind in _GRAPH_KINDS and _is_mapping(item.data):
-        lines.extend(_render_graph_data(item.data))
-    elif item.kind is BridgerRefKind.FILE and _is_mapping(item.data):
-        lines.extend(_render_file_data(item.data))
-    else:
-        if item.content is not None:
-            lines.extend(["", item.content])
-        if item.data is not None:
-            lines.extend(["", "### Data", "", *_render_value(item.data)])
-    return lines
-
-
-def _optional_metadata(item: IntelligenceItem) -> list[str]:
-    lines: list[str] = []
-    if item.semantic_owner is not None:
-        lines.append(f"**Semantic owner:** {item.semantic_owner}")
-    lines.append(f"**Ref:** `{_format_ref(item.ref)}`")
-
-    provenance = item.provenance
-    source = f"{_humanize(provenance.substrate.value)} · {provenance.authority.value}"
-    lines.append(f"**Source:** {source}")
-    if provenance.confidence is not None:
-        lines.append(f"**Confidence:** {provenance.confidence}")
-    if provenance.uncertainty is not None:
-        lines.append(f"**Uncertainty:** {provenance.uncertainty}")
-
-    refs = (
-        ("Document", item.document_ref),
-        ("Context", item.context_ref),
+    lines.extend(["", "## Affected graph", ""])
+    lines.extend(_render_graph(graph, impact=True) or ["No matches."])
+    lines.extend(["", "## Brain enrichment", ""])
+    lines.extend(
+        _render_brain_contexts(result.brain_enrichment) or ["No lexical matches."]
     )
-    for label, ref in refs:
-        if ref is not None:
-            lines.append(f"**{label}:** `{_format_ref(ref)}`")
-    for label, values in (
-        ("Matched claims", item.matched_claim_refs),
-        ("Evidence", item.evidence_refs),
-        ("Related", item.related_refs),
-    ):
-        if values:
-            lines.append(
-                f"**{label}:** " + ", ".join(f"`{_format_ref(ref)}`" for ref in values)
-            )
-    return ["", *lines]
+    return "\n".join(lines) + "\n"
 
 
-def _render_graph_data(data: Mapping[str, Any]) -> list[str]:
+def _state_line(result: UnderstandResult | ImpactResult) -> str:
+    revision = result.revision
+    return (
+        f"State: {revision.repository_id}@{revision.repository_revision} "
+        f"| graph={revision.graph_snapshot_id} "
+        f"| overlay={revision.enrichment_overlay_id}"
+    )
+
+
+def _completeness_line(result: UnderstandResult | ImpactResult) -> str:
+    brain = "no" if result.completeness.brain_truncated else "yes"
+    graph = "no" if result.completeness.graph_truncated else "yes"
+    return f"Complete: brain={brain} | graph={graph}"
+
+
+def _append_truncation_note(
+    lines: list[str], result: UnderstandResult | ImpactResult
+) -> None:
+    if result.completeness.brain_truncated or result.completeness.graph_truncated:
+        lines.append("Note: truncated sections may omit relevant results.")
+
+
+def _append_warnings(lines: list[str], warnings: list[str]) -> None:
+    lines.extend(f"Warning: {warning}" for warning in warnings)
+
+
+def _render_brain_contexts(contexts: list[BrainContext]) -> list[str]:
     lines: list[str] = []
-    identity = {key: data[key] for key in ("target_type", "target_ref") if key in data}
-    if identity:
-        lines.extend(["", "### Graph identity", "", *_render_mapping(identity)])
-
-    deterministic = data.get("deterministic")
-    if deterministic is not None:
-        lines.extend(["", "### Deterministic graph", "", *_render_value(deterministic)])
-
-    enrichment = data.get("enrichment")
-    if enrichment:
+    for context in contexts:
+        parts = [
+            f"`{_format_coordinate(context.path, context.start_line, context.end_line)}`"
+        ]
+        if context.heading:
+            parts.append(context.heading)
+        if context.semantic_owner:
+            parts.append(context.semantic_owner)
+        lines.append(" | ".join(parts))
         lines.extend(
-            ["", "### Enrichment (AI-derived)", "", *_render_value(enrichment)]
+            f"> {excerpt_line}" if excerpt_line else ">"
+            for excerpt_line in context.excerpt.split("\n")
         )
-
-    remaining = {
-        key: value
-        for key, value in data.items()
-        if key not in {"target_type", "target_ref", "deterministic", "enrichment"}
-        and value is not None
-    }
-    if remaining:
-        lines.extend(["", "### Data", "", *_render_mapping(remaining)])
     return lines
 
 
-def _render_file_data(data: Mapping[str, Any]) -> list[str]:
+def _render_graph(
+    graph: UnderstandGraphContext | ImpactGraph,
+    *,
+    impact: bool = False,
+) -> list[str]:
+    if not graph.nodes:
+        return []
+
+    aliases = _node_aliases(graph.nodes)
     lines: list[str] = []
-    file_metadata = data.get("file")
-    if file_metadata is not None:
-        lines.extend(["", "### File metadata", "", *_render_value(file_metadata)])
+    if isinstance(graph, UnderstandGraphContext) and graph.seed_node_ids:
+        seeds = " ".join(aliases[node_id] for node_id in graph.seed_node_ids)
+        lines.extend([f"Seeds: {seeds}", ""])
 
-    for key, heading in (
-        ("symbol_ids", "Symbols"),
-        ("graph_node_ids", "Graph nodes"),
-    ):
-        value = data.get(key)
-        if value:
-            lines.extend(["", f"### {heading}", "", *_render_value(value)])
+    lines.append("Nodes:")
+    for node in graph.nodes:
+        lines.append(_format_node(node, aliases[node.node_id], impact=impact))
 
-    remaining = {
-        key: value
-        for key, value in data.items()
-        if key not in {"file", "symbol_ids", "graph_node_ids"} and value is not None
-    }
-    if remaining:
-        lines.extend(["", "### Data", "", *_render_mapping(remaining)])
+    if graph.edges:
+        lines.extend(["", "Edges:"])
+        lines.extend(_format_edge(edge, aliases) for edge in graph.edges)
+
+    if isinstance(graph, ImpactGraph) and graph.important_node_ids:
+        important = " ".join(aliases[node_id] for node_id in graph.important_node_ids)
+        lines.extend(["", f"Important: {important}"])
+
+    if graph.communities:
+        communities = " | ".join(
+            f"C{community.community_id}={community.label}"
+            for community in graph.communities
+        )
+        lines.extend(["", f"Communities: {communities}"])
     return lines
 
 
-def _render_completeness(result: IntelligenceResult) -> list[str]:
-    completeness = result.completeness
-    lines = [f"{completeness.returned_count} results returned."]
-    lines.append(f"Truncated: {_boolean(completeness.truncated)}.")
-    lines.append(f"More available: {_boolean(completeness.more_available)}.")
-    if completeness.more_available:
-        lines.append("Additional relevant information is available.")
-    elif not completeness.truncated:
-        lines.append("Result is complete within the requested operation.")
-    return lines
+def _node_aliases(nodes: Sequence[GraphNode]) -> dict[str, str]:
+    return {node.node_id: f"N{index}" for index, node in enumerate(nodes, start=1)}
 
 
-def _render_value(value: Any, indent: int = 0) -> list[str]:
-    if isinstance(value, Mapping):
-        return _render_mapping(value, indent)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return _render_list(value, indent)
-    return [f"{'  ' * indent}- {_scalar_text(value)}"]
+def _format_node(node: GraphNode, alias: str, *, impact: bool = False) -> str:
+    depth = f" [d{node.depth}]" if impact and isinstance(node, ImpactNode) else ""
+    line = f"{alias}{depth} {node.label}"
+    coordinate = _format_coordinate(
+        node.source_path, node.source_start_line, node.source_end_line
+    )
+    if coordinate:
+        line += f" | {coordinate}"
+    if node.node_id != node.label:
+        line += f" | id={node.node_id}"
+    if node.symbol_ids:
+        line += f" | sym={','.join(node.symbol_ids)}"
+    if node.community_id is not None:
+        line += f" | C{node.community_id}"
+    return line
 
 
-def _render_mapping(value: Mapping[str, Any], indent: int = 0) -> list[str]:
-    lines: list[str] = []
-    prefix = "  " * indent
-    for key, nested in value.items():
-        if nested is None or nested == [] or nested == {}:
-            continue
-        label = _field_label(str(key))
-        if _is_scalar(nested):
-            lines.append(f"{prefix}- {label}: {_scalar_text(nested)}")
-            continue
-        lines.append(f"{prefix}- {label}:")
-        lines.extend(_render_value(nested, indent + 1))
-    return lines
+def _format_edge(edge: GraphEdge, aliases: dict[str, str]) -> str:
+    line = (
+        f"{aliases[edge.source_node_id]} -{edge.relation}-> "
+        f"{aliases[edge.target_node_id]}"
+    )
+    coordinate = _format_coordinate(
+        edge.evidence_path, edge.evidence_start_line, edge.evidence_end_line
+    )
+    if coordinate:
+        line += f" @ {coordinate}"
+    if edge.evidence:
+        line += f" | {edge.evidence}"
+    return line
 
 
-def _render_list(value: Sequence[Any], indent: int = 0) -> list[str]:
-    lines: list[str] = []
-    prefix = "  " * indent
-    for entry in value:
-        if entry is None:
-            continue
-        if _is_scalar(entry):
-            lines.append(f"{prefix}- {_scalar_text(entry)}")
-        else:
-            lines.append(f"{prefix}-")
-            lines.extend(_render_value(entry, indent + 1))
-    return lines
-
-
-def _format_ref(ref: BridgerRef) -> str:
-    target = _compact_json(ref.target_ref)
-    return f"{ref.kind.value}:{target}@{ref.repository_revision}"
-
-
-def _compact_json(value: Any) -> str:
-    if isinstance(value, BridgerRef):
-        value = value.model_dump(mode="json")
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _kind_label(kind: BridgerRefKind) -> str:
-    return _humanize(kind.value).capitalize()
-
-
-def _field_label(key: str) -> str:
-    return _FIELD_LABELS.get(key, _humanize(key).capitalize())
-
-
-def _humanize(value: str) -> str:
-    return value.replace("_", " ")
-
-
-def _scalar_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return _compact_json(value)
-
-
-def _is_scalar(value: Any) -> bool:
-    return value is None or isinstance(value, (bool, int, float, str))
-
-
-def _is_mapping(value: Any) -> TypeGuard[Mapping[str, Any]]:
-    return isinstance(value, Mapping)
-
-
-def _boolean(value: bool) -> str:
-    return "yes" if value else "no"
+def _format_coordinate(
+    path: str | None,
+    start_line: int | None = None,
+    end_line: int | None = None,
+) -> str | None:
+    if path is None:
+        return None
+    if start_line is None:
+        return path
+    if end_line == start_line:
+        return f"{path}:L{start_line}"
+    return f"{path}:L{start_line}-L{end_line}"
 
 
 __all__ = ["render_intelligence_markdown"]
