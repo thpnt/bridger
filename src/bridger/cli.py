@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
-from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
 
 from bridger.auth_cli import app as auth_app
+from bridger.cli_console import console
 from bridger.cli_progress import RichInitProgressPresenter
+from bridger.config_cli import config_app
 from bridger.contracts.consumption import ImpactResult, UnderstandResult
 from bridger.init_pipeline import (
     InitMode,
@@ -32,8 +33,8 @@ app = typer.Typer(
     help="Build and query evidence-backed repository knowledge.",
     rich_markup_mode="rich",
 )
-console = Console()
 app.add_typer(auth_app, name="auth")
+app.add_typer(config_app, name="config")
 
 
 @app.command("init")

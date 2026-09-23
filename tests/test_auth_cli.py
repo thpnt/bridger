@@ -58,7 +58,7 @@ def test_set_key_creates_user_config(
     result = runner.invoke(cli.app, ["auth", "set-key"], input="secret-value\n")
     assert result.exit_code == 0, result.output
     assert config_path.exists()
-    assert config.load_config().openai.model == "gpt-5.6"
+    assert config.load_config().openai.model == "gpt-6-sol"
     assert "secret-value" not in config_path.read_text()
 
 

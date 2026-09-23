@@ -2,12 +2,16 @@
 
 import tomllib
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import platformdirs
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 _BUNDLED_CONFIG_PATH = Path(__file__).with_name("config.toml")
+ModelPreset = Literal["gpt-6-luna", "gpt-6-sol", "gpt-5.6-terra"]
+ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh"]
+MODEL_PRESETS = get_args(ModelPreset)
+REASONING_EFFORTS = get_args(ReasoningEffort)
 
 
 class BridgerConfigurationError(RuntimeError):
@@ -17,15 +21,8 @@ class BridgerConfigurationError(RuntimeError):
 class OpenAIConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model: str = Field(min_length=1)
-    reasoning: Literal["none", "low", "medium", "high", "xhigh"]
-
-    @field_validator("model")
-    @classmethod
-    def non_blank_model(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("must not be blank")
-        return value
+    model: ModelPreset
+    reasoning: ReasoningEffort
 
 
 class BridgerConfig(BaseModel):
@@ -72,6 +69,31 @@ def ensure_user_config() -> Path:
             f"Could not create Bridger configuration: {path}\n{error}"
         ) from error
     return path
+
+
+def update_openai_setting(
+    setting: Literal["model", "reasoning"], value: str
+) -> BridgerConfig:
+    """Update one validated OpenAI setting and persist the full config."""
+    config = load_config()
+    updated_openai = config.openai.model_copy(update={setting: value})
+    updated = config.model_copy(update={"openai": updated_openai})
+    # model_copy does not validate updates, so validate before writing.
+    path = get_config_path()
+    updated = _validate_config(updated.model_dump(), path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "schema_version = 1\n\n"
+            "[openai]\n"
+            f'model = "{updated.openai.model}"\n'
+            f'reasoning = "{updated.openai.reasoning}"\n'
+        )
+    except OSError as error:
+        raise BridgerConfigurationError(
+            f"Could not write Bridger configuration: {path}\n{error}"
+        ) from error
+    return updated
 
 
 def _read_toml(path: Path) -> dict[str, object]:

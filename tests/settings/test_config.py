@@ -15,34 +15,36 @@ def test_missing_config_uses_existing_reasoning_default(config_path: Path) -> No
     loaded = config.load_config()
     assert loaded.schema_version == 1
     assert loaded.openai.reasoning == "xhigh"
-    assert loaded.openai.model == "gpt-5.6"
+    assert loaded.openai.model == "gpt-6-sol"
     assert not config_path.exists()
 
 
 def test_valid_config_loads_values(config_path: Path) -> None:
     config_path.write_text(
-        'schema_version = 1\n[openai]\nmodel = "test-model"\nreasoning = "medium"\n'
+        'schema_version = 1\n[openai]\nmodel = "gpt-6-luna"\nreasoning = "medium"\n'
     )
     loaded = config.load_config()
-    assert loaded.openai.model == "test-model"
+    assert loaded.openai.model == "gpt-6-luna"
     assert loaded.openai.reasoning == "medium"
 
 
 def test_partial_user_config_inherits_bundled_model(config_path: Path) -> None:
     config_path.write_text('schema_version = 1\n[openai]\nreasoning = "medium"\n')
     loaded = config.load_config()
-    assert loaded.openai.model == "gpt-5.6"
+    assert loaded.openai.model == "gpt-6-sol"
     assert loaded.openai.reasoning == "medium"
 
 
 def test_setup_copies_bundled_config_once(config_path: Path) -> None:
     assert config.ensure_user_config() == config_path
     original = config_path.read_text()
-    assert 'model = "gpt-5.6"' in original
+    assert 'model = "gpt-6-sol"' in original
     assert 'reasoning = "xhigh"' in original
-    config_path.write_text('schema_version = 1\n[openai]\nmodel = "custom"\n')
+    config_path.write_text('schema_version = 1\n[openai]\nmodel = "gpt-6-luna"\n')
     config.ensure_user_config()
-    assert config_path.read_text() == 'schema_version = 1\n[openai]\nmodel = "custom"\n'
+    assert config_path.read_text() == (
+        'schema_version = 1\n[openai]\nmodel = "gpt-6-luna"\n'
+    )
 
 
 @pytest.mark.parametrize(
@@ -55,6 +57,10 @@ def test_setup_copies_bundled_config_once(config_path: Path) -> None:
         (
             'schema_version = 1\n[openai]\nreasoning = "super-high"\n',
             "openai.reasoning",
+        ),
+        (
+            'schema_version = 1\n[openai]\nmodel = "unsupported"\n',
+            "openai.model",
         ),
         ("schema_version = 1\n[openai]\nmodel = 4\n", "openai.model"),
         ('schema_version = 1\n[openai]\napi_key = "secret"\n', "openai.api_key"),
