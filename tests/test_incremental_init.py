@@ -19,6 +19,11 @@ from bridger.init_pipeline import (
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def configured_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+
 def test_compatible_current_brain_wins_before_recovery_and_rebuild(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

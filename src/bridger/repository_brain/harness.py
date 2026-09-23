@@ -728,7 +728,9 @@ def _target_artifacts_root(configuration: InitRunConfiguration) -> Path:
 
 
 def _resolve_model_profile(configuration: InitRunConfiguration) -> LLMProfile:
-    profile = resolve_llm_profile(configuration.model_profile_name)
+    profile = resolve_llm_profile(
+        configuration.model_profile_name, model=configuration.openai_model
+    )
     if configuration.test_budgets:
         return profile.model_copy(update={"max_output_tokens": 2_048})
     return profile

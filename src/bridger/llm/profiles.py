@@ -3,6 +3,7 @@ import os
 from pydantic import BaseModel, ConfigDict, Field
 
 from bridger.llm.errors import LLMConfigurationError
+from bridger.settings.config import load_config
 
 
 class RetryPolicy(BaseModel):
@@ -26,16 +27,16 @@ class LLMProfile(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
 
 
-def resolve_llm_profile(profile_name: str = "balanced") -> LLMProfile:
-    """Resolve a deterministic profile from environment-backed settings."""
+def resolve_llm_profile(
+    profile_name: str = "balanced", *, model: str | None = None
+) -> LLMProfile:
+    """Resolve the balanced profile with the existing environment override."""
     if profile_name != "balanced":
         raise LLMConfigurationError(f"Unsupported LLM profile: {profile_name}")
 
-    model = os.environ.get("BRIDGER_OPENAI_MODEL", "").strip()
-    if not model:
-        raise LLMConfigurationError(
-            "BRIDGER_OPENAI_MODEL is required for the balanced LLM profile"
-        )
+    model = os.environ.get("BRIDGER_OPENAI_MODEL", "").strip() or model
+    if model is None:
+        model = load_config().openai.model
     model_context_window_tokens = _optional_int(
         "BRIDGER_OPENAI_MODEL_CONTEXT_WINDOW_TOKENS"
     )

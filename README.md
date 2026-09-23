@@ -19,9 +19,33 @@ Install Bridger once, then initialize each repository you want it to serve:
 
 ```shell
 uv tool install bridger
+bridger auth set-key
 cd ~/my-project
-bridger init
+bridger init --reasoning low
 ```
+
+`bridger auth set-key` prompts for a hidden OpenAI API key and stores it in the
+system credential store. Use `bridger auth status` to check the active source or
+`bridger auth remove` to delete the stored key. For CI or a temporary override,
+set `OPENAI_API_KEY` instead. It takes precedence over the stored credential.
+Bridger does not store API keys in the repository, `.bridger/`, or `config.toml`.
+
+Successful `bridger auth set-key` setup creates an editable, non-secret
+`config.toml` in the platform-specific Bridger user config directory if one
+does not exist. Its initial contents come from Bridger's bundled `config.toml`:
+
+```toml
+schema_version = 1
+
+[openai]
+model = "gpt-5.6"
+reasoning = "xhigh"
+```
+
+`--reasoning` overrides the configured reasoning value. Existing
+`BRIDGER_OPENAI_MODEL` environment settings continue to override the configured
+model. Without a user config file, Bridger reads the bundled defaults and does
+not create files in the home directory.
 
 Register a local stdio MCP server in your coding agent. For Codex, a minimal
 configuration is:
