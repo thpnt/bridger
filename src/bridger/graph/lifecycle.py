@@ -33,6 +33,7 @@ from bridger.contracts.graph import (
     RepositoryGraph,
 )
 from bridger.contracts.repository import RepositoryContext
+from bridger.contracts.symbols import SymbolIndex
 from bridger.extraction.graphify import (
     adapt_file_index_to_graphify,
     run_graphify_extraction,
@@ -45,7 +46,7 @@ from bridger.graph.intelligence import (
 )
 from bridger.graph.validation import validate_graph_intelligence
 
-SNAPSHOT_SCHEMA_VERSION = "1"
+SNAPSHOT_SCHEMA_VERSION = "2"
 GRAPH_CONTRACT_VERSION = "bridger.graph.v1"
 GRAPHIFY_ENGINE_VERSION = "0.9.32"
 EXTRACTOR_FINGERPRINT = "graphify-ast-extract-v1"
@@ -56,6 +57,7 @@ _PAYLOAD_ARTIFACTS = (
     "structural.json",
     "diagnostics.json",
     "graphify-manifest.json",
+    "symbol-index.json",
     "GRAPH_REPORT.md",
 )
 _REQUIRED_ARTIFACTS = _PAYLOAD_ARTIFACTS + ("snapshot-manifest.json",)
@@ -64,6 +66,7 @@ _REQUIRED_ARTIFACTS = _PAYLOAD_ARTIFACTS + ("snapshot-manifest.json",)
 def create_graph_snapshot(
     context: RepositoryContext,
     file_index: FileIndex,
+    symbol_index: SymbolIndex,
     graph: RepositoryGraph,
     diagnostics: GraphDiagnostics,
     graphify_derived_state: dict[str, Any],
@@ -78,6 +81,7 @@ def create_graph_snapshot(
     if diagnostics.publication_blocking:
         raise InvalidGraphSnapshot("publication-blocking graph diagnostics")
     _validate_context_and_index(context, file_index)
+    _validate_symbol_index(context, symbol_index)
     if type(graph) is not nx.DiGraph:
         raise InvalidGraphSnapshot("graph is not a networkx.DiGraph")
 
@@ -92,6 +96,7 @@ def create_graph_snapshot(
                 staging,
                 context,
                 file_index,
+                symbol_index,
                 graph,
                 diagnostics,
                 graphify_derived_state,
@@ -178,6 +183,23 @@ def load_graph_snapshot_structural_state(
     return _normalize_structural_state(structural)
 
 
+def load_graph_snapshot_symbol_index(graph_build: GraphBuildResult) -> SymbolIndex:
+    """Load the declaration index validated as part of this graph snapshot."""
+    _graph, manifest, _diagnostics, _structural = _read_validated_snapshot(
+        graph_build.snapshot_root
+    )
+    if manifest != graph_build.manifest:
+        raise InvalidGraphSnapshot("GraphBuildResult does not match its snapshot")
+    try:
+        symbol_index = SymbolIndex.model_validate(
+            _read_json_object(graph_build.snapshot_root / "symbol-index.json")
+        )
+    except (ValueError, TypeError) as error:
+        raise InvalidGraphSnapshot("persisted SymbolIndex is invalid") from error
+    _validate_symbol_index(_context_from_manifest(manifest), symbol_index)
+    return symbol_index
+
+
 def validate_graph_snapshot(
     snapshot_root: Path,
     *,
@@ -198,6 +220,7 @@ def update_graph_snapshot(
     previous_manifest: GraphSnapshotManifest,
     target_context: RepositoryContext,
     target_file_index: FileIndex,
+    target_symbol_index: SymbolIndex,
     changes: FileChangeSet,
     config: GraphConstructionConfig,
     output_root: Path,
@@ -211,6 +234,7 @@ def update_graph_snapshot(
         previous_manifest,
         target_context,
         target_file_index,
+        target_symbol_index,
         changes,
         config,
     )
@@ -276,6 +300,7 @@ def update_graph_snapshot(
     return create_graph_snapshot(
         target_context,
         target_file_index,
+        target_symbol_index,
         merged_graph,
         diagnostics,
         derived_state,
@@ -291,6 +316,7 @@ def _write_snapshot_payload(
     staging: Path,
     context: RepositoryContext,
     file_index: FileIndex,
+    symbol_index: SymbolIndex,
     graph: RepositoryGraph,
     diagnostics: GraphDiagnostics,
     derived_state: dict[str, Any],
@@ -312,6 +338,7 @@ def _write_snapshot_payload(
     _write_json(staging / "structural.json", derived_state)
     _write_json(staging / "diagnostics.json", diagnostics.model_dump(mode="json"))
     _write_json(staging / "graphify-manifest.json", graphify_manifest)
+    _write_json(staging / "symbol-index.json", symbol_index.model_dump(mode="json"))
     report = generate_report(
         graph,
         communities,
@@ -428,6 +455,13 @@ def _validate_manifest(
         actual = _artifact_reference(snapshot_root / name, name)
         if actual != reference:
             raise InvalidGraphSnapshot(f"artifact integrity check failed: {name}")
+    try:
+        symbol_index = SymbolIndex.model_validate(
+            _read_json_object(snapshot_root / "symbol-index.json")
+        )
+    except (ValueError, TypeError) as error:
+        raise InvalidGraphSnapshot("persisted SymbolIndex is invalid") from error
+    _validate_symbol_index(_context_from_manifest(manifest), symbol_index)
     if expected_context is not None:
         _validate_context_identity(manifest, expected_context)
     if expected_file_index is not None:
@@ -632,6 +666,7 @@ def _require_incremental_compatibility(
     previous: GraphSnapshotManifest,
     context: RepositoryContext,
     file_index: FileIndex,
+    symbol_index: SymbolIndex,
     changes: FileChangeSet,
     config: GraphConstructionConfig,
 ) -> None:
@@ -658,6 +693,10 @@ def _require_incremental_compatibility(
         mismatches.append("FileChangeSet.target_revision")
     if file_index.revision != context.revision:
         mismatches.append("target FileIndex revision")
+    try:
+        _validate_symbol_index(context, symbol_index)
+    except InvalidGraphSnapshot:
+        mismatches.append("target SymbolIndex identity")
     if (
         file_index.repository_id != context.repository_id
         or file_index.scope_path != context.scope_path
@@ -679,6 +718,18 @@ def _validate_context_and_index(
         or context.scope_path != file_index.scope_path
     ):
         raise InvalidGraphSnapshot("RepositoryContext and FileIndex identity differ")
+
+
+def _validate_symbol_index(
+    context: RepositoryContext,
+    symbol_index: SymbolIndex,
+) -> None:
+    if (
+        context.repository_id != symbol_index.repository_id
+        or context.revision != symbol_index.revision
+        or context.scope_path != symbol_index.scope_path
+    ):
+        raise InvalidGraphSnapshot("RepositoryContext and SymbolIndex identity differ")
 
 
 def _validate_context_identity(

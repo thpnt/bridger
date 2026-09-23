@@ -5,9 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from bridger.contracts.files import IntakeConfiguration
-from bridger.extraction.service import extract_repository_facts
 from bridger.graph.enrichment import load_graph_enrichment, validate_graph_enrichment
-from bridger.graph.lifecycle import load_graph_snapshot_from_path
+from bridger.graph.lifecycle import (
+    load_graph_snapshot_from_path,
+    load_graph_snapshot_symbol_index,
+    validate_graph_snapshot,
+)
 from bridger.navigation.brain import BrainNavigator
 from bridger.navigation.bridger import BridgerNavigator
 from bridger.navigation.navigator import RepositoryNavigator
@@ -35,14 +38,15 @@ def load_bridger_navigator(
         )
 
     file_index = build_file_index(context, IntakeConfiguration())
-    symbol_index, _report, _graphify_extraction = extract_repository_facts(
-        context,
-        file_index,
-        cache_root=bridger_root / "cache",
-    )
     graph_build = load_graph_snapshot_from_path(
         Path(published_brain.manifest.graph_snapshot_root)
     )
+    validate_graph_snapshot(
+        graph_build.snapshot_root,
+        expected_context=context,
+        expected_file_index=file_index,
+    )
+    symbol_index = load_graph_snapshot_symbol_index(graph_build)
     overlay = load_graph_enrichment(
         bridger_root
         / "enrichment"

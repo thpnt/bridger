@@ -28,6 +28,7 @@ from bridger.graph.lifecycle import (
     load_graph_snapshot,
     load_graph_snapshot_from_path,
     load_graph_snapshot_structural_state,
+    load_graph_snapshot_symbol_index,
     update_graph_snapshot,
     validate_graph_snapshot,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "load_graph_snapshot",
     "load_graph_snapshot_from_path",
     "load_graph_snapshot_structural_state",
+    "load_graph_snapshot_symbol_index",
     "update_graph_snapshot",
     "validate_graph_enrichment",
     "validate_graph_intelligence",
