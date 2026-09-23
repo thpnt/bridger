@@ -36,6 +36,7 @@ class AffectedHit:
     # existing constructors/tests working; None falls back to the node's def line.
     via_file: "str | None" = None
     via_location: "str | None" = None
+    via_target_node_id: "str | None" = None
 
 
 def _node_label(graph: nx.Graph, node_id: str) -> str:
@@ -148,7 +149,8 @@ def affected_nodes(
     seed: str,
     *,
     relations: Iterable[str] = DEFAULT_AFFECTED_RELATIONS,
-    depth: int = 2,
+    depth: int | None = 2,
+    max_nodes: int | None = None,
 ) -> list[AffectedHit]:
     relation_set = set(relations)
     seen = {seed}
@@ -178,7 +180,7 @@ def affected_nodes(
 
     while queue:
         current, current_depth = queue.popleft()
-        if current_depth >= depth:
+        if depth is not None and current_depth >= depth:
             continue
         if hasattr(graph, "in_edges"):
             incoming = graph.in_edges(current, data=True)
@@ -204,8 +206,11 @@ def affected_nodes(
                 source, current_depth + 1, relation,
                 via_file=str(data.get("source_file") or "") or None,
                 via_location=str(data.get("source_location") or "") or None,
+                via_target_node_id=str(_target),
             )
             hits.append(hit)
+            if max_nodes is not None and len(hits) >= max_nodes:
+                return hits
             queue.append((source, current_depth + 1))
 
     return hits

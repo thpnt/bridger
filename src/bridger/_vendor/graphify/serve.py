@@ -9,6 +9,7 @@ from array import array
 from collections import OrderedDict
 from pathlib import Path
 import threading
+from dataclasses import dataclass
 from typing import NamedTuple
 import networkx as nx
 from networkx.readwrite import json_graph
@@ -927,6 +928,124 @@ def _dfs(G: nx.Graph, start_nodes: list[str], depth: int) -> tuple[set[str], lis
     return visited, edges_seen
 
 
+@dataclass(frozen=True)
+class QueryGraphSelection:
+    seed_node_ids: tuple[str, ...]
+    node_ids: tuple[str, ...]
+    edges: tuple[tuple[str, str], ...]
+
+
+def _ordered_subgraph_nodes(
+    G: nx.Graph,
+    nodes: set[str],
+    seeds: list[str],
+) -> list[str]:
+    seed_set = set(seeds)
+    seed_hits = [node_id for node_id in seeds if node_id in nodes]
+
+    def _adjacent(node_id: str):
+        if G.is_directed():
+            yield from G.successors(node_id)
+            yield from G.predecessors(node_id)
+        else:
+            yield from G.neighbors(node_id)
+
+    distances: dict[str, int] = {node_id: 0 for node_id in seed_hits}
+    frontier = seed_hits
+    distance = 0
+    while frontier:
+        distance += 1
+        next_frontier = []
+        for node_id in frontier:
+            for neighbor in _adjacent(node_id):
+                if neighbor in nodes and neighbor not in distances:
+                    distances[neighbor] = distance
+                    next_frontier.append(neighbor)
+        frontier = next_frontier
+
+    return seed_hits + sorted(
+        nodes - seed_set,
+        key=lambda node_id: (
+            distances.get(node_id, 1 << 30),
+            -G.degree(node_id),
+            str(node_id),
+        ),
+    )
+
+
+def _canonical_selection_edges(
+    G: nx.Graph,
+    nodes: set[str],
+    traversal_edges: list[tuple],
+) -> tuple[tuple[str, str], ...]:
+    if G.is_directed():
+        return tuple(
+            (str(source), str(target))
+            for source, target in sorted(G.edges(nodes))
+            if source != target and target in nodes
+        )
+
+    ordered: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for source, target in traversal_edges:
+        raw = G[source][target]
+        data = (
+            next(iter(raw.values()), {})
+            if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph))
+            else raw
+        )
+        canonical_source = str(data.get("_src", source))
+        canonical_target = str(data.get("_tgt", target))
+        if {canonical_source, canonical_target} != {source, target}:
+            canonical_source, canonical_target = str(source), str(target)
+        edge = (canonical_source, canonical_target)
+        if edge not in seen:
+            seen.add(edge)
+            ordered.append(edge)
+
+    return tuple(ordered)
+
+
+def query_graph_selection(
+    G: nx.Graph,
+    question: str,
+    *,
+    depth: int,
+    mode: str = "bfs",
+    context_filters: list[str] | None = None,
+) -> QueryGraphSelection:
+    terms = _query_terms(question)
+    qs = _score_query(G, terms, collect_per_term_seeds=True)
+    start_nodes = _pick_seeds(
+        qs.ranked,
+        G=G,
+        best_seed_by_term=qs.best_seed_by_term,
+    )
+    if not start_nodes:
+        return QueryGraphSelection((), (), ())
+
+    resolved_filters, _filter_source = _resolve_context_filters(
+        question, context_filters
+    )
+    filtered_graph = _filter_graph_by_context(G, resolved_filters)
+    traversal_graph = (
+        filtered_graph.to_undirected(as_view=True)
+        if filtered_graph.is_directed()
+        else filtered_graph
+    )
+    nodes, traversal_edges = (
+        _dfs(traversal_graph, start_nodes, depth)
+        if mode == "dfs"
+        else _bfs(traversal_graph, start_nodes, depth)
+    )
+    ordered_nodes = _ordered_subgraph_nodes(traversal_graph, nodes, start_nodes)
+    return QueryGraphSelection(
+        seed_node_ids=tuple(start_nodes),
+        node_ids=tuple(ordered_nodes),
+        edges=_canonical_selection_edges(filtered_graph, nodes, traversal_edges),
+    )
+
+
 def _subgraph_to_text(G: nx.Graph, nodes: set[str], edges: list[tuple], token_budget: int = 2000, *, seeds: list[str] | None = None) -> str:
     """Render subgraph as text, cutting at token_budget (approx 3 chars/token).
 
@@ -938,35 +1057,7 @@ def _subgraph_to_text(G: nx.Graph, nodes: set[str], edges: list[tuple], token_bu
     # Work-memory overlay (derived sidecar) stashed on the graph at load time.
     # Empty when no sidecar exists, so un-annotated output stays byte-identical.
     overlay = getattr(G, "graph", {}).get("_learning_overlay", {}) or {}
-    seed_set = set(seeds or [])
-    seed_hits = [n for n in (seeds or []) if n in nodes]
-    # Rank non-seed nodes by hop distance from the seeds so the node that answers
-    # the query (a direct hit or its close neighbors) survives the budget cut
-    # instead of being pushed past it by incidental high-degree hubs (#BUG2). BFS
-    # discovery order was discarded upstream (_bfs returns a set), so recompute
-    # layers here over BOTH edge directions. Deterministic: neighbor iteration is
-    # insertion-ordered and the sort key ends in str(n) (no hash-order).
-    def _adj(n):
-        if G.is_directed():
-            yield from G.successors(n)
-            yield from G.predecessors(n)
-        else:
-            yield from G.neighbors(n)
-    dist: dict[str, int] = {n: 0 for n in seed_hits}
-    frontier, hop = seed_hits, 0
-    while frontier:
-        hop += 1
-        nxt = []
-        for n in frontier:
-            for nb in _adj(n):
-                if nb in nodes and nb not in dist:
-                    dist[nb] = hop
-                    nxt.append(nb)
-        frontier = nxt
-    ordered = seed_hits + sorted(
-        nodes - seed_set,
-        key=lambda n: (dist.get(n, 1 << 30), -G.degree(n), str(n)),
-    )
+    ordered = _ordered_subgraph_nodes(G, nodes, seeds or [])
     for nid in ordered:
         d = G.nodes[nid]
         # Every LLM-derived field passes through sanitize_label before being
@@ -1091,20 +1182,20 @@ def _query_graph_text(
     token_budget: int = 2000,
     context_filters: list[str] | None = None,
 ) -> str:
-    terms = _query_terms(question)
-    # One graph scoring pass produces both the combined ranking (used to drive
-    # the gap-based seed selection below) and the per-token singleton winners
-    # (used by _pick_seeds' per-term guarantee). Previously this was T+1 passes
-    # — one combined + one per query token — re-walking the whole graph each
-    # time; on a 100k-node, three-term benchmark ~71% of scoring time was
-    # spent in those redundant per-term passes.
-    qs = _score_query(G, terms, collect_per_term_seeds=True)
-    start_nodes = _pick_seeds(qs.ranked, G=G, best_seed_by_term=qs.best_seed_by_term)
-    if not start_nodes:
+    selection = query_graph_selection(
+        G,
+        question,
+        depth=depth,
+        mode=mode,
+        context_filters=context_filters,
+    )
+    if not selection.seed_node_ids:
         return "No matching nodes found."
     resolved_filters, filter_source = _resolve_context_filters(question, context_filters)
     traversal_graph = _filter_graph_by_context(G, resolved_filters)
-    nodes, edges = _dfs(traversal_graph, start_nodes, depth) if mode == "dfs" else _bfs(traversal_graph, start_nodes, depth)
+    start_nodes = list(selection.seed_node_ids)
+    nodes = set(selection.node_ids)
+    edges = list(selection.edges)
     header_parts = [
         f"Traversal: {mode.upper()} depth={depth}",
         f"Start: {[G.nodes[n].get('label', n) for n in start_nodes]}",

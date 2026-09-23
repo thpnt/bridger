@@ -5,12 +5,23 @@ import re
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 from pydantic import JsonValue
 from rapidfuzz.fuzz import WRatio
 
+from bridger.contracts.consumption import (
+    GraphCommunity,
+    GraphEdge,
+    GraphNode,
+    ImpactGraph,
+    ImpactNode,
+    ImpactResolutionIssue,
+    ResolvedImpactRoot,
+    UnderstandGraphContext,
+)
 from bridger.contracts.enrichment import (
     EnrichmentRecord,
     EnrichmentTargetReference,
@@ -42,6 +53,7 @@ from bridger.graph.lifecycle import (
     load_graph_snapshot_structural_state,
     validate_graph_snapshot,
 )
+from bridger.navigation import graphify_adapter
 from bridger.repository.errors import FileIndexPathMismatchError, RepositoryError
 from bridger.repository.reader import read_file
 
@@ -61,8 +73,27 @@ MAX_RANGE_LINES = 200
 MAX_EVIDENCE_BYTES = 256 * 1024
 SOURCE_SEARCH_BYTES_PER_FILE = 256 * 1024
 SOURCE_SEARCH_MAX_FILES = 500
+UNDERSTAND_GRAPH_DEPTH = 1
+UNDERSTAND_GRAPH_MAX_NODES = 50
+UNDERSTAND_GRAPH_MAX_EDGES = 100
+IMPACT_GRAPH_MAX_NODES = 500
+IMPACT_GRAPH_MAX_EDGES = 1_000
 
 _SOURCE_LOCATION = re.compile(r"^L?(\d+)(?:-L?(\d+))?$")
+
+
+@dataclass(frozen=True)
+class GraphQueryResult:
+    context: UnderstandGraphContext
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class RepositoryImpactResult:
+    resolved_roots: tuple[ResolvedImpactRoot, ...]
+    resolution_issues: tuple[ImpactResolutionIssue, ...]
+    affected_graph: ImpactGraph | None
+    truncated: bool
 
 
 class RepositoryNavigator:
@@ -131,6 +162,183 @@ class RepositoryNavigator:
             self._context.revision,
             self._graph_build.manifest.snapshot_id,
             self._enrichment_overlay_id,
+        )
+
+    def query_graph(self, query: str) -> GraphQueryResult:
+        """Return Graphify's bounded depth-one structural query context."""
+        if not query.strip():
+            raise ValueError("query must be non-empty")
+        selection = graphify_adapter.query_graph(
+            self._graph,
+            query,
+            depth=UNDERSTAND_GRAPH_DEPTH,
+        )
+        selected_node_ids = selection.node_ids[:UNDERSTAND_GRAPH_MAX_NODES]
+        selected_node_id_set = set(selected_node_ids)
+        eligible_edges = tuple(
+            edge
+            for edge in selection.edges
+            if edge[0] in selected_node_id_set and edge[1] in selected_node_id_set
+        )
+        selected_edges = eligible_edges[:UNDERSTAND_GRAPH_MAX_EDGES]
+        truncated = len(selected_node_ids) < len(selection.node_ids) or len(
+            selected_edges
+        ) < len(eligible_edges)
+        return GraphQueryResult(
+            context=UnderstandGraphContext(
+                seed_node_ids=[
+                    node_id
+                    for node_id in selection.seed_node_ids
+                    if node_id in selected_node_id_set
+                ],
+                nodes=[self._graph_node(node_id) for node_id in selected_node_ids],
+                edges=[self._graph_edge(*edge) for edge in selected_edges],
+                communities=self._graph_communities(selected_node_ids),
+            ),
+            truncated=truncated,
+        )
+
+    def impact(self, symbols: Sequence[str]) -> RepositoryImpactResult:
+        """Return the full Graphify structural blast radius for exact selectors."""
+        resolved_roots: list[ResolvedImpactRoot] = []
+        resolution_issues: list[ImpactResolutionIssue] = []
+        for selector in symbols:
+            resolved, issue = self._resolve_impact_selector(selector)
+            if resolved is not None:
+                resolved_roots.append(resolved)
+            if issue is not None:
+                resolution_issues.append(issue)
+
+        if resolution_issues:
+            return RepositoryImpactResult(
+                resolved_roots=tuple(resolved_roots),
+                resolution_issues=tuple(resolution_issues),
+                affected_graph=None,
+                truncated=False,
+            )
+
+        root_node_ids = list(
+            dict.fromkeys(
+                node_id for root in resolved_roots for node_id in root.graph_node_ids
+            )
+        )
+        depths = {node_id: 0 for node_id in root_node_ids}
+        traversal_edges: set[tuple[str, str, str]] = set()
+        for root_node_id in root_node_ids:
+            for hit in graphify_adapter.affected_nodes(self._graph, root_node_id):
+                previous_depth = depths.get(hit.node_id)
+                if previous_depth is None or hit.depth < previous_depth:
+                    depths[hit.node_id] = hit.depth
+                target_node_id = hit.via_target_node_id
+                if target_node_id is None:
+                    continue
+                traversal_edges.add((hit.node_id, target_node_id, hit.via_relation))
+
+        affected_node_ids = sorted(
+            (node_id for node_id in depths if node_id not in root_node_ids),
+            key=lambda node_id: (depths[node_id], node_id),
+        )
+        ordered_node_ids = [*root_node_ids, *affected_node_ids]
+        selected_node_ids = ordered_node_ids[:IMPACT_GRAPH_MAX_NODES]
+        selected_node_id_set = set(selected_node_ids)
+        eligible_edges = self._impact_edges(
+            selected_node_id_set,
+            traversal_edges,
+            max_edges=IMPACT_GRAPH_MAX_EDGES + 1,
+        )
+        selected_edges = eligible_edges[:IMPACT_GRAPH_MAX_EDGES]
+        truncated = len(selected_node_ids) < len(ordered_node_ids) or len(
+            selected_edges
+        ) < len(eligible_edges)
+        important_node_ids = [
+            node_id
+            for node_id in self._persisted_god_node_ids()
+            if node_id in selected_node_id_set
+        ]
+        return RepositoryImpactResult(
+            resolved_roots=tuple(resolved_roots),
+            resolution_issues=(),
+            affected_graph=ImpactGraph(
+                nodes=[
+                    ImpactNode(
+                        **self._graph_node(node_id).model_dump(),
+                        depth=depths[node_id],
+                    )
+                    for node_id in selected_node_ids
+                ],
+                edges=[
+                    self._graph_edge(source, target)
+                    for source, target, _relation in selected_edges
+                ],
+                communities=self._graph_communities(selected_node_ids),
+                important_node_ids=important_node_ids,
+            ),
+            truncated=truncated,
+        )
+
+    def _resolve_impact_selector(
+        self,
+        selector: str,
+    ) -> tuple[ResolvedImpactRoot | None, ImpactResolutionIssue | None]:
+        symbol = self._symbols_by_id.get(selector)
+        if symbol is not None:
+            return self._resolved_symbol_root(selector, symbol)
+
+        if selector in self._graph:
+            return (
+                ResolvedImpactRoot(
+                    selector=selector,
+                    symbol=None,
+                    graph_node_ids=[selector],
+                ),
+                None,
+            )
+
+        qualified_matches = [
+            symbol
+            for symbol in self._symbol_index.symbols
+            if symbol.qualified_name == selector
+        ]
+        if len(qualified_matches) == 1:
+            return self._resolved_symbol_root(selector, qualified_matches[0])
+        if len(qualified_matches) > 1:
+            return None, ImpactResolutionIssue(
+                selector=selector,
+                reason="ambiguous",
+                candidates=qualified_matches,
+            )
+
+        name_matches = [
+            symbol for symbol in self._symbol_index.symbols if symbol.name == selector
+        ]
+        if len(name_matches) == 1:
+            return self._resolved_symbol_root(selector, name_matches[0])
+        if len(name_matches) > 1:
+            return None, ImpactResolutionIssue(
+                selector=selector,
+                reason="ambiguous",
+                candidates=name_matches,
+            )
+        return None, ImpactResolutionIssue(selector=selector, reason="not_found")
+
+    def _resolved_symbol_root(
+        self,
+        selector: str,
+        symbol: SymbolRecord,
+    ) -> tuple[ResolvedImpactRoot | None, ImpactResolutionIssue | None]:
+        graph_node_ids = self._symbol_node_ids[symbol.symbol_id]
+        if not graph_node_ids:
+            return None, ImpactResolutionIssue(
+                selector=selector,
+                reason="not_in_graph",
+            )
+        return (
+            ResolvedImpactRoot(
+                selector=selector,
+                symbol=symbol,
+                graph_node_ids=graph_node_ids,
+            ),
+            None,
         )
 
     def search_repository(
@@ -870,6 +1078,104 @@ class RepositoryNavigator:
                 "community_id": self._node_communities.get(node_id),
             },
         )
+
+    def _graph_node(self, node_id: str) -> GraphNode:
+        attributes = self._graph.nodes[node_id]
+        source_path = self._canonical_graph_file_path(attributes.get("source_file"))
+        source_range = _node_source_range(attributes) if source_path else None
+        start_line = source_range[0] if source_range else None
+        end_line = (source_range[1] or source_range[0]) if source_range else None
+        return GraphNode(
+            node_id=node_id,
+            label=str(attributes.get("label") or node_id),
+            symbol_ids=self._node_symbol_ids[node_id],
+            source_path=source_path,
+            source_start_line=start_line,
+            source_end_line=end_line,
+            community_id=self._node_communities.get(node_id),
+        )
+
+    def _graph_edge(self, source: str, target: str) -> GraphEdge:
+        attributes = self._graph[source][target]
+        evidence_path = self._canonical_graph_file_path(attributes.get("source_file"))
+        evidence_range = (
+            _node_source_range({"source_location": attributes.get("source_location")})
+            if evidence_path
+            else None
+        )
+        start_line = evidence_range[0] if evidence_range else None
+        end_line = evidence_range[1] or evidence_range[0] if evidence_range else None
+        context = attributes.get("context")
+        return GraphEdge(
+            source_node_id=source,
+            target_node_id=target,
+            relation=str(attributes.get("relation") or ""),
+            evidence=(
+                str(context).strip()
+                if context is not None and str(context).strip()
+                else None
+            ),
+            evidence_path=evidence_path,
+            evidence_start_line=start_line,
+            evidence_end_line=end_line,
+        )
+
+    def _graph_communities(
+        self,
+        node_ids: Iterable[str],
+    ) -> list[GraphCommunity]:
+        community_ids = sorted(
+            {
+                community_id
+                for node_id in node_ids
+                if (community_id := self._node_communities.get(node_id)) is not None
+            }
+        )
+        labels = cast(dict[int, str], self._structural["community_labels"])
+        return [
+            GraphCommunity(community_id=community_id, label=labels[community_id])
+            for community_id in community_ids
+        ]
+
+    def _impact_edges(
+        self,
+        selected_node_ids: set[str],
+        traversal_edges: set[tuple[str, str, str]],
+        *,
+        max_edges: int,
+    ) -> list[tuple[str, str, str]]:
+        required = sorted(
+            edge
+            for edge in traversal_edges
+            if edge[0] in selected_node_ids and edge[1] in selected_node_ids
+        )
+        selected = list(required)
+        if len(selected) >= max_edges:
+            return selected[:max_edges]
+        seen = set(required)
+        allowed_relations = set(graphify_adapter.DEFAULT_AFFECTED_RELATIONS)
+        for source, target, attributes in sorted(
+            self._graph.edges(data=True), key=_edge_data_sort_key
+        ):
+            relation = str(attributes.get("relation", ""))
+            edge = (source, target, relation)
+            if (
+                source in selected_node_ids
+                and target in selected_node_ids
+                and relation in allowed_relations
+                and edge not in seen
+            ):
+                seen.add(edge)
+                selected.append(edge)
+                if len(selected) >= max_edges:
+                    break
+        return selected
+
+    def _persisted_god_node_ids(self) -> list[str]:
+        return [
+            str(record["id"])
+            for record in cast(list[dict[str, Any]], self._structural["god_nodes"])
+        ]
 
     def _edge_view(
         self, source: str, target: str, relation: str
