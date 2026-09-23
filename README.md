@@ -23,11 +23,12 @@ uv run mypy src
 
 ```shell
 uv run bridger init
-uv run bridger init --fresh
-uv run bridger update
-uv run bridger prompt "Add feature X"
-uv run bridger inspect
+uv run bridger understand "How does repository initialization work?"
+uv run bridger impact RepositoryLoader
+uv run bridger understand "How does repository initialization work?" --json
 ```
 
-These commands intentionally perform no work while the new architecture is
-implemented.
+Run consumption commands from inside an initialized repository. UNDERSTAND
+combines Repository Brain knowledge with structural context. IMPACT accepts
+exact repository symbols and reports potential structural impact. Use `--json`
+for the canonical machine-readable result.
