@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -87,6 +88,19 @@ def _present(action: Callable[[], None]) -> None:
         action()
     except Exception:
         pass
+
+
+@app.command("mcp")
+def mcp_command(
+    repository: Annotated[
+        Path | None,
+        typer.Option("--repository", help="Repository location (defaults to cwd)."),
+    ] = None,
+) -> None:
+    """Serve the current repository to coding agents over MCP stdio."""
+    from bridger.mcp_server import run_mcp_server
+
+    run_mcp_server(repository or Path.cwd())
 
 
 @app.command()
