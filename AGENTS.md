@@ -43,7 +43,7 @@ Before implementing:
 - Do not refactor unrelated code.
 - Do not rename files unless explicitly requested.
 - Do not move files or reorganize folders unless the task requires it.
-- Preserve backward compatibility for API contracts unless explicitly asked to change them.
+- DO NOT preserve backward compatibility for API contracts unless explicitly asked to.
 - Prefer minimal diffs.
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
