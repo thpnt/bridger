@@ -79,6 +79,7 @@ class InitRunConfiguration:
     test_budgets: bool
     reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH
     fresh: bool = False
+    openai_model: str | None = None
 
     @property
     def graph_root(self) -> Path:
@@ -202,6 +203,7 @@ def resolve_init_configuration(
     model_profile_name: str = "balanced",
     reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH,
     fresh: bool = False,
+    openai_model: str | None = None,
 ) -> InitRunConfiguration:
     """Resolve all mode-specific behavior at the CLI/application boundary."""
     root = (repository_root or Path.cwd()).resolve()
@@ -214,6 +216,7 @@ def resolve_init_configuration(
         test_budgets=mode is InitMode.TEST,
         reasoning_effort=reasoning_effort,
         fresh=fresh,
+        openai_model=openai_model,
     )
 
 

@@ -47,6 +47,11 @@ _DEFAULT_TARGETS_ROOT = (
 )
 
 
+@pytest.fixture(autouse=True)
+def configured_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+
 def test_typed_stage_reporting_preserves_legacy_labels_and_is_best_effort() -> None:
     legacy: list[str] = []
     typed: list[InitStage] = []

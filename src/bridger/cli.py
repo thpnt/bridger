@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
 
+from bridger.auth_cli import app as auth_app
 from bridger.cli_progress import RichInitProgressPresenter
 from bridger.contracts.consumption import ImpactResult, UnderstandResult
 from bridger.init_pipeline import (
@@ -21,12 +22,18 @@ from bridger.init_pipeline import (
 )
 from bridger.navigation.bootstrap import load_bridger_navigator
 from bridger.presentation import render_intelligence_json, render_intelligence_markdown
+from bridger.settings.config import BridgerConfigurationError, load_config
+from bridger.settings.credentials import (
+    BridgerCredentialError,
+    resolve_openai_credential,
+)
 
 app = typer.Typer(
     help="Build and query evidence-backed repository knowledge.",
     rich_markup_mode="rich",
 )
 console = Console()
+app.add_typer(auth_app, name="auth")
 
 
 @app.command("init")
@@ -44,13 +51,13 @@ def init(
         ),
     ] = InitMode.FULL,
     reasoning: Annotated[
-        ReasoningEffort,
+        ReasoningEffort | None,
         typer.Option(
             "--reasoning",
             help="Memory-agent reasoning effort.",
             rich_help_panel="Execution",
         ),
-    ] = ReasoningEffort.XHIGH,
+    ] = None,
     fresh: Annotated[
         bool,
         typer.Option(
@@ -61,15 +68,24 @@ def init(
     ] = False,
 ) -> None:
     """Build the Repository Brain for the current Git repository."""
+    try:
+        user_config = load_config()
+        resolved_reasoning = reasoning or ReasoningEffort(user_config.openai.reasoning)
+        if mode is not InitMode.DETERMINISTIC:
+            resolve_openai_credential()
+    except (BridgerConfigurationError, BridgerCredentialError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
     configuration = resolve_init_configuration(
         mode,
-        reasoning_effort=reasoning,
+        reasoning_effort=resolved_reasoning,
         fresh=fresh,
+        openai_model=user_config.openai.model,
     )
     presenter = RichInitProgressPresenter(
         console=console,
         mode=mode,
-        reasoning=reasoning,
+        reasoning=resolved_reasoning,
     )
     _present(presenter.start)
     try:
