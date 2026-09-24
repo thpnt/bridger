@@ -1,3 +1,11 @@
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"invalid escape sequence.*",
+    category=SyntaxWarning,
+)
+
 import json
 from collections.abc import Callable
 from functools import partial
