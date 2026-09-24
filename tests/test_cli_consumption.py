@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from rich.text import Text
 from typer.testing import CliRunner
 
 import bridger.cli as cli
@@ -181,6 +182,30 @@ def test_operation_failures_go_to_stderr_and_close_navigator(monkeypatch) -> Non
         assert result.stdout == ""
         assert "Error: retrieval failed" in result.stderr
         assert navigator.closed
+
+
+def test_interactive_operation_failure_uses_stderr_rich_console(monkeypatch) -> None:
+    calls: list[object] = []
+
+    class InteractiveErrorConsole:
+        is_terminal = True
+
+        def print(self, value: object) -> None:
+            calls.append(value)
+
+    monkeypatch.setattr(cli, "error_console", InteractiveErrorConsole())
+    navigator = _Navigator(RuntimeError("unsupported snapshot manifest schema"))
+    monkeypatch.setattr(cli, "load_bridger_navigator", lambda _: navigator)
+
+    result = runner.invoke(cli.app, ["understand", "question"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert len(calls) == 1
+    assert isinstance(calls[0], Text)
+    assert calls[0].plain == "Error: unsupported snapshot manifest schema"
+    assert calls[0].style.bold
+    assert calls[0].style.color.name == "red"
 
 
 def test_bootstrap_failure_is_reported_on_stderr(monkeypatch) -> None:

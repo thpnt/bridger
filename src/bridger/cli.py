@@ -1,5 +1,4 @@
 import json
-import sys
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -10,7 +9,7 @@ from rich.markdown import Markdown
 from rich.text import Text
 
 from bridger.auth_cli import app as auth_app
-from bridger.cli_console import console
+from bridger.cli_console import console, error_console
 from bridger.cli_progress import RichInitProgressPresenter
 from bridger.config_cli import config_app
 from bridger.contracts.consumption import ImpactResult, UnderstandResult
@@ -170,8 +169,8 @@ def _print_consumption_result(
 
 def _fail_consumption(error: Exception) -> NoReturn:
     message = str(error) or type(error).__name__
-    if console.is_terminal:
-        console.print(Text(f"Error: {message}", style="bold red"), file=sys.stderr)
+    if error_console.is_terminal:
+        error_console.print(Text(f"Error: {message}", style="bold red"))
     else:
         typer.echo(f"Error: {message}", err=True)
     raise typer.Exit(code=1) from error
