@@ -346,6 +346,12 @@ async def run_memory_harness(
                     else:
                         with metrics.span("fleet_reconciliation"):
                             fleet_review = await reconcile()
+                    if fleet_review.verdict is ReviewVerdict.NEEDS_WORK:
+                        _refresh_target_states_from_persistence(
+                            store,
+                            target_specs,
+                            states_by_task,
+                        )
                     if fleet_review.verdict is ReviewVerdict.PASS:
                         accepted = accept_fleet(store, fleet_state)
                         notify_stage_started(
@@ -795,6 +801,29 @@ def _runnable_target_task_ids(
         target_states,
         persistence=store,
     )
+
+
+def _refresh_target_states_from_persistence(
+    store: FleetRuntimeStore,
+    target_specs: Sequence[TargetTaskSpec],
+    states_by_task: dict[str, TargetTaskState],
+) -> None:
+    """Refresh harness-owned target state objects from persisted authority."""
+    for spec in target_specs:
+        persisted = TargetTaskState.model_validate_json(
+            store.paths.target_state(spec).read_bytes()
+        )
+        current = states_by_task[spec.target_task_id]
+        if persisted.phase is TargetPhase.REPAIR:
+            current.open_finding_refs = persisted.open_finding_refs
+        elif persisted.phase is TargetPhase.FINALIZING:
+            current.pending_finalization_request_ref = (
+                persisted.pending_finalization_request_ref
+            )
+        elif persisted.phase is TargetPhase.ACCEPTED:
+            current.last_accepted_result_ref = persisted.last_accepted_result_ref
+        for field_name in type(current).model_fields:
+            setattr(current, field_name, getattr(persisted, field_name))
 
 
 def _is_resume_compatible(
