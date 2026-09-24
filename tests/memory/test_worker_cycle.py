@@ -91,6 +91,7 @@ from bridger.memory.runtime.worker_tools import (
     WORKER_TOOL_IDS,
 )
 from bridger.navigation.tools import NAVIGATION_TOOL_IDS
+from bridger.runtime_timing import RuntimeMetricsCollector
 
 _SOURCE = SourceBinding(
     repository_id="repository-1",
@@ -841,9 +842,16 @@ def test_redundant_target_prefix_returns_in_band_error_and_worker_continues(
         ]
     )
 
-    outcome = asyncio.run(fixture.runner([], client=client).run())
+    metrics = RuntimeMetricsCollector()
+    with metrics.activate(), metrics.target(fixture.target_spec.target_task_id):
+        outcome = asyncio.run(fixture.runner([], client=client).run())
 
     assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
+    assert [(call.call_id, call.status) for call in metrics.tool_calls] == [
+        ("list", "completed"),
+        ("bad-write", "failed"),
+        ("corrected-write", "completed"),
+    ]
     assert fixture.target_state.usage.tool_calls == 3
     assert len(fixture.target_state.artifact_refs) == 1
     assert (tmp_path / "workspace" / "runtime.md").is_file()
@@ -1714,9 +1722,27 @@ def test_multi_tool_operations_execute_sequentially_in_model_order(
         ]
     )
 
-    outcome = asyncio.run(runner.run())
+    metrics = RuntimeMetricsCollector()
+    with metrics.activate(), metrics.target(fixture.target_spec.target_task_id):
+        outcome = asyncio.run(runner.run())
 
     assert outcome is WorkerCycleOutcome.FINALIZATION_REQUESTED
+    assert [call.tool for call in metrics.tool_calls] == [
+        "list_target_artifacts",
+        "write_target_artifact",
+        "read_target_artifact",
+        "edit_target_artifact_range",
+    ]
+    assert all(
+        call.target_task_id == fixture.target_spec.target_task_id
+        for call in metrics.tool_calls
+    )
+    assert all(
+        call.cycle_id and call.status == "completed" for call in metrics.tool_calls
+    )
+    assert all(
+        call.duration_ms >= 0 and call.result_bytes for call in metrics.tool_calls
+    )
     assert fixture.target_state.artifact_refs[0].revision == 2
     assert (tmp_path / "workspace" / "ordered.md").read_text() == "first\nchanged\n"
 

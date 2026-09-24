@@ -36,6 +36,7 @@ from bridger.repository_brain.harness import (
     _target_budget_for,
     _worker_runtime_limits,
 )
+from bridger.repository_brain.runtime_metrics import load_runtime_metrics_report
 
 runner = CliRunner()
 _DEFAULT_TARGETS_ROOT = (
@@ -602,6 +603,11 @@ def test_deterministic_pipeline_never_enters_model_stages(
     assert result.graph_build is graph_build
     assert result.publication_path is None
     assert calls == []
+    assert result.runtime_metrics_report_path is not None
+    assert (
+        load_runtime_metrics_report(result.runtime_metrics_report_path).mode
+        == "deterministic"
+    )
 
 
 @pytest.mark.parametrize("mode", [InitMode.FULL, InitMode.TEST])
@@ -658,6 +664,11 @@ def test_model_modes_enter_the_shared_full_pipeline(
     )
 
     assert result.publication_path == tmp_path / "published" / "repository-brain.json"
+    assert result.runtime_metrics_report_path is not None
+    assert (
+        load_runtime_metrics_report(result.runtime_metrics_report_path).status
+        == "completed"
+    )
 
 
 def test_formats_normal_repository_brain_error() -> None:
@@ -795,6 +806,11 @@ def test_build_repository_brain_wraps_group_and_retains_original_cause(
     assert error.value.__cause__ is grouped_error
     assert "TargetReviewError: review failed" in str(error.value)
     assert "ValueError: bad reviewer reference" in str(error.value)
+    reports = list(
+        (tmp_path / ".bridger" / "runtime" / "metrics").glob("*/runtime-metrics.json")
+    )
+    assert len(reports) == 1
+    assert load_runtime_metrics_report(reports[0]).status == "failed"
 
 
 @pytest.mark.parametrize("mode", [InitMode.FULL, InitMode.TEST])

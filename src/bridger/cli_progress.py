@@ -36,6 +36,7 @@ from bridger.init_pipeline import (
     RepositoryBrainBuildResult,
 )
 from bridger.progress import InitStage
+from bridger.repository_brain.runtime_metrics import load_runtime_metrics_report
 from bridger.repository_brain.token_usage import load_token_usage_report
 
 BRIDGER_THEME = Theme(
@@ -329,6 +330,17 @@ class RichInitProgressPresenter:
     def succeeded(self, result: RepositoryBrainBuildResult) -> None:
         """Render final artifacts and the persisted model-token audit."""
         self._finish_live_dashboard()
+        if not result.reused and result.runtime_metrics_report_path is not None:
+            try:
+                self._render_runtime_metrics_report(result.runtime_metrics_report_path)
+            except Exception:
+                self._console.print(
+                    Text(
+                        "! Runtime report could not be rendered: "
+                        f"{result.runtime_metrics_report_path}",
+                        style="bridger.warning",
+                    )
+                )
         if result.publication_path is None:
             if not self._interactive:
                 self._current_stage = None
@@ -650,6 +662,41 @@ class RichInitProgressPresenter:
             "Token columns: input, cached input, derived uncached input, output"
         )
         self._console.print(Text(f"Token usage report: {path}"), soft_wrap=True)
+
+    def _render_runtime_metrics_report(self, path: Path) -> None:
+        report = load_runtime_metrics_report(path)
+        table = Table(title="Runtime")
+        table.add_column("Measure")
+        table.add_column("Value", justify="right")
+
+        def duration(ms: float) -> str:
+            seconds = round(ms / 1000)
+            minutes, seconds = divmod(seconds, 60)
+            hours, minutes = divmod(minutes, 60)
+            return (
+                f"{hours}h {minutes:02}m {seconds:02}s"
+                if hours
+                else f"{minutes}m {seconds:02}s"
+            )
+
+        for label, value in (
+            ("Total", report.total_duration_ms),
+            ("Model wait", report.model_wall_ms + report.retry_backoff_wall_ms),
+            ("Tool wait", report.tool_wall_ms),
+            ("Validation/review", report.validation_review_wall_ms),
+            ("Other harness", report.other_harness_ms),
+        ):
+            table.add_row(label, duration(value))
+        if report.targets:
+            slowest = max(report.targets, key=lambda target: target.active_step_ms)
+            table.add_row(
+                "Slowest target",
+                f"{slowest.target_id}  {duration(slowest.active_step_ms)}",
+            )
+        table.add_row("Effective speedup", f"{report.effective_parallel_speedup:.1f}x")
+        table.add_row("Barrier wait", duration(report.total_barrier_wait_ms))
+        self._console.print(table)
+        self._console.print(Text(f"Runtime report: {path}"), soft_wrap=True)
 
 
 __all__ = [

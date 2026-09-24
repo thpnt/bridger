@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -44,6 +44,7 @@ from bridger.memory.persistence.durability import (
 )
 from bridger.memory.persistence.store import require_path_segment
 from bridger.memory.targets import _resolve_catalog_definitions
+from bridger.runtime_timing import current_collector
 
 _ACTIVE_PHASES = {
     TargetPhase.SCHEDULED,
@@ -97,6 +98,25 @@ def create_checkpoint(
     questions: Mapping[str, OpenQuestion],
 ) -> TaskCheckpoint:
     """Publish one immutable exact target snapshot and select it atomically."""
+    metrics = current_collector()
+    with (
+        metrics.span("checkpoint", target_task_id=target_spec.target_task_id)
+        if metrics is not None
+        else nullcontext()
+    ):
+        return _create_checkpoint(
+            store, target_spec, target_state, completion_state, evidence, questions
+        )
+
+
+def _create_checkpoint(
+    store: FleetRuntimeStore,
+    target_spec: TargetTaskSpec,
+    target_state: TargetTaskState,
+    completion_state: TargetCompletionState,
+    evidence: Mapping[str, EvidenceReference],
+    questions: Mapping[str, OpenQuestion],
+) -> TaskCheckpoint:
     try:
         with store.target_lock(target_spec.target_task_id):
             checkpoint, after_state, writes = _prepare_checkpoint(

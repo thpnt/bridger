@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
 from uuid import uuid4
@@ -28,6 +29,7 @@ from bridger.contracts.memory.hydration import (
     WorkerProfile,
 )
 from bridger.contracts.memory.worker_cycle import EvidenceReference, OpenQuestion
+from bridger.contracts.runtime_metrics import ToolCall
 from bridger.llm.client import LLMClient
 from bridger.llm.errors import LLMError
 from bridger.llm.models import (
@@ -66,6 +68,7 @@ from bridger.memory.runtime.worker_tools import (
     YIELD_CYCLE_TOOL_ID,
     WorkerToolRuntime,
 )
+from bridger.runtime_timing import current_collector
 
 DEFAULT_TOOL_CONTEXT_SOFT_TOKENS = 16_000
 DEFAULT_TOOL_RESULT_MAX_BYTES = 32 * 1024
@@ -1052,8 +1055,12 @@ class WorkerRunner:
         self._cycle_turn = 0
         self._cycle_entry_usage = self._target_state.usage.model_copy(deep=True)
         outcome: WorkerCycleOutcome | None = None
+        metrics = current_collector()
         try:
-            outcome = await self._run_cycle()
+            with (
+                metrics.cycle(self._cycle_id) if metrics is not None else nullcontext()
+            ):
+                outcome = await self._run_cycle()
             return outcome
         finally:
             if outcome is not None and self._cycle_id is not None:
@@ -1283,11 +1290,54 @@ class WorkerRunner:
                             **project_tool_arguments(call),
                         },
                     )
-                    result = await self._tools.execute_operational(call)
+                    metrics = current_collector()
+                    tool_started_at = metrics.utc_now().isoformat() if metrics else ""
+                    tool_started_ns = metrics.clock_ns() if metrics else 0
+                    try:
+                        result = await self._tools.execute_operational(call)
+                    except BaseException:
+                        if metrics is not None:
+                            metrics.add_tool(
+                                ToolCall(
+                                    target_task_id=self._target_spec.target_task_id,
+                                    cycle_id=self._cycle_id,
+                                    tool=call.name,
+                                    call_id=call.id,
+                                    started_at=tool_started_at,
+                                    duration_ms=max(
+                                        0,
+                                        (metrics.clock_ns() - tool_started_ns)
+                                        / 1_000_000,
+                                    ),
+                                    status="failed",
+                                )
+                            )
+                        raise
+                    tool_duration_ms = (
+                        max(0, (metrics.clock_ns() - tool_started_ns) / 1_000_000)
+                        if metrics is not None
+                        else 0
+                    )
                     delivered = _bound_tool_result(
                         result,
                         maximum_bytes=self._limits.tool_result_max_bytes,
                     )
+                    if metrics is not None:
+                        metrics.add_tool(
+                            ToolCall(
+                                target_task_id=self._target_spec.target_task_id,
+                                cycle_id=self._cycle_id,
+                                tool=call.name,
+                                call_id=call.id,
+                                started_at=tool_started_at,
+                                duration_ms=tool_duration_ms,
+                                status="failed" if result.error else "completed",
+                                result_bytes=len(
+                                    orjson.dumps(delivered.model_dump(mode="json"))
+                                ),
+                                truncated=result != delivered,
+                            )
+                        )
                     raw_results.append(result)
                     results.append(delivered)
             except Exception as error:

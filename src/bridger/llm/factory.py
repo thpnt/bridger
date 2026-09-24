@@ -4,6 +4,7 @@ from bridger.llm.client import LLMClient
 from bridger.llm.errors import LLMConfigurationError
 from bridger.llm.profiles import LLMProfile, resolve_llm_profile
 from bridger.llm.providers.openai import OpenAILLMClient
+from bridger.runtime_timing import current_collector
 from bridger.settings.config import load_config
 from bridger.settings.credentials import resolve_openai_api_key
 
@@ -20,4 +21,6 @@ def create_llm_client_from_profile(profile: LLMProfile) -> LLMClient:
         raise LLMConfigurationError(f"Unsupported LLM provider: {profile.provider}")
 
     client = AsyncOpenAI(api_key=resolve_openai_api_key(), max_retries=0)
-    return OpenAILLMClient(openai_client=client, profile=profile)
+    return OpenAILLMClient(
+        openai_client=client, profile=profile, metrics=current_collector()
+    )

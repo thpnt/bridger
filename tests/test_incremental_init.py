@@ -102,6 +102,8 @@ def test_compatible_current_brain_wins_before_recovery_and_rebuild(
         token_usage_report_path=None,
         reused=True,
     )
+    assert result.runtime_metrics_report_path is not None
+    assert result.runtime_metrics_report_path.exists()
     assert validated == [
         (
             graph_build.snapshot_root,

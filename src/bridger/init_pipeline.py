@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -30,6 +30,11 @@ from bridger.repository_brain.publication import (
     resolve_current_repository_brain,
     set_current_repository_brain,
 )
+from bridger.repository_brain.runtime_metrics import (
+    build_runtime_metrics_report,
+    persist_runtime_metrics_report,
+)
+from bridger.runtime_timing import RuntimeMetricsCollector, current_collector
 
 _LEGACY_STAGE_LABELS = {
     InitStage.PREPARE_REPOSITORY: "Preparing repository",
@@ -96,6 +101,7 @@ class RepositoryBrainBuildResult:
     publication_path: Path | None = None
     token_usage_report_path: Path | None = None
     reused: bool = False
+    runtime_metrics_report_path: Path | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -227,8 +233,59 @@ def build_repository_brain(
     progress: InitProgressObserver | None = None,
 ) -> RepositoryBrainBuildResult:
     """Run the documented Repository Brain pipeline for one repository."""
+    metrics = RuntimeMetricsCollector()
+    with metrics.activate():
+        try:
+            result = _build_repository_brain(
+                configuration, on_stage=on_stage, progress=progress
+            )
+        except BaseException:
+            metrics.failed_stage = metrics.failed_stage or "init"
+            try:
+                report = build_runtime_metrics_report(
+                    metrics,
+                    bridger_root=configuration.bridger_root,
+                    mode=configuration.mode.value,
+                    fresh=configuration.fresh,
+                    model=metrics.model or configuration.openai_model,
+                    reasoning_effort=configuration.reasoning_effort.value,
+                    model_profile=configuration.model_profile_name,
+                    status="failed",
+                )
+                persist_runtime_metrics_report(report, configuration.bridger_root)
+            except Exception:
+                pass
+            raise
+        try:
+            report = build_runtime_metrics_report(
+                metrics,
+                bridger_root=configuration.bridger_root,
+                mode=configuration.mode.value,
+                fresh=configuration.fresh,
+                model=metrics.model or configuration.openai_model,
+                reasoning_effort=configuration.reasoning_effort.value,
+                model_profile=configuration.model_profile_name,
+                status="completed",
+            )
+            path = persist_runtime_metrics_report(report, configuration.bridger_root)
+        except Exception:
+            path = None
+        return replace(result, runtime_metrics_report_path=path)
+
+
+def _build_repository_brain(
+    configuration: InitRunConfiguration,
+    *,
+    on_stage: Callable[[str], None] | None = None,
+    progress: InitProgressObserver | None = None,
+) -> RepositoryBrainBuildResult:
+    metrics = current_collector()
+    assert metrics is not None
     _report_stage(on_stage, progress, InitStage.PREPARE_REPOSITORY)
-    context, file_index = prepare_repository(configuration.repository_root)
+    with metrics.span("prepare_repository"):
+        context, file_index = prepare_repository(configuration.repository_root)
+    metrics.repository_id = getattr(context, "repository_id", None)
+    metrics.revision = getattr(context, "revision", None)
     if configuration.mode is InitMode.FULL and not configuration.fresh:
         try:
             reused = _reuse_current_repository_brain(
@@ -240,19 +297,21 @@ def build_repository_brain(
             message = format_repository_brain_error(error)
             raise RepositoryBrainBuildError(message) from error
         if reused is not None:
+            metrics.reused = True
             _report_stage(on_stage, progress, InitStage.PREPARE_BRAIN_INDEX)
             try:
-                if progress is None:
-                    _ensure_repository_brain_index(
-                        configuration,
-                        reused.publication_path,
-                    )
-                else:
-                    _ensure_repository_brain_index(
-                        configuration,
-                        reused.publication_path,
-                        progress=progress,
-                    )
+                with metrics.span("brain_index"):
+                    if progress is None:
+                        _ensure_repository_brain_index(
+                            configuration,
+                            reused.publication_path,
+                        )
+                    else:
+                        _ensure_repository_brain_index(
+                            configuration,
+                            reused.publication_path,
+                            progress=progress,
+                        )
             except Exception as error:
                 message = format_repository_brain_error(error)
                 raise RepositoryBrainBuildError(message) from error
@@ -263,45 +322,53 @@ def build_repository_brain(
             from bridger.repository_brain.harness import discover_resumable_fleet
 
             recovery_spec = discover_resumable_fleet(configuration, context)
+            if recovery_spec is not None:
+                metrics.resumed = True
+                metrics.fleet_run_id = getattr(recovery_spec, "fleet_run_id", None)
         except Exception as error:
             message = format_repository_brain_error(error)
             raise RepositoryBrainBuildError(message) from error
     _report_stage(on_stage, progress, InitStage.EXTRACT_FACTS)
-    symbol_index, _report, graphify_extraction = extract_repository_facts(
-        context,
-        file_index,
-        cache_root=configuration.bridger_root / "cache",
-    )
+    with metrics.span("extract_facts"):
+        symbol_index, _report, graphify_extraction = extract_repository_facts(
+            context,
+            file_index,
+            cache_root=configuration.bridger_root / "cache",
+        )
     if recovery_spec is None:
         graph_configuration = GraphConstructionConfig()
         _report_stage(on_stage, progress, InitStage.BUILD_GRAPH)
-        graph, diagnostics, derived_state = build_graph_intelligence(
-            context,
-            file_index,
-            graphify_extraction,
-            graph_configuration,
-        )
+        with metrics.span("build_graph"):
+            graph, diagnostics, derived_state = build_graph_intelligence(
+                context,
+                file_index,
+                graphify_extraction,
+                graph_configuration,
+            )
         _report_stage(on_stage, progress, InitStage.PUBLISH_GRAPH)
-        graph_build = create_graph_snapshot(
-            context,
-            file_index,
-            symbol_index,
-            graph,
-            diagnostics,
-            derived_state,
-            graph_configuration,
-            configuration.graph_root,
-        )
+        with metrics.span("publish_graph"):
+            graph_build = create_graph_snapshot(
+                context,
+                file_index,
+                symbol_index,
+                graph,
+                diagnostics,
+                derived_state,
+                graph_configuration,
+                configuration.graph_root,
+            )
     else:
         try:
             from bridger.repository_brain.harness import load_recovery_model_layers
 
-            graph_build, profile, enrichment = load_recovery_model_layers(
-                configuration,
-                context,
-                file_index,
-                recovery_spec,
-            )
+            with metrics.span("model_enrichment"):
+                graph_build, profile, enrichment = load_recovery_model_layers(
+                    configuration,
+                    context,
+                    file_index,
+                    recovery_spec,
+                )
+            metrics.model = getattr(profile, "model", None)
         except Exception as error:
             message = format_repository_brain_error(error)
             raise RepositoryBrainBuildError(message) from error
@@ -318,21 +385,24 @@ def build_repository_brain(
         if recovery_spec is None:
             from bridger.repository_brain.harness import prepare_model_layers
 
-            profile, enrichment = prepare_model_layers(configuration, graph_build)
-        model_result: RepositoryBrainModelBuildResult | Path = asyncio.run(
-            _run_model_driven_pipeline(
-                configuration,
-                context,
-                file_index,
-                symbol_index,
-                graph_build,
-                profile,
-                enrichment,
-                on_stage,
-                progress,
-                recovery_spec,
+            with metrics.span("model_enrichment"):
+                profile, enrichment = prepare_model_layers(configuration, graph_build)
+            metrics.model = getattr(profile, "model", None)
+        with metrics.span("memory_fleet"):
+            model_result: RepositoryBrainModelBuildResult | Path = asyncio.run(
+                _run_model_driven_pipeline(
+                    configuration,
+                    context,
+                    file_index,
+                    symbol_index,
+                    graph_build,
+                    profile,
+                    enrichment,
+                    on_stage,
+                    progress,
+                    recovery_spec,
+                )
             )
-        )
         if isinstance(model_result, Path):
             publication_path = model_result
             token_usage_report_path = None
@@ -340,18 +410,20 @@ def build_repository_brain(
             publication_path = model_result.publication_path
             token_usage_report_path = model_result.token_usage_report_path
         _report_stage(on_stage, progress, InitStage.PREPARE_BRAIN_INDEX)
-        if progress is None:
-            _ensure_repository_brain_index(configuration, publication_path)
-        else:
-            _ensure_repository_brain_index(
-                configuration,
+        with metrics.span("brain_index"):
+            if progress is None:
+                _ensure_repository_brain_index(configuration, publication_path)
+            else:
+                _ensure_repository_brain_index(
+                    configuration,
+                    publication_path,
+                    progress=progress,
+                )
+        with metrics.span("brain_publication"):
+            set_current_repository_brain(
+                configuration.bridger_root,
                 publication_path,
-                progress=progress,
             )
-        set_current_repository_brain(
-            configuration.bridger_root,
-            publication_path,
-        )
     except Exception as error:
         message = format_repository_brain_error(error)
         raise RepositoryBrainBuildError(message) from error
@@ -401,6 +473,9 @@ def _reuse_current_repository_brain(
         or brain.manifest.memory_target_catalog_version != catalog.catalog_version
     ):
         return None
+    metrics = current_collector()
+    if metrics is not None:
+        metrics.fleet_run_id = getattr(brain.manifest, "fleet_run_id", None)
 
     graph_build = load_graph_snapshot(
         configuration.graph_root,

@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 from bridger.llm.errors import LLMError
+from bridger.runtime_timing import current_collector
 
 ResultT = TypeVar("ResultT")
 Sleep = Callable[[float], Awaitable[None]]
@@ -25,7 +26,11 @@ async def run_provider_with_retry(
     for attempt in range(1, 4):
         await before_attempt(attempt)
         try:
-            return await operation()
+            metrics = current_collector()
+            if metrics is None:
+                return await operation()
+            with metrics.attempt(attempt):
+                return await operation()
         except LLMError as error:
             error.attempt_count = attempt
             if not error.retryable or attempt == 3:
@@ -34,7 +39,15 @@ async def run_provider_with_retry(
             delay = float(retry_after) if retry_after is not None else float(attempt)
             if on_retry is not None:
                 await on_retry(attempt + 1, delay, error)
-            await sleep(delay)
+            metrics = current_collector()
+            started_ns = metrics.clock_ns() if metrics is not None else 0
+            try:
+                await sleep(delay)
+            finally:
+                if metrics is not None:
+                    metrics.add_backoff(
+                        max(0, (metrics.clock_ns() - started_ns) / 1_000_000)
+                    )
     raise AssertionError("provider retry loop exhausted without returning or raising")
 
 

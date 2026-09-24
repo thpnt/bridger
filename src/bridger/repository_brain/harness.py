@@ -27,13 +27,19 @@ from bridger.contracts.memory.core import (
     TargetTaskSpec,
     TargetTaskState,
 )
+from bridger.contracts.memory.fleet_review import FleetReviewVerdict
 from bridger.contracts.memory.hydration import (
     GraphOverview,
     PermissionProfile,
+    WorkerContext,
     WorkerInstructions,
     WorkerProfile,
 )
-from bridger.contracts.memory.review import ReviewerInstructions, ReviewVerdict
+from bridger.contracts.memory.review import (
+    ReviewerInstructions,
+    ReviewVerdict,
+    TargetReviewVerdict,
+)
 from bridger.contracts.memory.worker_cycle import EvidenceReference, OpenQuestion
 from bridger.contracts.repository import RepositoryContext
 from bridger.contracts.symbols import SymbolIndex
@@ -87,6 +93,7 @@ from bridger.progress import (
 from bridger.repository.reader import read_file
 from bridger.repository_brain.publication import publish_repository_brain
 from bridger.repository_brain.token_usage import persist_token_usage_report
+from bridger.runtime_timing import current_collector
 
 _PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "prompts"
 _TARGETS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "default-targets"
@@ -239,6 +246,15 @@ async def run_memory_harness(
         )
         if progress is not None:
             store.set_event_observer(progress.runtime_event)
+    metrics = current_collector()
+    if metrics is not None:
+        metrics.model = profile.model
+        metrics.fleet_run_id = fleet_spec.fleet_run_id
+        metrics.configured_concurrency = fleet_spec.max_concurrent_targets
+        metrics.resumed = recovery_spec is not None
+        metrics.target_ids = {
+            spec.target_task_id: spec.target_id for spec in target_specs
+        }
     client: LLMClient | None = None
     active_error: BaseException | None = None
     try:
@@ -294,47 +310,75 @@ async def run_memory_harness(
             if WorkerCycleOutcome.FLEET_BUDGET_STOP in outcomes:
                 store.exhaust_fleet_budget(fleet_state)
             if all(state.phase is TargetPhase.ACCEPTED for state in target_states):
-                fleet_validation = validate_fleet(store, fleet_state)
+                if metrics is None:
+                    fleet_validation = validate_fleet(store, fleet_state)
+                else:
+                    with metrics.span("fleet_validation"):
+                        fleet_validation = validate_fleet(store, fleet_state)
                 if fleet_validation.verdict.value == "pass":
-                    fleet_review = await reconcile_fleet(
-                        fleet_spec=fleet_spec,
-                        fleet_state=fleet_state,
-                        catalog=catalog,
-                        target_definitions=[
-                            definitions_by_id[target_id]
-                            for target_id in fleet_spec.target_ids
-                        ],
-                        reviewer_profile=reviewer_profile,
-                        reviewer_instructions=_read_prompt(
-                            _PROMPTS_ROOT / "reviewer" / "system.md"
-                        ),
-                        reconciliation_rubric=_read_prompt(
-                            _PROMPTS_ROOT / "reviewer" / "reconciliation.md"
-                        ),
-                        context_window_manager=ContextWindowManager(reviewer_profile),
-                        llm_client=client,
-                        coordinator=coordinator,
-                        persistence=store,
-                    )
+
+                    async def reconcile() -> FleetReviewVerdict:
+                        return await reconcile_fleet(
+                            fleet_spec=fleet_spec,
+                            fleet_state=fleet_state,
+                            catalog=catalog,
+                            target_definitions=[
+                                definitions_by_id[target_id]
+                                for target_id in fleet_spec.target_ids
+                            ],
+                            reviewer_profile=reviewer_profile,
+                            reviewer_instructions=_read_prompt(
+                                _PROMPTS_ROOT / "reviewer" / "system.md"
+                            ),
+                            reconciliation_rubric=_read_prompt(
+                                _PROMPTS_ROOT / "reviewer" / "reconciliation.md"
+                            ),
+                            context_window_manager=ContextWindowManager(
+                                reviewer_profile
+                            ),
+                            llm_client=client,
+                            coordinator=coordinator,
+                            persistence=store,
+                        )
+
+                    if metrics is None:
+                        fleet_review = await reconcile()
+                    else:
+                        with metrics.span("fleet_reconciliation"):
+                            fleet_review = await reconcile()
                     if fleet_review.verdict is ReviewVerdict.PASS:
                         accepted = accept_fleet(store, fleet_state)
                         notify_stage_started(
                             progress,
                             InitStage.PUBLISH_REPOSITORY_BRAIN,
                         )
-                        token_usage_report_path = persist_token_usage_report(
-                            configuration.mode.value,
-                            fleet_spec,
-                            store,
-                            enrichment,
-                        )
-                        publication_path = publish_repository_brain(
-                            graph_build,
-                            accepted,
-                            enrichment,
-                            output_root,
-                            runtime_root=Path(fleet_spec.runtime_root),
-                        )
+                        if metrics is None:
+                            token_usage_report_path = persist_token_usage_report(
+                                configuration.mode.value, fleet_spec, store, enrichment
+                            )
+                            publication_path = publish_repository_brain(
+                                graph_build,
+                                accepted,
+                                enrichment,
+                                output_root,
+                                runtime_root=Path(fleet_spec.runtime_root),
+                            )
+                        else:
+                            with metrics.span("token_report_persistence"):
+                                token_usage_report_path = persist_token_usage_report(
+                                    configuration.mode.value,
+                                    fleet_spec,
+                                    store,
+                                    enrichment,
+                                )
+                            with metrics.span("brain_publication"):
+                                publication_path = publish_repository_brain(
+                                    graph_build,
+                                    accepted,
+                                    enrichment,
+                                    output_root,
+                                    runtime_root=Path(fleet_spec.runtime_root),
+                                )
                         return RepositoryBrainModelBuildResult(
                             publication_path=publication_path,
                             token_usage_report_path=token_usage_report_path,
@@ -388,12 +432,21 @@ async def run_memory_harness(
                     )
         if active_error is not None and store is not None:
             try:
-                persist_token_usage_report(
-                    configuration.mode.value,
-                    fleet_spec,
-                    store,
-                    enrichment,
-                )
+                if metrics is None:
+                    persist_token_usage_report(
+                        configuration.mode.value,
+                        fleet_spec,
+                        store,
+                        enrichment,
+                    )
+                else:
+                    with metrics.span("token_report_persistence"):
+                        persist_token_usage_report(
+                            configuration.mode.value,
+                            fleet_spec,
+                            store,
+                            enrichment,
+                        )
             except BaseException as report_error:
                 active_error.add_note(
                     f"token usage report persistence also failed: {report_error!r}"
@@ -421,10 +474,31 @@ async def _run_target_batch(
     runtime: _TargetStepRuntime,
 ) -> list[WorkerCycleOutcome]:
     """Run one structured concurrent batch and join every admitted target step."""
-    tasks: list[asyncio.Task[WorkerCycleOutcome]] = []
-    async with asyncio.TaskGroup() as task_group:
-        for task_id in runnable:
-            tasks.append(task_group.create_task(_run_target_step(task_id, runtime)))
+    metrics = current_collector()
+
+    async def run_step(task_id: str) -> WorkerCycleOutcome:
+        if metrics is None:
+            return await _run_target_step(task_id, runtime)
+        with (
+            metrics.target(task_id),
+            metrics.span("target_step", target_task_id=task_id) as span,
+        ):
+            outcome = await _run_target_step(task_id, runtime)
+            span["outcome"] = outcome.value
+            return outcome
+
+    def create_tasks(
+        group: asyncio.TaskGroup,
+    ) -> list[asyncio.Task[WorkerCycleOutcome]]:
+        return [group.create_task(run_step(task_id)) for task_id in runnable]
+
+    if metrics is None:
+        async with asyncio.TaskGroup() as task_group:
+            tasks = create_tasks(task_group)
+    else:
+        with metrics.span("target_batch"):
+            async with asyncio.TaskGroup() as task_group:
+                tasks = create_tasks(task_group)
     return [task.result() for task in tasks]
 
 
@@ -438,48 +512,75 @@ async def _run_target_step(
     completion = runtime.completion_by_task[task_id]
     definition = runtime.definitions_by_id[spec.target_id]
     outcome = WorkerCycleOutcome.FINALIZATION_REQUESTED
+    metrics = current_collector()
     if state.phase is TargetPhase.SCHEDULED:
-        worker_context = compile_worker_context(
-            runtime.fleet_spec,
-            spec,
-            state,
-            completion,
-            runtime.catalog,
-            definition,
-            runtime.worker_profile,
-            runtime.permissions,
-            WorkerInstructions(
-                worker_profile_id=runtime.worker_profile.profile_id,
-                target_id=spec.target_id,
-                target_contract_version=spec.target_contract_version,
-                shared=_read_prompt(_PROMPTS_ROOT / "worker" / "system.md"),
-                target_specific=_read_prompt(
-                    _PROMPTS_ROOT / "worker" / "targets" / f"{spec.target_id}.md"
+
+        def hydrate() -> WorkerContext:
+            return compile_worker_context(
+                runtime.fleet_spec,
+                spec,
+                state,
+                completion,
+                runtime.catalog,
+                definition,
+                runtime.worker_profile,
+                runtime.permissions,
+                WorkerInstructions(
+                    worker_profile_id=runtime.worker_profile.profile_id,
+                    target_id=spec.target_id,
+                    target_contract_version=spec.target_contract_version,
+                    shared=_read_prompt(_PROMPTS_ROOT / "worker" / "system.md"),
+                    target_specific=_read_prompt(
+                        _PROMPTS_ROOT / "worker" / "targets" / f"{spec.target_id}.md"
+                    ),
                 ),
-            ),
-            context_window_manager=ContextWindowManager(runtime.worker_profile),
-            graph_overview=runtime.graph_overview,
-            persistence=runtime.store,
-        )
-        outcome = await run_worker_cycle(
-            fleet_spec=runtime.fleet_spec,
-            fleet_state=runtime.fleet_state,
-            target_spec=spec,
-            target_state=state,
-            completion_state=completion,
-            target_definition=definition,
-            context=worker_context,
-            worker_profile=runtime.worker_profile,
-            permission_profile=runtime.permissions,
-            context_window_manager=ContextWindowManager(runtime.worker_profile),
-            llm_client=runtime.client,
-            navigator=runtime.navigator,
-            evidence=_load_evidence(runtime.store, spec, state),
-            questions=_load_questions(runtime.store, spec, state),
-            coordinator=runtime.coordinator,
-            limits=_worker_runtime_limits(runtime.configuration.test_budgets),
-            persistence=runtime.store,
-        )
+                context_window_manager=ContextWindowManager(runtime.worker_profile),
+                graph_overview=runtime.graph_overview,
+                persistence=runtime.store,
+            )
+
+        cycle_number = state.usage.cycles + 1 if metrics is not None else 0
+        if metrics is None:
+            worker_context = hydrate()
+        else:
+            with metrics.span(
+                "context_hydration", target_task_id=task_id, cycle_number=cycle_number
+            ) as span:
+                worker_context = hydrate()
+                span["mode"] = worker_context.mode.value
+
+        async def run_cycle() -> WorkerCycleOutcome:
+            return await run_worker_cycle(
+                fleet_spec=runtime.fleet_spec,
+                fleet_state=runtime.fleet_state,
+                target_spec=spec,
+                target_state=state,
+                completion_state=completion,
+                target_definition=definition,
+                context=worker_context,
+                worker_profile=runtime.worker_profile,
+                permission_profile=runtime.permissions,
+                context_window_manager=ContextWindowManager(runtime.worker_profile),
+                llm_client=runtime.client,
+                navigator=runtime.navigator,
+                evidence=_load_evidence(runtime.store, spec, state),
+                questions=_load_questions(runtime.store, spec, state),
+                coordinator=runtime.coordinator,
+                limits=_worker_runtime_limits(runtime.configuration.test_budgets),
+                persistence=runtime.store,
+            )
+
+        if metrics is None:
+            outcome = await run_cycle()
+        else:
+            with metrics.span(
+                "worker_cycle",
+                target_task_id=task_id,
+                cycle_number=cycle_number,
+                repair=worker_context.mode.value == "repair",
+            ) as span:
+                outcome = await run_cycle()
+                span["outcome"] = outcome.value
         if outcome is not WorkerCycleOutcome.FINALIZATION_REQUESTED:
             return outcome
 
@@ -491,38 +592,48 @@ async def _run_target_step(
         return outcome
 
     if state.phase in {TargetPhase.FINALIZING, TargetPhase.VALIDATING}:
-        target_validation = validate_target_candidate(
-            runtime.store,
-            spec,
-            state,
-            definition,
-            runtime.navigator,
-        )
+        if metrics is None:
+            target_validation = validate_target_candidate(
+                runtime.store, spec, state, definition, runtime.navigator
+            )
+        else:
+            with metrics.span("target_validation", target_task_id=task_id):
+                target_validation = validate_target_candidate(
+                    runtime.store, spec, state, definition, runtime.navigator
+                )
         if target_validation.verdict.value != "pass":
             return outcome
     try:
-        review = await review_target(
-            fleet_spec=runtime.fleet_spec,
-            fleet_state=runtime.fleet_state,
-            target_spec=spec,
-            target_state=state,
-            catalog=runtime.catalog,
-            target_definition=definition,
-            reviewer_profile=runtime.reviewer_profile,
-            reviewer_instructions=ReviewerInstructions(
-                reviewer_profile_id=runtime.reviewer_profile.profile_id,
-                target_id=spec.target_id,
-                target_contract_version=spec.target_contract_version,
-                shared=_read_prompt(_PROMPTS_ROOT / "reviewer" / "system.md"),
-                target_specific=_read_prompt(
-                    _PROMPTS_ROOT / "reviewer" / "targets" / f"{spec.target_id}.md"
+
+        async def run_review() -> TargetReviewVerdict:
+            return await review_target(
+                fleet_spec=runtime.fleet_spec,
+                fleet_state=runtime.fleet_state,
+                target_spec=spec,
+                target_state=state,
+                catalog=runtime.catalog,
+                target_definition=definition,
+                reviewer_profile=runtime.reviewer_profile,
+                reviewer_instructions=ReviewerInstructions(
+                    reviewer_profile_id=runtime.reviewer_profile.profile_id,
+                    target_id=spec.target_id,
+                    target_contract_version=spec.target_contract_version,
+                    shared=_read_prompt(_PROMPTS_ROOT / "reviewer" / "system.md"),
+                    target_specific=_read_prompt(
+                        _PROMPTS_ROOT / "reviewer" / "targets" / f"{spec.target_id}.md"
+                    ),
                 ),
-            ),
-            context_window_manager=ContextWindowManager(runtime.reviewer_profile),
-            llm_client=runtime.client,
-            coordinator=runtime.coordinator,
-            persistence=runtime.store,
-        )
+                context_window_manager=ContextWindowManager(runtime.reviewer_profile),
+                llm_client=runtime.client,
+                coordinator=runtime.coordinator,
+                persistence=runtime.store,
+            )
+
+        if metrics is None:
+            review = await run_review()
+        else:
+            with metrics.span("target_review", target_task_id=task_id):
+                review = await run_review()
     except TargetReviewBudgetError as error:
         if error.scope == "fleet":
             return WorkerCycleOutcome.FLEET_BUDGET_STOP

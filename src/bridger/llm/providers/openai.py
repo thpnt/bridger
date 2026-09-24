@@ -10,6 +10,7 @@ from typing import Any, Literal, TypeVar, cast
 import openai
 from pydantic import BaseModel, JsonValue, ValidationError
 
+from bridger.contracts.runtime_metrics import ModelCall
 from bridger.llm.errors import (
     LLMAuthenticationError,
     LLMConfigurationError,
@@ -37,6 +38,12 @@ from bridger.llm.models import (
 )
 from bridger.llm.profiles import LLMProfile
 from bridger.llm.retry import SleepCallable, run_with_retries
+from bridger.runtime_timing import (
+    RuntimeMetricsCollector,
+    current_attempt,
+    current_cycle,
+    current_target,
+)
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 
@@ -54,11 +61,69 @@ class OpenAILLMClient:
         profile: LLMProfile,
         sleep: SleepCallable | None = None,
         clock: Callable[[], float] = time.monotonic,
+        metrics: RuntimeMetricsCollector | None = None,
     ) -> None:
         self._client = openai_client
         self._profile = profile
         self._sleep = sleep
         self._clock = clock
+        self._metrics = metrics
+
+    async def _timed_sleep(self, seconds: float) -> None:
+        started = self._metrics.clock_ns() if self._metrics is not None else 0
+        try:
+            await (self._sleep or _sleep)(seconds)
+        finally:
+            if self._metrics is not None:
+                self._metrics.add_backoff(
+                    max(0, (self._metrics.clock_ns() - started) / 1_000_000)
+                )
+
+    def _observe_request(
+        self,
+        request: LLMRequest | LLMCompactionRequest,
+        *,
+        started_at: str,
+        started_ns: int,
+        status: str,
+        attempt: int,
+        usage: LLMUsage | None = None,
+        compaction: bool = False,
+    ) -> None:
+        if self._metrics is None:
+            return
+        operation = request.operation.value
+        role = (
+            "compaction"
+            if compaction
+            else "enrichment"
+            if operation == "community_naming"
+            else "target_reviewer"
+            if operation == "memory_agent_review"
+            else "fleet_reconciliation"
+            if operation == "memory_agent_reconciliation"
+            else "worker"
+        )
+        reasoning = getattr(request, "reasoning", None)
+        self._metrics.add_model(
+            ModelCall(
+                operation=operation,
+                role=role,
+                target_task_id=current_target(),
+                cycle_id=current_cycle(),
+                provider=self._profile.provider,
+                model=self._profile.model,
+                reasoning_effort=getattr(reasoning, "effort", None),
+                started_at=started_at,
+                duration_ms=max(0, (self._metrics.clock_ns() - started_ns) / 1_000_000),
+                status=status,
+                attempt=attempt,
+                input_tokens=usage.input_tokens if usage else None,
+                cached_input_tokens=usage.cached_input_tokens if usage else None,
+                output_tokens=usage.output_tokens if usage else None,
+                reasoning_tokens=usage.reasoning_tokens if usage else None,
+            )
+        )
 
     async def close(self) -> None:
         """Close the underlying asynchronous OpenAI client."""
@@ -70,10 +135,18 @@ class OpenAILLMClient:
         *,
         output_type: type[StructuredOutputT] | None = None,
     ) -> LLMResponse[StructuredOutputT]:
-        async def operation() -> LLMResponse[StructuredOutputT]:
-            return await self._generate_once(request, output_type=output_type)
+        attempt = 0
 
-        sleep = self._sleep if self._sleep is not None else _sleep
+        async def operation() -> LLMResponse[StructuredOutputT]:
+            nonlocal attempt
+            attempt += 1
+            return await self._generate_once(
+                request, output_type=output_type, attempt=attempt
+            )
+
+        sleep = (
+            self._timed_sleep if self._metrics is not None else (self._sleep or _sleep)
+        )
         try:
             response, retry_count = await run_with_retries(
                 operation,
@@ -133,9 +206,12 @@ class OpenAILLMClient:
         request: LLMRequest,
         *,
         output_type: type[StructuredOutputT] | None,
+        attempt: int = 1,
     ) -> LLMResponse[StructuredOutputT]:
         started = self._clock()
         payload = self._build_payload(request, output_type)
+        metric_started_at = self._metrics.utc_now().isoformat() if self._metrics else ""
+        metric_started_ns = self._metrics.clock_ns() if self._metrics else 0
         try:
             provider_response = await self._client.responses.create(**payload)
         except (
@@ -148,9 +224,35 @@ class OpenAILLMClient:
             openai.APIStatusError,
             openai.APIError,
         ) as error:
+            self._observe_request(
+                request,
+                started_at=metric_started_at,
+                started_ns=metric_started_ns,
+                status="failed",
+                attempt=attempt,
+            )
             raise self._map_openai_error(error, request) from error
+        except BaseException:
+            self._observe_request(
+                request,
+                started_at=metric_started_at,
+                started_ns=metric_started_ns,
+                status="failed",
+                attempt=attempt,
+            )
+            raise
 
         latency_ms = int((self._clock() - started) * 1000)
+        self._observe_request(
+            request,
+            started_at=metric_started_at,
+            started_ns=metric_started_ns,
+            status="failed"
+            if _get(provider_response, "status") == "failed"
+            else "completed",
+            attempt=attempt,
+            usage=_extract_usage(provider_response),
+        )
         return self._normalize_response(
             provider_response,
             request=request,
@@ -164,10 +266,16 @@ class OpenAILLMClient:
     ) -> LLMCompactionResult:
         """Compact one stored response chain into opaque provider output items."""
 
-        async def operation() -> LLMCompactionResult:
-            return await self._compact_once(request)
+        attempt = 0
 
-        sleep = self._sleep if self._sleep is not None else _sleep
+        async def operation() -> LLMCompactionResult:
+            nonlocal attempt
+            attempt += 1
+            return await self._compact_once(request, attempt=attempt)
+
+        sleep = (
+            self._timed_sleep if self._metrics is not None else (self._sleep or _sleep)
+        )
         result, retry_count = await run_with_retries(
             operation,
             policy=self._profile.retry_policy,
@@ -178,8 +286,12 @@ class OpenAILLMClient:
     async def _compact_once(
         self,
         request: LLMCompactionRequest,
+        *,
+        attempt: int = 1,
     ) -> LLMCompactionResult:
         started = self._clock()
+        metric_started_at = self._metrics.utc_now().isoformat() if self._metrics else ""
+        metric_started_ns = self._metrics.clock_ns() if self._metrics else 0
         try:
             provider_response = await self._client.responses.compact(
                 **self._build_compaction_payload(request)
@@ -194,7 +306,34 @@ class OpenAILLMClient:
             openai.APIStatusError,
             openai.APIError,
         ) as error:
+            self._observe_request(
+                request,
+                started_at=metric_started_at,
+                started_ns=metric_started_ns,
+                status="failed",
+                attempt=attempt,
+                compaction=True,
+            )
             raise self._map_openai_error(error, request) from error
+        except BaseException:
+            self._observe_request(
+                request,
+                started_at=metric_started_at,
+                started_ns=metric_started_ns,
+                status="failed",
+                attempt=attempt,
+                compaction=True,
+            )
+            raise
+        self._observe_request(
+            request,
+            started_at=metric_started_at,
+            started_ns=metric_started_ns,
+            status="completed",
+            attempt=attempt,
+            usage=_extract_usage(provider_response),
+            compaction=True,
+        )
         logger.info(
             "llm.compact.success",
             extra={
@@ -452,7 +591,9 @@ class OpenAILLMClient:
         output_type: type[StructuredOutputT] | None = None,
     ) -> LLMResponse[StructuredOutputT]:
         """Perform one provider attempt for a runtime-owned retry loop."""
-        return await self._generate_once(request, output_type=output_type)
+        return await self._generate_once(
+            request, output_type=output_type, attempt=current_attempt()
+        )
 
     def _extract_tool_calls(
         self,
