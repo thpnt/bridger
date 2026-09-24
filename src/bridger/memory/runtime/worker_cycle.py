@@ -1659,7 +1659,7 @@ class WorkerRunner:
 
     def _request_messages(self, *, initial: bool) -> list[LLMMessage]:
         if initial:
-            return []
+            return [LLMMessage.user("Begin the current worker cycle.")]
         if self._compacted_context is not None:
             return self._working_set.protected_messages()
         if self._continuation_ref is not None:
