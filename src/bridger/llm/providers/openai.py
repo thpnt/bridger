@@ -96,13 +96,19 @@ class OpenAILLMClient:
         role = (
             "compaction"
             if compaction
-            else "enrichment"
-            if operation == "community_naming"
-            else "target_reviewer"
-            if operation == "memory_agent_review"
-            else "fleet_reconciliation"
-            if operation == "memory_agent_reconciliation"
-            else "worker"
+            else (
+                "enrichment"
+                if operation == "community_naming"
+                else (
+                    "target_reviewer"
+                    if operation == "memory_agent_review"
+                    else (
+                        "fleet_reconciliation"
+                        if operation == "memory_agent_reconciliation"
+                        else "worker"
+                    )
+                )
+            )
         )
         reasoning = getattr(request, "reasoning", None)
         self._metrics.add_model(
@@ -247,9 +253,11 @@ class OpenAILLMClient:
             request,
             started_at=metric_started_at,
             started_ns=metric_started_ns,
-            status="failed"
-            if _get(provider_response, "status") == "failed"
-            else "completed",
+            status=(
+                "failed"
+                if _get(provider_response, "status") == "failed"
+                else "completed"
+            ),
             attempt=attempt,
             usage=_extract_usage(provider_response),
         )
@@ -1024,10 +1032,14 @@ def _cache_hit_ratio(usage: LLMUsage) -> float | None:
 
 
 def _supports_explicit_prompt_caching(model: str) -> bool:
-    match = re.match(r"^gpt-(\d+)\.(\d+)(?:$|-)", model.lower())
+    match = re.match(r"^gpt-(\d+)(?:\.(\d+))?(?:$|-)", model.lower())
     if match is None:
         return False
-    return (int(match.group(1)), int(match.group(2))) >= (5, 6)
+
+    major = int(match.group(1))
+    minor = int(match.group(2) or 0)
+
+    return (major, minor) >= (5, 6)
 
 
 def _canonicalize_json(value: Any) -> Any:
