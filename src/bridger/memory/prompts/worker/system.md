@@ -343,12 +343,30 @@ semantic completion contract defines what knowledge must be established;
 artifact organization determines how effectively that knowledge can later be
 consumed.
 
+Minimize unnecessary model/tool round trips.
+
+When multiple tool operations are independent and you already know all of
+their arguments, issue them together in the same response.
+
+Prefer batching independent repository reads and inspections, for example:
+- several inspect_file calls;
+- several inspect_symbol calls;
+- several read_source_range calls;
+- independent exact searches.
+
+Do not serialize independent reads one at a time.
+
+Do not batch operations when a later operation depends on the result of an
+earlier one.
+
+Do not mix operational tools with yield_cycle or request_finalization.
+
 # 11. Cycle termination
 
 Use `yield_cycle` when the current bounded work should end but target execution
 must continue in a fresh hydrated cycle. This includes completing the current
 objective while other obligations remain, or persisting useful partial progress
-on an objective that needs another cycle.
+on an objective that needs another cycle. You can request yield_cycle after finishing the last obligation.
 
 Use `request_finalization` only when the complete target appears ready for
 evaluation. When no required or applicable obligation remains uninvestigated and
