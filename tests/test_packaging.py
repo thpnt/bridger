@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import subprocess
 import tarfile
+import tomllib
 import zipfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = PROJECT_ROOT / "src" / "bridger"
+PROJECT_VERSION = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())[
+    "project"
+]["version"]
 LICENSE_FILES = (
     "LICENSE",
     "THIRD_PARTY_NOTICES/Graphify/LICENSE",
@@ -41,8 +45,8 @@ def test_built_distributions_include_runtime_files_and_notices(
         text=True,
     )
 
-    wheel_path = tmp_path / "usebridger-0.1.0-py3-none-any.whl"
-    sdist_path = tmp_path / "usebridger-0.1.0.tar.gz"
+    wheel_path = tmp_path / f"usebridger-{PROJECT_VERSION}-py3-none-any.whl"
+    sdist_path = tmp_path / f"usebridger-{PROJECT_VERSION}.tar.gz"
     assert wheel_path.is_file()
     assert sdist_path.is_file()
 
@@ -59,7 +63,7 @@ def test_built_distributions_include_runtime_files_and_notices(
         assert wheel_licenses <= wheel_files
         metadata = wheel.read(metadata_path).decode("utf-8")
         assert "Name: usebridger\n" in metadata
-        assert "Version: 0.1.0\n" in metadata
+        assert f"Version: {PROJECT_VERSION}\n" in metadata
         assert "License-Expression: Apache-2.0\n" in metadata
         assert "Requires-Dist: black" not in metadata
 
@@ -68,7 +72,7 @@ def test_built_distributions_include_runtime_files_and_notices(
 
     with tarfile.open(sdist_path, "r:gz") as sdist:
         source_files = set(sdist.getnames())
-        prefix = "usebridger-0.1.0"
+        prefix = f"usebridger-{PROJECT_VERSION}"
         sdist_package_files = {f"{prefix}/src/{path}" for path in package_files}
         sdist_license_files = {f"{prefix}/{path}" for path in LICENSE_FILES}
         assert sdist_package_files <= source_files

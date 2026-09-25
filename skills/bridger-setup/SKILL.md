@@ -200,6 +200,14 @@ When possible, verify from a Codex session that Bridger exposes:
 ```text
 understand
 impact
+query_graph
+search_repository
+get_graph_entity
+get_graph_neighbors
+get_graph_subgraph
+get_graph_path
+list_graph_communities
+get_graph_community
 ```
 
 If Codex already has a different `bridger` registration, inspect it before replacing it.
@@ -247,6 +255,14 @@ Then verify that the connected server exposes:
 ```text
 understand
 impact
+query_graph
+search_repository
+get_graph_entity
+get_graph_neighbors
+get_graph_subgraph
+get_graph_path
+list_graph_communities
+get_graph_community
 ```
 
 If the current Claude Code CLI rejects the documented command form, inspect:
@@ -316,6 +332,14 @@ Confirm that the Bridger server becomes connected and exposes:
 ```text
 understand
 impact
+query_graph
+search_repository
+get_graph_entity
+get_graph_neighbors
+get_graph_subgraph
+get_graph_path
+list_graph_communities
+get_graph_community
 ```
 
 Do not consider merely writing `mcp.json` sufficient verification if a runtime check is available.
@@ -391,6 +415,14 @@ After setup, verify as much of the actual chain as the current host permits:
 4. Server exposes:
    - understand
    - impact
+   - query_graph
+   - search_repository
+   - get_graph_entity
+   - get_graph_neighbors
+   - get_graph_subgraph
+   - get_graph_path
+   - list_graph_communities
+   - get_graph_community
 
 5. In an initialized repository, an UNDERSTAND query can execute.
 ```
@@ -445,16 +477,25 @@ If Bridger reports that no current Repository Brain publication exists, initiali
 
 ## Server exists but tools are not visible
 
-The Bridger MCP server should expose exactly:
+The Bridger MCP server should expose:
 
 ```text
 understand
 impact
+query_graph
+search_repository
+get_graph_entity
+get_graph_neighbors
+get_graph_subgraph
+get_graph_path
+list_graph_communities
+get_graph_community
 ```
 
 Inspect the host's MCP status and restart or open a new coding-agent session if the host does not reload MCP configuration dynamically.
 
-Do not add low-level Bridger tools as a workaround.
+Do not configure graph tools as separate MCP servers; they are part of the
+existing Bridger server.
 
 ## Repository mismatch
 
@@ -500,6 +541,7 @@ Repository
 Agent usage
     understand
     impact
+    graph-native MCP tools
 ```
 
 Keep these responsibilities separate.

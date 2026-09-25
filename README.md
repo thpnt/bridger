@@ -38,7 +38,7 @@ does not exist. Its initial contents come from Bridger's bundled `config.toml`:
 schema_version = 1
 
 [openai]
-model = "gpt-5.6"
+model = "gpt-6-sol"
 reasoning = "xhigh"
 ```
 

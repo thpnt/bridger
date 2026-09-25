@@ -11,14 +11,18 @@ Bridger is a repository intelligence layer for coding agents.
 
 Use it to retrieve authored repository knowledge and structural graph context before or during code work. It complements direct source inspection; it does not replace it.
 
-Bridger exposes two operations:
+Bridger exposes two high-level repository intelligence operations:
 
 - `understand(query)` — repository understanding and orientation.
 - `impact(symbols)` — potential structural impact for exact symbols.
 
+For graph-native structural relationship discovery, use the Bridger graph
+capabilities described by the `bridger-graph` skill.
+
 ## Execution
 
-Prefer the connected Bridger MCP tools when available:
+Prefer the connected Bridger MCP tools when available. Use the high-level
+repository intelligence operations for semantic orientation and impact:
 
 ```text
 understand(query)
@@ -32,7 +36,9 @@ bridger understand "How does repository initialization work?"
 bridger impact RepositoryLoader load_manifest
 ```
 
-The MCP and CLI expose the same underlying Bridger operations.
+The CLI exposes these two high-level operations. The MCP server also exposes
+graph-native tools for structural relationship discovery; see the
+`bridger-graph` skill for guidance on when to use them.
 
 If neither is available and setup is requested, use the `bridger-setup` skill.
 
