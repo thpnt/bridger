@@ -42,6 +42,42 @@ def test_resolving_without_current_returns_none(tmp_path: Path) -> None:
     assert publication_module.resolve_current_repository_brain(bridger_root) is None
 
 
+def test_fresh_clear_durably_removes_current_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridger_root = tmp_path / ".bridger"
+    bridger_root.mkdir()
+    (bridger_root / "current").write_text("old\n", encoding="ascii")
+    synced: list[Path] = []
+    monkeypatch.setattr(publication_module, "_fsync_directory", synced.append)
+
+    publication_module.clear_current_repository_brain(bridger_root)
+
+    assert not (bridger_root / "current").exists()
+    assert synced == [bridger_root]
+
+
+def test_completed_fleet_marker_is_durable_and_cannot_change_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    synced: list[Path] = []
+    monkeypatch.setattr(publication_module, "_fsync_directory", synced.append)
+
+    publication_module.mark_repository_brain_complete(runtime_root, "fleet", "brain-a")
+    publication_module.mark_repository_brain_complete(runtime_root, "fleet", "brain-a")
+
+    assert (
+        publication_module.completed_repository_brain_id(runtime_root, "fleet")
+        == "brain-a"
+    )
+    assert synced == [runtime_root / "fleet"]
+    with pytest.raises(ValueError, match="another publication"):
+        publication_module.mark_repository_brain_complete(
+            runtime_root, "fleet", "brain-b"
+        )
+
+
 def test_current_pointer_contains_id_and_resolves_canonical_manifest(
     tmp_path: Path,
 ) -> None:

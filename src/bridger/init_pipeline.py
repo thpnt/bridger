@@ -25,10 +25,16 @@ from bridger.llm.profiles import LLMProfile
 from bridger.progress import InitProgressObserver, InitStage, notify_stage_started
 from bridger.repository.service import prepare_repository
 from bridger.repository_brain.index import ensure_brain_index
-from bridger.repository_brain.loader import load_repository_brain
+from bridger.repository_brain.loader import (
+    RepositoryBrainLoadError,
+    load_repository_brain,
+)
 from bridger.repository_brain.publication import (
+    clear_current_repository_brain,
+    mark_repository_brain_complete,
     resolve_current_repository_brain,
     set_current_repository_brain,
+    supersede_existing_fleets,
 )
 from bridger.repository_brain.runtime_metrics import (
     build_runtime_metrics_report,
@@ -109,7 +115,7 @@ class RepositoryBrainModelBuildResult:
     """Artifacts produced by the model-driven portion of init."""
 
     publication_path: Path
-    token_usage_report_path: Path
+    token_usage_report_path: Path | None
 
 
 def format_repository_brain_error(error: BaseException) -> str:
@@ -286,6 +292,15 @@ def _build_repository_brain(
         context, file_index = prepare_repository(configuration.repository_root)
     metrics.repository_id = getattr(context, "repository_id", None)
     metrics.revision = getattr(context, "revision", None)
+    if configuration.fresh and configuration.enable_model_stages:
+        try:
+            _mark_selected_brain_complete(configuration.bridger_root)
+            supersede_existing_fleets(configuration.bridger_root / "runtime")
+            clear_current_repository_brain(configuration.bridger_root)
+        except Exception as error:
+            raise RepositoryBrainBuildError(
+                format_repository_brain_error(error)
+            ) from error
     if configuration.mode is InitMode.FULL and not configuration.fresh:
         try:
             reused = _reuse_current_repository_brain(
@@ -315,6 +330,7 @@ def _build_repository_brain(
             except Exception as error:
                 message = format_repository_brain_error(error)
                 raise RepositoryBrainBuildError(message) from error
+            _mark_publication_complete(reused.publication_path)
             return reused
     recovery_spec = None
     if configuration.enable_model_stages and not configuration.fresh:
@@ -424,6 +440,7 @@ def _build_repository_brain(
                 configuration.bridger_root,
                 publication_path,
             )
+            _mark_publication_complete(publication_path)
     except Exception as error:
         message = format_repository_brain_error(error)
         raise RepositoryBrainBuildError(message) from error
@@ -433,6 +450,32 @@ def _build_repository_brain(
         publication_path=publication_path,
         token_usage_report_path=token_usage_report_path,
     )
+
+
+def _mark_publication_complete(publication_path: Path | None) -> None:
+    if publication_path is None:
+        raise ValueError("Repository Brain publication path is unavailable")
+    brain = load_repository_brain(publication_path)
+    mark_repository_brain_complete(
+        Path(brain.manifest.memory_runtime_root),
+        brain.manifest.fleet_run_id,
+        brain.publication_id,
+    )
+
+
+def _mark_selected_brain_complete(bridger_root: Path) -> None:
+    current = bridger_root / "current"
+    if not current.exists() or current.is_symlink():
+        return
+    try:
+        publication_path = resolve_current_repository_brain(bridger_root)
+    except ValueError:
+        return
+    if publication_path is not None:
+        try:
+            _mark_publication_complete(publication_path)
+        except RepositoryBrainLoadError:
+            return
 
 
 def _ensure_repository_brain_index(

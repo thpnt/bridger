@@ -22,6 +22,7 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def configured_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(init_pipeline, "_mark_publication_complete", lambda _path: None)
 
 
 def test_compatible_current_brain_wins_before_recovery_and_rebuild(
@@ -282,7 +283,7 @@ def test_bound_graph_validation_failure_prevents_reuse_and_fallback(
         )
 
 
-def test_fresh_bypasses_current_and_recovery_without_deleting_state(
+def test_fresh_bypasses_current_and_recovery_and_clears_selection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -298,11 +299,6 @@ def test_fresh_bypasses_current_and_recovery_without_deleting_state(
         init_pipeline,
         "prepare_repository",
         lambda _root: (context, object()),
-    )
-    monkeypatch.setattr(
-        init_pipeline,
-        "resolve_current_repository_brain",
-        lambda _root: pytest.fail("fresh must bypass current resolution"),
     )
     monkeypatch.setattr(
         harness,
@@ -321,7 +317,7 @@ def test_fresh_bypasses_current_and_recovery_without_deleting_state(
 
     assert result.reused is False
     assert received_recovery == [None]
-    assert current.read_text(encoding="ascii") == "existing-publication\n"
+    assert not current.exists()
     assert runtime_marker.read_text(encoding="utf-8") == "existing-runtime"
 
 
@@ -563,7 +559,7 @@ def test_fresh_publication_is_indexed_before_current_promotion(
     ]
 
 
-def test_failed_new_index_preserves_previous_current(
+def test_failed_fresh_index_leaves_no_previous_current(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -596,7 +592,64 @@ def test_failed_new_index_preserves_previous_current(
             )
         )
 
-    assert current.read_text(encoding="ascii") == "publication-a\n"
+    assert not current.exists()
+
+
+def test_interrupted_fresh_build_is_resumed_by_normal_init(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    current = tmp_path / ".bridger" / "current"
+    current.parent.mkdir()
+    current.write_text("old-publication\n", encoding="ascii")
+    recovery_spec = object()
+    resumed: list[object] = []
+    monkeypatch.setattr(
+        init_pipeline,
+        "prepare_repository",
+        lambda _root: (_context(tmp_path), object()),
+    )
+    _patch_pipeline_completion(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        harness, "discover_resumable_fleet", lambda *_args: recovery_spec
+    )
+    monkeypatch.setattr(
+        harness, "prepare_model_layers", lambda *_args: (object(), object())
+    )
+
+    async def run_model(*args: object) -> Path:
+        resumed.append(args[-1])
+        return tmp_path / "new-publication.json"
+
+    monkeypatch.setattr(init_pipeline, "_run_model_driven_pipeline", run_model)
+    attempts = 0
+
+    def ensure(*_args: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("index interrupted")
+
+    monkeypatch.setattr(init_pipeline, "_ensure_repository_brain_index", ensure)
+    monkeypatch.setattr(
+        init_pipeline,
+        "set_current_repository_brain",
+        lambda _root, _path: current.write_text("new-publication\n", encoding="ascii"),
+    )
+
+    with pytest.raises(RepositoryBrainBuildError, match="index interrupted"):
+        init_pipeline.build_repository_brain(
+            resolve_init_configuration(
+                InitMode.FULL, repository_root=tmp_path, fresh=True
+            )
+        )
+    assert not current.exists()
+
+    result = init_pipeline.build_repository_brain(
+        resolve_init_configuration(InitMode.FULL, repository_root=tmp_path)
+    )
+    assert resumed == [None, recovery_spec]
+    assert result.publication_path == tmp_path / "new-publication.json"
+    assert current.read_text(encoding="ascii") == "new-publication\n"
 
 
 def test_recovery_publication_uses_shared_index_and_promotion_path(

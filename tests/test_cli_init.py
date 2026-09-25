@@ -14,7 +14,7 @@ import bridger.init_pipeline as init_pipeline
 import bridger.repository_brain.harness as harness
 from bridger.artifacts.writer import write_artifact
 from bridger.contracts.files import IntakeConfiguration
-from bridger.contracts.memory.core import FleetPhase
+from bridger.contracts.memory.core import FleetPhase, FleetRunState
 from bridger.contracts.token_usage import TokenUsage, TokenUsageReport, TokenUsageTarget
 from bridger.init_pipeline import (
     InitMode,
@@ -51,6 +51,7 @@ _DEFAULT_TARGETS_ROOT = (
 @pytest.fixture(autouse=True)
 def configured_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(init_pipeline, "_mark_publication_complete", lambda _path: None)
 
 
 def test_typed_stage_reporting_preserves_legacy_labels_and_is_best_effort() -> None:
@@ -896,7 +897,9 @@ def test_memory_harness_closes_client_before_store_on_exception(
         def close(self) -> None:
             events.append("store")
 
-    fleet_state = SimpleNamespace(phase=FleetPhase.ACCEPTED)
+    fleet_state = FleetRunState(
+        fleet_run_id="test-run", target_task_ids=[], phase=FleetPhase.RUNNING
+    )
     monkeypatch.setattr(
         harness,
         "load_target_artifacts",
@@ -923,6 +926,13 @@ def test_memory_harness_closes_client_before_store_on_exception(
     )
     monkeypatch.setattr(harness, "RepositoryNavigator", lambda *_args: object())
     monkeypatch.setattr(harness, "build_graph_overview", lambda *_args: object())
+    monkeypatch.setattr(
+        harness,
+        "_runnable_target_task_ids",
+        lambda *_args: (_ for _ in ()).throw(
+            RepositoryBrainBuildError("without publication")
+        ),
+    )
 
     def create_client(_profile: LLMProfile) -> Client:
         nonlocal created_loop
