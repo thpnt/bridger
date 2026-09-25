@@ -12,8 +12,6 @@ from pydantic import ValidationError
 from bridger.artifacts.writer import write_artifact
 from bridger.contracts.memory.persistence import TaskEvent
 from bridger.contracts.runtime_metrics import (
-    BatchMetrics,
-    BatchStep,
     CycleMetrics,
     RuntimeMetricsReport,
     TargetMetrics,
@@ -53,6 +51,24 @@ def _wall_breakdown(
         active[category] += delta
         previous = position
     return totals
+
+
+def _covered_ms(spans: list[tuple[str, str]]) -> float:
+    """Measure wall time covered by at least one target step."""
+    windows = sorted(
+        (datetime.fromisoformat(start), datetime.fromisoformat(end))
+        for start, end in spans
+    )
+    total = 0.0
+    end = None
+    for start, finish in windows:
+        if end is None or start > end:
+            total += max(0, (finish - start).total_seconds() * 1000)
+            end = finish
+        elif finish > end:
+            total += (finish - end).total_seconds() * 1000
+            end = finish
+    return total
 
 
 def _events(bridger_root: Path, metrics: RuntimeMetricsCollector) -> list[TaskEvent]:
@@ -253,36 +269,8 @@ def build_runtime_metrics_report(
             )
         )
 
-    batches = []
-    critical_steps = []
-    critical_targets = []
-    for index, batch in enumerate(by_name["target_batch"], start=1):
-        contained = [s for s in steps if batch.started_at <= s.started_at <= s.ended_at]
-        ranked = sorted(contained, key=lambda s: s.duration_ms, reverse=True)
-        if ranked:
-            critical_steps.append(f"batch-{index}:{ranked[0].target_task_id}")
-            if ranked[0].target_task_id is not None:
-                critical_targets.append(ranked[0].target_task_id)
-        batches.append(
-            BatchMetrics(
-                batch_id=f"batch-{index}",
-                started_at=batch.started_at,
-                duration_ms=batch.duration_ms,
-                target_steps=[
-                    BatchStep(
-                        target_task_id=s.target_task_id or "",
-                        duration_ms=s.duration_ms,
-                        outcome=s.outcome or s.status,
-                        barrier_wait_ms=max(0, batch.duration_ms - s.duration_ms),
-                    )
-                    for s in contained
-                ],
-                slowest_target=ranked[0].target_task_id if ranked else None,
-                straggler_extension_ms=(ranked[0].duration_ms - ranked[1].duration_ms)
-                if len(ranked) > 1
-                else 0,
-            )
-        )
+    target_execution_wall = sum(s.duration_ms for s in by_name["target_execution"])
+    active_target_wall = _covered_ms([(s.started_at, s.ended_at) for s in steps])
     fleet_wall = sum(s.duration_ms for s in by_name["memory_fleet"])
     target_work = sum(s.duration_ms for s in steps)
     model_wait = sum(c.duration_ms for c in calls)
@@ -338,11 +326,9 @@ def build_runtime_metrics_report(
     publication = sum(s.duration_ms for s in by_name["brain_publication"])
     publication += sum(s.duration_ms for s in by_name["token_report_persistence"])
     critical_path = (
-        sum(max((s.duration_ms for s in b.target_steps), default=0) for b in batches)
-        + fleet_validation
-        + fleet_reconciliation
-        + publication
+        target_execution_wall + fleet_validation + fleet_reconciliation + publication
     )
+    critical_steps = ["target_execution"] if target_execution_wall else []
     if fleet_validation:
         critical_steps.append("fleet_validation")
     if fleet_reconciliation:
@@ -404,20 +390,23 @@ def build_runtime_metrics_report(
         total_tool_wait_ms=tool_wait,
         tool_wall_ms=wall_tool,
         tool_by_name=tool_by_name,
-        batches=batches,
+        batches=[],
         configured_concurrency=metrics.configured_concurrency,
         fleet_wall_time_ms=fleet_wall,
+        target_execution_wall_ms=target_execution_wall,
         total_target_work_ms=target_work,
-        average_active_targets=target_work / fleet_wall if fleet_wall else 0,
-        effective_parallel_speedup=target_work / fleet_wall if fleet_wall else 0,
-        concurrency_utilization=(
-            target_work / (fleet_wall * metrics.configured_concurrency)
-        )
-        if fleet_wall and metrics.configured_concurrency
-        else 0,
-        total_barrier_wait_ms=sum(
-            s.barrier_wait_ms for b in batches for s in b.target_steps
+        average_active_targets=(
+            target_work / target_execution_wall if target_execution_wall else 0
         ),
+        effective_parallel_speedup=(
+            target_work / active_target_wall if active_target_wall else 0
+        ),
+        concurrency_utilization=(
+            (target_work / (target_execution_wall * metrics.configured_concurrency))
+            if target_execution_wall and metrics.configured_concurrency
+            else 0
+        ),
+        total_barrier_wait_ms=0,
         fleet_validation_ms=fleet_validation,
         fleet_reconciliation_ms=fleet_reconciliation,
         checkpoint_ms=sum(s.duration_ms for s in by_name["checkpoint"]),
@@ -430,7 +419,7 @@ def build_runtime_metrics_report(
         validation_review_wall_ms=wall_review,
         critical_path_ms=critical_path,
         critical_path_steps=critical_steps,
-        critical_path_target_ids=list(dict.fromkeys(critical_targets)),
+        critical_path_target_ids=[],
         other_harness_ms=max(
             0, total_ms - wall_model - wall_tool - wall_review - wall_retry
         ),

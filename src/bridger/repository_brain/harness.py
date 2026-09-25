@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -299,15 +299,12 @@ async def run_memory_harness(
             before_target_states = [
                 state.model_dump(mode="json") for state in target_states
             ]
-            runnable = _runnable_target_task_ids(
-                fleet_spec,
-                fleet_state,
-                target_specs,
-                target_states,
-                store,
-            )
-            outcomes = await _run_target_batch(runnable, target_step_runtime)
-            if WorkerCycleOutcome.FLEET_BUDGET_STOP in outcomes:
+            budget_stopped = False
+            if not all(state.phase is TargetPhase.ACCEPTED for state in target_states):
+                budget_stopped = await _run_targets_until_quiescent(
+                    target_step_runtime, target_specs, target_states
+                )
+            if budget_stopped:
                 store.exhaust_fleet_budget(fleet_state)
             if all(state.phase is TargetPhase.ACCEPTED for state in target_states):
                 if metrics is None:
@@ -403,12 +400,8 @@ async def run_memory_harness(
                 or [state.model_dump(mode="json") for state in target_states]
                 != before_target_states
             )
-            if (
-                not runnable
-                and not state_changed
-                and not all(
-                    state.phase is TargetPhase.ACCEPTED for state in target_states
-                )
+            if not state_changed and not all(
+                state.phase is TargetPhase.ACCEPTED for state in target_states
             ):
                 raise RepositoryBrainBuildError(
                     "memory fleet made no runnable progress"
@@ -475,11 +468,12 @@ async def run_memory_harness(
     raise RepositoryBrainBuildError("memory fleet exited without publication")
 
 
-async def _run_target_batch(
-    runnable: Sequence[str],
+async def _run_targets_until_quiescent(
     runtime: _TargetStepRuntime,
-) -> list[WorkerCycleOutcome]:
-    """Run one structured concurrent batch and join every admitted target step."""
+    target_specs: Sequence[TargetTaskSpec],
+    target_states: Sequence[TargetTaskState],
+) -> bool:
+    """Drive admitted target steps until no target work can progress."""
     metrics = current_collector()
 
     async def run_step(task_id: str) -> WorkerCycleOutcome:
@@ -493,19 +487,41 @@ async def _run_target_batch(
             span["outcome"] = outcome.value
             return outcome
 
-    def create_tasks(
-        group: asyncio.TaskGroup,
-    ) -> list[asyncio.Task[WorkerCycleOutcome]]:
-        return [group.create_task(run_step(task_id)) for task_id in runnable]
+    async def execute() -> bool:
+        in_flight: dict[str, asyncio.Task[WorkerCycleOutcome]] = {}
+        budget_stopped = False
+        async with asyncio.TaskGroup() as task_group:
+            while True:
+                if not budget_stopped:
+                    runnable = _runnable_target_task_ids(
+                        runtime.fleet_spec,
+                        runtime.fleet_state,
+                        target_specs,
+                        target_states,
+                        runtime.store,
+                        in_flight.keys(),
+                    )
+                    for task_id in runnable:
+                        if task_id in in_flight:
+                            raise RuntimeError(f"target already executing: {task_id}")
+                        in_flight[task_id] = task_group.create_task(run_step(task_id))
+                    if len(in_flight) > runtime.fleet_spec.max_concurrent_targets:
+                        raise RuntimeError("target steps exceed max_concurrent_targets")
+                if not in_flight:
+                    return budget_stopped
+                done, _pending = await asyncio.wait(
+                    in_flight.values(), return_when=asyncio.FIRST_COMPLETED
+                )
+                for task_id, task in list(in_flight.items()):
+                    if task in done:
+                        del in_flight[task_id]
+                        if task.result() is WorkerCycleOutcome.FLEET_BUDGET_STOP:
+                            budget_stopped = True
 
     if metrics is None:
-        async with asyncio.TaskGroup() as task_group:
-            tasks = create_tasks(task_group)
-    else:
-        with metrics.span("target_batch"):
-            async with asyncio.TaskGroup() as task_group:
-                tasks = create_tasks(task_group)
-    return [task.result() for task in tasks]
+        return await execute()
+    with metrics.span("target_execution"):
+        return await execute()
 
 
 async def _run_target_step(
@@ -779,12 +795,15 @@ def _runnable_target_task_ids(
     target_specs: Sequence[TargetTaskSpec],
     target_states: Sequence[TargetTaskState],
     store: FleetRuntimeStore,
+    in_flight: Collection[str],
 ) -> list[str]:
-    """Return admitted work first, scheduling only when none remains admitted."""
+    """Resume admitted work and let the scheduler fill available capacity."""
+    executing = set(in_flight)
     resumed = [
         state.target_task_id
         for state in target_states
-        if state.phase
+        if state.target_task_id not in executing
+        and state.phase
         in {
             TargetPhase.SCHEDULED,
             TargetPhase.FINALIZING,
@@ -792,15 +811,14 @@ def _runnable_target_task_ids(
             TargetPhase.REVIEWING,
         }
     ]
-    if resumed:
-        return resumed
-    return schedule_runnable_targets(
+    scheduled = schedule_runnable_targets(
         fleet_spec,
         fleet_state,
         target_specs,
         target_states,
         persistence=store,
     )
+    return resumed + [task_id for task_id in scheduled if task_id not in executing]
 
 
 def _refresh_target_states_from_persistence(

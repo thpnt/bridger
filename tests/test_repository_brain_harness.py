@@ -1,4 +1,4 @@
-"""Repository Brain concurrent target-batch composition tests."""
+"""Repository Brain concurrent target execution composition tests."""
 
 import asyncio
 import hashlib
@@ -32,6 +32,7 @@ from bridger.init_pipeline import InitMode, resolve_init_configuration
 from bridger.llm.profiles import LLMProfile
 from bridger.memory import WorkerCycleOutcome
 from bridger.memory.errors import TargetReviewBudgetError
+from bridger.runtime_timing import RuntimeMetricsCollector
 
 
 def test_v2_publication_is_typed_content_addressed_and_collision_safe(
@@ -109,7 +110,7 @@ def test_v2_publication_is_typed_content_addressed_and_collision_safe(
         )
 
 
-def test_memory_harness_runs_all_targets_in_concurrent_batches(
+def test_fast_target_resumes_before_slow_sibling_finishes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -131,6 +132,7 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
     fleet_spec = SimpleNamespace(
         fleet_run_id="fleet-1",
         target_ids=list(target_ids),
+        max_concurrent_targets=len(task_ids),
         runtime_root=str(tmp_path / ".bridger" / "runtime"),
     )
     catalog = SimpleNamespace(
@@ -142,8 +144,11 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
     bound_concurrency: list[int] = []
     calls: Counter[str] = Counter()
     first_batch_entered: set[str] = set()
-    first_batch_complete = 0
     all_first_batch_entered = asyncio.Event()
+    slow_finished = asyncio.Event()
+    release_slow = asyncio.Event()
+    fast_resumed_before_slow = False
+    active: set[str] = set()
     fleet_validation_calls: list[tuple[int, ...]] = []
 
     def bind(*_args: object, **kwargs: object) -> object:
@@ -151,22 +156,33 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
         return fleet_spec
 
     async def run_target_step(task_id: str, _runtime: object) -> WorkerCycleOutcome:
-        nonlocal first_batch_complete
+        nonlocal fast_resumed_before_slow
+        assert task_id not in active
+        active.add(task_id)
         calls[task_id] += 1
-        if calls[task_id] == 1:
-            first_batch_entered.add(task_id)
-            if first_batch_entered == set(task_ids):
-                all_first_batch_entered.set()
-            await all_first_batch_entered.wait()
-            states_by_task[task_id].phase = TargetPhase.SCHEDULED
-            first_batch_complete += 1
-            return WorkerCycleOutcome.CYCLE_YIELDED
-
-        assert first_batch_complete == len(task_ids)
-        states_by_task[task_id].phase = TargetPhase.ACCEPTED
-        return WorkerCycleOutcome.FINALIZATION_REQUESTED
+        try:
+            if calls[task_id] == 1:
+                first_batch_entered.add(task_id)
+                if first_batch_entered == set(task_ids):
+                    all_first_batch_entered.set()
+                await all_first_batch_entered.wait()
+                if task_id == task_ids[0]:
+                    await release_slow.wait()
+                    slow_finished.set()
+                    states_by_task[task_id].phase = TargetPhase.ACCEPTED
+                    return WorkerCycleOutcome.FINALIZATION_REQUESTED
+                states_by_task[task_id].phase = TargetPhase.SCHEDULED
+                return WorkerCycleOutcome.CYCLE_YIELDED
+            if task_id == task_ids[1]:
+                fast_resumed_before_slow = not slow_finished.is_set()
+                release_slow.set()
+            states_by_task[task_id].phase = TargetPhase.ACCEPTED
+            return WorkerCycleOutcome.FINALIZATION_REQUESTED
+        finally:
+            active.remove(task_id)
 
     def validate_fleet(_store: object, _state: object) -> object:
+        assert not active
         fleet_validation_calls.append(tuple(calls[task_id] for task_id in task_ids))
         return SimpleNamespace(verdict=SimpleNamespace(value="pass"))
 
@@ -213,6 +229,7 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
             task_id
             for task_id in task_ids
             if states_by_task[task_id].phase is not TargetPhase.ACCEPTED
+            and task_id not in _args[-1]
         ],
     )
     monkeypatch.setattr(harness, "_run_target_step", run_target_step)
@@ -249,8 +266,9 @@ def test_memory_harness_runs_all_targets_in_concurrent_batches(
     assert result.publication_path == expected
     assert bound_concurrency == [len(task_ids)]
     assert first_batch_entered == set(task_ids)
-    assert calls == Counter({task_id: 2 for task_id in task_ids})
-    assert fleet_validation_calls == [(2, 2, 2)]
+    assert fast_resumed_before_slow
+    assert calls == Counter({task_ids[0]: 1, task_ids[1]: 2, task_ids[2]: 2})
+    assert fleet_validation_calls == [(1, 2, 2)]
     assert [event[0] for event in store.events] == ["fleet_execution_finished"]
     assert store.events[0][1]["fleet_phase"] == "initialized"
     assert client.closed is True
@@ -487,7 +505,10 @@ def test_fleet_review_repair_state_is_synchronized_before_scheduling(
     )
 
     assert result.publication_path == expected_publication
-    assert store.scheduled_batches == [list(task_ids), ["task-architecture"]]
+    assert [batch for batch in store.scheduled_batches if batch] == [
+        list(task_ids),
+        ["task-architecture"],
+    ]
     assert calls == Counter(
         {"task-repository": 1, "task-architecture": 2, "task-testing": 1}
     )
@@ -500,39 +521,135 @@ def test_fleet_review_repair_state_is_synchronized_before_scheduling(
     assert store.closed is True
 
 
-def test_target_batch_joins_fleet_budget_stop_with_sibling_outcomes(
+def test_target_execution_joins_fleet_budget_stop_with_sibling_outcomes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settled: list[str] = []
     release_siblings = asyncio.Event()
+    scheduler_calls = 0
+    runtime, specs, states = _execution_runtime(
+        ("budget-stop", "sibling-a", "sibling-b", "queued"), 3
+    )
+    states[-1].phase = TargetPhase.INITIALIZED
+
+    def schedule(*_args: object, **_kwargs: object) -> list[str]:
+        nonlocal scheduler_calls
+        scheduler_calls += 1
+        if (
+            states[-1].phase is TargetPhase.INITIALIZED
+            and states[0].phase is TargetPhase.ACCEPTED
+        ):
+            states[-1].phase = TargetPhase.SCHEDULED
+            return ["queued"]
+        return []
 
     async def run_target_step(task_id: str, _runtime: object) -> WorkerCycleOutcome:
         if task_id == "budget-stop":
+            states[0].phase = TargetPhase.ACCEPTED
             release_siblings.set()
             settled.append(task_id)
             return WorkerCycleOutcome.FLEET_BUDGET_STOP
         await release_siblings.wait()
+        await asyncio.sleep(0)
         settled.append(task_id)
         return WorkerCycleOutcome.CYCLE_YIELDED
 
     monkeypatch.setattr(harness, "_run_target_step", run_target_step)
+    monkeypatch.setattr(harness, "schedule_runnable_targets", schedule)
 
-    outcomes = asyncio.run(
-        harness._run_target_batch(
-            ["budget-stop", "sibling-a", "sibling-b"],
-            SimpleNamespace(),  # type: ignore[arg-type]
+    stopped = asyncio.run(harness._run_targets_until_quiescent(runtime, specs, states))
+
+    assert set(settled) == {"budget-stop", "sibling-a", "sibling-b"}
+    assert stopped
+    assert states[-1].phase is TargetPhase.INITIALIZED
+    assert scheduler_calls == 1
+
+
+def test_repair_and_dependency_start_while_unrelated_target_is_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_ids = ("A", "B", "C")
+    runtime, specs, states = _execution_runtime(task_ids, 2)
+    specs[2].depends_on_target_task_ids = ["A"]
+    states[2].phase = TargetPhase.INITIALIZED
+    by_id = {state.target_task_id: state for state in states}
+    active: set[str] = set()
+    peak = 0
+    calls: Counter[str] = Counter()
+    sibling_finished = asyncio.Event()
+    release_sibling = asyncio.Event()
+    sibling_started = asyncio.Event()
+    repair_before_sibling = False
+    dependency_before_sibling = False
+
+    def schedule(
+        _fleet_spec: object,
+        _fleet_state: object,
+        _specs: object,
+        _states: object,
+        **_kwargs: object,
+    ) -> list[str]:
+        admitted = sum(state.phase is TargetPhase.SCHEDULED for state in states)
+        scheduled = []
+        for spec in specs:
+            state = by_id[spec.target_task_id]
+            if state.phase not in {TargetPhase.INITIALIZED, TargetPhase.REPAIR}:
+                continue
+            if any(
+                by_id[dependency].phase is not TargetPhase.ACCEPTED
+                for dependency in getattr(spec, "depends_on_target_task_ids", [])
+            ):
+                continue
+            if admitted >= 2:
+                break
+            state.phase = TargetPhase.SCHEDULED
+            admitted += 1
+            scheduled.append(spec.target_task_id)
+        return scheduled
+
+    async def run_target_step(task_id: str, _runtime: object) -> WorkerCycleOutcome:
+        nonlocal peak, repair_before_sibling, dependency_before_sibling
+        assert task_id not in active
+        active.add(task_id)
+        peak = max(peak, len(active))
+        calls[task_id] += 1
+        try:
+            if task_id == "B":
+                sibling_started.set()
+                await release_sibling.wait()
+                sibling_finished.set()
+            elif task_id == "A" and calls[task_id] == 1:
+                await sibling_started.wait()
+                by_id[task_id].phase = TargetPhase.REPAIR
+                return WorkerCycleOutcome.FINALIZATION_REQUESTED
+            elif task_id == "A":
+                repair_before_sibling = not sibling_finished.is_set()
+            elif task_id == "C":
+                dependency_before_sibling = not sibling_finished.is_set()
+                release_sibling.set()
+            by_id[task_id].phase = TargetPhase.ACCEPTED
+            return WorkerCycleOutcome.FINALIZATION_REQUESTED
+        finally:
+            active.remove(task_id)
+
+    monkeypatch.setattr(harness, "schedule_runnable_targets", schedule)
+    monkeypatch.setattr(harness, "_run_target_step", run_target_step)
+
+    stopped = asyncio.run(
+        asyncio.wait_for(
+            harness._run_targets_until_quiescent(runtime, specs, states), timeout=1
         )
     )
 
-    assert set(settled) == {"budget-stop", "sibling-a", "sibling-b"}
-    assert outcomes == [
-        WorkerCycleOutcome.FLEET_BUDGET_STOP,
-        WorkerCycleOutcome.CYCLE_YIELDED,
-        WorkerCycleOutcome.CYCLE_YIELDED,
-    ]
+    assert not stopped
+    assert repair_before_sibling
+    assert dependency_before_sibling
+    assert calls == Counter({"A": 2, "B": 1, "C": 1})
+    assert peak == 2
+    assert all(state.phase is TargetPhase.ACCEPTED for state in states)
 
 
-def test_target_batch_overlaps_shared_client_model_execution(
+def test_target_execution_overlaps_shared_client_model_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     task_ids = ("task-architecture", "task-testing")
@@ -548,7 +665,9 @@ def test_target_batch_overlaps_shared_client_model_execution(
     runtime = SimpleNamespace(
         specs_by_task=specs,
         states_by_task={
-            task_id: SimpleNamespace(phase=TargetPhase.SCHEDULED)
+            task_id: SimpleNamespace(
+                target_task_id=task_id, phase=TargetPhase.SCHEDULED
+            )
             for task_id in task_ids
         },
         completion_by_task={task_id: object() for task_id in task_ids},
@@ -573,6 +692,7 @@ def test_target_batch_overlaps_shared_client_model_execution(
         await llm_client.generate(  # type: ignore[union-attr]
             SimpleNamespace(target_task_id=target_spec.target_task_id)  # type: ignore[union-attr]
         )
+        kwargs["target_state"].phase = TargetPhase.ACCEPTED  # type: ignore[union-attr]
         return WorkerCycleOutcome.CYCLE_YIELDED
 
     monkeypatch.setattr(harness, "ContextWindowManager", lambda _profile: object())
@@ -584,26 +704,28 @@ def test_target_batch_overlaps_shared_client_model_execution(
     monkeypatch.setattr(harness, "_load_evidence", lambda *_args: {})
     monkeypatch.setattr(harness, "_load_questions", lambda *_args: {})
     monkeypatch.setattr(harness, "run_worker_cycle", run_worker)
+    monkeypatch.setattr(
+        harness, "schedule_runnable_targets", lambda *_args, **_kwargs: []
+    )
+    runtime.fleet_spec = SimpleNamespace(max_concurrent_targets=len(task_ids))
 
-    outcomes = asyncio.run(
+    stopped = asyncio.run(
         asyncio.wait_for(
-            harness._run_target_batch(
-                task_ids,
+            harness._run_targets_until_quiescent(
                 runtime,  # type: ignore[arg-type]
+                list(specs.values()),  # type: ignore[arg-type]
+                list(runtime.states_by_task.values()),  # type: ignore[arg-type]
             ),
             timeout=1,
         )
     )
 
-    assert outcomes == [
-        WorkerCycleOutcome.CYCLE_YIELDED,
-        WorkerCycleOutcome.CYCLE_YIELDED,
-    ]
+    assert not stopped
     assert client.started == set(task_ids)
     assert client.maximum_in_flight == len(task_ids)
 
 
-def test_target_batch_does_not_hide_unexpected_exceptions(
+def test_target_execution_cancels_siblings_on_unexpected_exceptions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sibling_cancelled = asyncio.Event()
@@ -622,14 +744,13 @@ def test_target_batch_does_not_hide_unexpected_exceptions(
         return WorkerCycleOutcome.CYCLE_YIELDED
 
     monkeypatch.setattr(harness, "_run_target_step", run_target_step)
+    monkeypatch.setattr(
+        harness, "schedule_runnable_targets", lambda *_args, **_kwargs: []
+    )
+    runtime, specs, states = _execution_runtime(("waiting", "broken"), 2)
 
     with pytest.raises(ExceptionGroup) as error:
-        asyncio.run(
-            harness._run_target_batch(
-                ["waiting", "broken"],
-                SimpleNamespace(),  # type: ignore[arg-type]
-            )
-        )
+        asyncio.run(harness._run_targets_until_quiescent(runtime, specs, states))
 
     assert any(
         isinstance(exception, RuntimeError)
@@ -637,6 +758,33 @@ def test_target_batch_does_not_hide_unexpected_exceptions(
         for exception in error.value.exceptions
     )
     assert sibling_cancelled.is_set()
+
+
+def test_target_execution_records_phase_and_step_spans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, specs, states = _execution_runtime(("target",), 1)
+    monkeypatch.setattr(
+        harness, "schedule_runnable_targets", lambda *_args, **_kwargs: []
+    )
+
+    async def run_target_step(_task_id: str, _runtime: object) -> WorkerCycleOutcome:
+        states[0].phase = TargetPhase.ACCEPTED
+        return WorkerCycleOutcome.FINALIZATION_REQUESTED
+
+    monkeypatch.setattr(harness, "_run_target_step", run_target_step)
+    metrics = RuntimeMetricsCollector()
+    with metrics.activate():
+        assert not asyncio.run(
+            harness._run_targets_until_quiescent(runtime, specs, states)
+        )
+
+    assert [span.name for span in metrics.spans] == [
+        "target_step",
+        "target_execution",
+    ]
+    assert metrics.spans[0].target_task_id == "target"
+    assert metrics.spans[0].outcome == WorkerCycleOutcome.FINALIZATION_REQUESTED.value
 
 
 @pytest.mark.parametrize(
@@ -721,6 +869,21 @@ class SimpleTargetState:
             "target_task_id": self.target_task_id,
             "phase": self.phase.value,
         }
+
+
+def _execution_runtime(
+    task_ids: tuple[str, ...], limit: int
+) -> tuple[SimpleNamespace, list[SimpleNamespace], list[SimpleTargetState]]:
+    specs = [SimpleNamespace(target_task_id=task_id) for task_id in task_ids]
+    states = [SimpleTargetState(task_id) for task_id in task_ids]
+    for state in states:
+        state.phase = TargetPhase.SCHEDULED
+    runtime = SimpleNamespace(
+        fleet_spec=SimpleNamespace(max_concurrent_targets=limit),
+        fleet_state=SimpleNamespace(),
+        store=object(),
+    )
+    return runtime, specs, states
 
 
 class _Client:

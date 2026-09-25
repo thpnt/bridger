@@ -137,6 +137,7 @@ class RuntimeMetricsReport(BaseModel):
     batches: list[BatchMetrics]
     configured_concurrency: int | None = None
     fleet_wall_time_ms: float = 0
+    target_execution_wall_ms: float = 0
     total_target_work_ms: float = 0
     average_active_targets: float = 0
     effective_parallel_speedup: float = 0

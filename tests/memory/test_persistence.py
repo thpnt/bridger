@@ -592,17 +592,21 @@ def test_provider_settlement_preserves_cache_usage_after_budget_overage(
     assert fixture.fleet_state.usage == fixture.target_state.usage
 
 
-def test_harness_resumes_scheduled_target_without_stage_two_admission(
+def test_harness_resumes_scheduled_target_and_checks_scheduler_capacity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _runtime(tmp_path)
     fixture.target_state.phase = TargetPhase.SCHEDULED
 
-    def fail_if_scheduled(*_: object, **__: object) -> list[str]:
-        raise AssertionError("Stage 2 must not re-admit scheduled work")
+    scheduling_calls = 0
 
-    monkeypatch.setattr(harness, "schedule_runnable_targets", fail_if_scheduled)
+    def schedule(*_: object, **__: object) -> list[str]:
+        nonlocal scheduling_calls
+        scheduling_calls += 1
+        return []
+
+    monkeypatch.setattr(harness, "schedule_runnable_targets", schedule)
 
     assert harness._runnable_target_task_ids(
         fixture.spec,
@@ -610,7 +614,9 @@ def test_harness_resumes_scheduled_target_without_stage_two_admission(
         [fixture.target_spec],
         [fixture.target_state],
         fixture.store,
+        (),
     ) == [fixture.target_spec.target_task_id]
+    assert scheduling_calls == 1
 
 
 def test_finalization_persists_exact_fresh_candidate_and_is_idempotent(

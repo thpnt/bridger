@@ -57,7 +57,7 @@ def _report(metrics: RuntimeMetricsCollector, root: Path):
     )
 
 
-def test_fake_clock_and_batch_cycle_repair_accounting(tmp_path: Path) -> None:
+def test_fake_clock_and_event_driven_cycle_repair_accounting(tmp_path: Path) -> None:
     ticks = [0]
     metrics = RuntimeMetricsCollector(
         clock_ns=lambda: ticks[0],
@@ -74,7 +74,7 @@ def test_fake_clock_and_batch_cycle_repair_accounting(tmp_path: Path) -> None:
     metrics.spans.extend(
         [
             _span("memory_fleet", 0, 10_000),
-            _span("target_batch", 0, 10_000),
+            _span("target_execution", 0, 10_000),
             _span("target_step", 0, 10_000, target_task_id="A", outcome="done"),
             _span("target_step", 0, 6_000, target_task_id="B", outcome="done"),
             _span("target_step", 0, 4_000, target_task_id="C", outcome="done"),
@@ -197,8 +197,12 @@ def test_fake_clock_and_batch_cycle_repair_accounting(tmp_path: Path) -> None:
     assert report.targets[0].repair_penalty_ms == 6000
     assert report.total_target_work_ms == 20_000
     assert report.effective_parallel_speedup == 2
-    assert report.total_barrier_wait_ms == 10_000
-    assert report.critical_path_target_ids == ["A"]
+    assert report.target_execution_wall_ms == 10_000
+    assert report.average_active_targets == 2
+    assert report.concurrency_utilization == pytest.approx(2 / 3)
+    assert report.total_barrier_wait_ms == 0
+    assert report.batches == []
+    assert report.critical_path_steps == ["target_execution"]
     assert report.model_provider_wait_ms == 1200
     assert report.model_by_role["worker"] == {"calls": 2, "total_duration_ms": 1200}
     assert report.model_wall_ms == 600
@@ -206,11 +210,6 @@ def test_fake_clock_and_batch_cycle_repair_accounting(tmp_path: Path) -> None:
         report.model_wall_ms + report.tool_wall_ms + report.other_harness_ms
         == report.total_duration_ms
     )
-    assert [step.barrier_wait_ms for step in report.batches[0].target_steps] == [
-        0,
-        4000,
-        6000,
-    ]
     saved = persist_runtime_metrics_report(report, tmp_path)
     assert load_runtime_metrics_report(saved) == report
 
