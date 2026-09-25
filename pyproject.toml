@@ -1,11 +1,12 @@
 [project]
-name = "bridger"
+name = "usebridger"
 version = "0.1.0"
 description = "Repository intelligence and knowledge system for AI coding agents"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES/Graphify/*"]
 dependencies = [
-    "black>=26.5.1",
     "graspologic>=3.4,<4",
     "huggingface-hub>=0.34",
     "keyring>=25.0",
@@ -54,8 +55,14 @@ dependencies = [
 [project.scripts]
 bridger = "bridger.cli:app"
 
+[project.urls]
+Homepage = "https://github.com/thpnt/bridger"
+Repository = "https://github.com/thpnt/bridger"
+Issues = "https://github.com/thpnt/bridger/issues"
+
 [dependency-groups]
 dev = [
+    "black>=26.5.1",
     "mypy>=1.14",
     "pytest>=8.3",
     "pytest-cov>=6.0",

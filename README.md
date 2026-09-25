@@ -18,7 +18,7 @@ uv run mypy src
 Install Bridger once, then initialize each repository you want it to serve:
 
 ```shell
-uv tool install bridger
+uv tool install usebridger
 bridger auth set-key
 cd ~/my-project
 bridger init --reasoning low
@@ -74,7 +74,9 @@ For a project-local Cursor configuration, pass the workspace explicitly:
 It resolves nested directories to the Git repository root. Use
 `bridger mcp --repository /path/to/repository` when the host starts the process
 elsewhere. Each server process serves one repository and stops with its host
-session. It exposes only `understand` and `impact`.
+session. It exposes understand, impact, query_graph, search_repository,
+get_graph_entity, get_graph_neighbors, get_graph_subgraph, get_graph_path,
+list_graph_communities, and get_graph_community.
 
 ## CLI commands
 
@@ -89,3 +91,7 @@ Run consumption commands from inside an initialized repository. UNDERSTAND
 combines Repository Brain knowledge with structural context. IMPACT accepts
 exact repository symbols and reports potential structural impact. Use `--json`
 for the canonical machine-readable result.
+
+Bridger is licensed under Apache-2.0. Vendored Graphify remains third-party
+code; its license and attribution notices are in
+[THIRD_PARTY_NOTICES/Graphify](THIRD_PARTY_NOTICES/Graphify).
