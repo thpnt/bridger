@@ -607,7 +607,6 @@ def recover_fleet(
                 target_state,
                 completion_state,
             )
-            _validate_evaluation_finding_refs(store, target_spec, target_state)
             _validate_accepted_result_ref(store, target_spec, target_state)
             _validate_completion_definition(
                 completion_state,
@@ -617,7 +616,79 @@ def recover_fleet(
             completion_states[target_spec.target_task_id] = completion_state
 
         _validate_fleet_state(fleet_spec, fleet_state, target_specs, target_states)
-        _validate_fleet_finding_refs(store, fleet_state)
+        stage12_review = None
+        if fleet_state.phase in {FleetPhase.REPAIRING, FleetPhase.REVIEWING}:
+            from bridger.contracts.memory.review import ReviewVerdict
+            from bridger.contracts.memory.validation import ValidationVerdict
+            from bridger.memory.evaluation.fleet_review import (
+                resolve_fleet_review_verdict,
+            )
+            from bridger.memory.evaluation.fleet_validation import (
+                resolve_fleet_validation_report,
+            )
+
+            accepted_refs = [
+                target_states[task_id].last_accepted_result_ref
+                for task_id in fleet_state.target_task_ids
+            ]
+            if fleet_state.phase is FleetPhase.REVIEWING:
+                if any(reference is None for reference in accepted_refs):
+                    raise ValueError("REVIEWING fleet has an incomplete accepted set")
+                fleet_report = resolve_fleet_validation_report(
+                    store,
+                    [reference for reference in accepted_refs if reference is not None],
+                )
+                if (
+                    fleet_report is None
+                    or fleet_report.verdict is not ValidationVerdict.PASS
+                    or fleet_report.finding_refs
+                ):
+                    raise ValueError("REVIEWING fleet lacks its Stage 11 PASS")
+                stage12_review = resolve_fleet_review_verdict(
+                    store,
+                    fleet_report.fleet_validation_report_id,
+                )
+            elif all(reference is not None for reference in accepted_refs):
+                fleet_report = resolve_fleet_validation_report(
+                    store,
+                    [reference for reference in accepted_refs if reference is not None],
+                )
+                if (
+                    fleet_report is not None
+                    and fleet_report.verdict is ValidationVerdict.PASS
+                ):
+                    stage12_review = resolve_fleet_review_verdict(
+                        store,
+                        fleet_report.fleet_validation_report_id,
+                    )
+            if (
+                stage12_review is not None
+                and fleet_state.phase is FleetPhase.REPAIRING
+                and stage12_review.verdict is not ReviewVerdict.NEEDS_WORK
+            ):
+                raise ValueError("REPAIRING fleet has an incoherent Stage 12 result")
+        if stage12_review is None:
+            for target_task_id, target_spec in target_specs.items():
+                _validate_evaluation_finding_refs(
+                    store,
+                    target_spec,
+                    target_states[target_task_id],
+                )
+            _validate_fleet_finding_refs(store, fleet_state)
+        else:
+            for target_task_id, target_spec in target_specs.items():
+                _validate_evaluation_finding_refs(
+                    store,
+                    target_spec,
+                    target_states[target_task_id],
+                    skip_fleet_review=True,
+                )
+            _validate_fleet_finding_refs(
+                store,
+                fleet_state,
+                skip_fleet_review=True,
+            )
+
         if fleet_state.phase in {
             FleetPhase.VALIDATING,
             FleetPhase.REPAIRING,
@@ -625,16 +696,33 @@ def recover_fleet(
         }:
             from bridger.memory.evaluation.fleet_validation import validate_fleet
 
-            fleet_review_repair = fleet_state.phase is FleetPhase.REPAIRING and any(
-                reference.origin is FindingOrigin.FLEET_REVIEW
-                for reference in fleet_state.open_finding_refs
-            )
-            if fleet_review_repair:
+            if fleet_state.phase is FleetPhase.REVIEWING:
+                from bridger.contracts.memory.review import ReviewVerdict
+                from bridger.memory.evaluation.fleet_review import (
+                    resume_fleet_review_pass_projection,
+                    resume_fleet_review_routing,
+                )
+
+                if stage12_review is None:
+                    validate_fleet(store, fleet_state)
+                elif stage12_review.verdict is ReviewVerdict.PASS:
+                    resume_fleet_review_pass_projection(store, fleet_state)
+                else:
+                    resume_fleet_review_routing(store, fleet_state)
+            elif fleet_state.phase is FleetPhase.REPAIRING:
+                from bridger.contracts.memory.review import ReviewVerdict
                 from bridger.memory.evaluation.fleet_review import (
                     resume_fleet_review_routing,
                 )
 
-                resume_fleet_review_routing(store, fleet_state)
+                if stage12_review is not None:
+                    if stage12_review.verdict is not ReviewVerdict.NEEDS_WORK:
+                        raise ValueError(
+                            "REPAIRING fleet has an incoherent Stage 12 result"
+                        )
+                    resume_fleet_review_routing(store, fleet_state)
+                else:
+                    validate_fleet(store, fleet_state)
             else:
                 validate_fleet(store, fleet_state)
             for target_task_id, target_spec in target_specs.items():
@@ -646,11 +734,6 @@ def recover_fleet(
                     target_state,
                     completion_states[target_task_id],
                 )
-                _validate_evaluation_finding_refs(
-                    store,
-                    target_spec,
-                    target_state,
-                )
                 target_states[target_task_id] = target_state
             _validate_fleet_state(
                 fleet_spec,
@@ -658,42 +741,13 @@ def recover_fleet(
                 target_specs,
                 target_states,
             )
+            for target_task_id, target_spec in target_specs.items():
+                _validate_evaluation_finding_refs(
+                    store,
+                    target_spec,
+                    target_states[target_task_id],
+                )
             _validate_fleet_finding_refs(store, fleet_state)
-            if fleet_state.phase is FleetPhase.REVIEWING:
-                from bridger.contracts.memory.review import ReviewVerdict
-                from bridger.memory.evaluation.fleet_review import (
-                    resolve_fleet_review_verdict,
-                )
-                from bridger.memory.evaluation.fleet_validation import (
-                    resolve_fleet_validation_report,
-                )
-
-                accepted_refs = [
-                    target_states[task_id].last_accepted_result_ref
-                    for task_id in fleet_state.target_task_ids
-                ]
-                if any(reference is None for reference in accepted_refs):
-                    raise ValueError("REVIEWING fleet has an incomplete accepted set")
-                fleet_report = resolve_fleet_validation_report(
-                    store,
-                    [reference for reference in accepted_refs if reference is not None],
-                )
-                if fleet_report is None:
-                    raise ValueError("REVIEWING fleet lacks its Stage 11 PASS")
-                review = resolve_fleet_review_verdict(
-                    store,
-                    fleet_report.fleet_validation_report_id,
-                )
-                if review is not None and (
-                    review.verdict is not ReviewVerdict.PASS
-                    or any(
-                        reference.origin is FindingOrigin.FLEET_REVIEW
-                        for reference in fleet_state.open_finding_refs
-                    )
-                ):
-                    raise ValueError(
-                        "REVIEWING fleet has an incoherent Stage 12 result"
-                    )
         if fleet_state.phase is FleetPhase.ACCEPTED:
             from bridger.memory.evaluation.fleet_acceptance import (
                 resolve_accepted_memory_fleet_result,
@@ -1165,6 +1219,8 @@ def _validate_evaluation_finding_refs(
     store: FleetRuntimeStore,
     target_spec: TargetTaskSpec,
     target_state: TargetTaskState,
+    *,
+    skip_fleet_review: bool = False,
 ) -> None:
     from bridger.memory.evaluation.fleet_validation import (
         resolve_fleet_validation_finding,
@@ -1196,6 +1252,8 @@ def _validate_evaluation_finding_refs(
             if target_spec.target_task_id not in finding.affected_target_task_ids:
                 raise ValueError("fleet finding is routed to an unaffected target")
         elif reference.origin is FindingOrigin.FLEET_REVIEW:
+            if skip_fleet_review:
+                continue
             from bridger.memory.evaluation.fleet_review import (
                 resolve_fleet_review_finding,
             )
@@ -1279,6 +1337,8 @@ def _validate_fleet_state(
 def _validate_fleet_finding_refs(
     store: FleetRuntimeStore,
     fleet_state: FleetRunState,
+    *,
+    skip_fleet_review: bool = False,
 ) -> None:
     from bridger.memory.evaluation.fleet_review import resolve_fleet_review_finding
     from bridger.memory.evaluation.fleet_validation import (
@@ -1292,6 +1352,8 @@ def _validate_fleet_finding_refs(
         if reference.origin is FindingOrigin.FLEET_VALIDATION:
             resolve_fleet_validation_finding(store, reference.finding_id)
         elif reference.origin is FindingOrigin.FLEET_REVIEW:
+            if skip_fleet_review:
+                continue
             resolve_fleet_review_finding(store, reference.finding_id)
         else:
             raise ValueError("fleet state contains a target-level finding")

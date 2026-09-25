@@ -16,6 +16,7 @@ from bridger.contracts.memory.core import (
     FleetRunState,
     MemoryFleetSpec,
     MemoryTargetCatalog,
+    TargetCompletionState,
     TargetDefinition,
     TargetPhase,
     TargetTaskSpec,
@@ -140,6 +141,34 @@ async def reconcile_fleet(
         raise FleetReviewInvocationError(
             "fleet review context-window profile does not match reviewer profile"
         )
+    try:
+        current, _, _, _, report = _resolve_review_authorities(
+            persistence,
+            fleet_state,
+            catalog,
+            target_definitions,
+            reviewer_profile,
+        )
+        if current.phase is not FleetPhase.REVIEWING:
+            raise FleetReviewInvocationError(
+                "fleet reconciliation requires REVIEWING phase"
+            )
+        existing = resolve_fleet_review_verdict(
+            persistence,
+            report.fleet_validation_report_id,
+        )
+        if existing is not None:
+            persisted = FleetRunState.model_validate_json(
+                persistence.paths.fleet_state.read_bytes()
+            )
+            _replace_model(fleet_state, persisted)
+            return existing
+    except FleetReviewError:
+        raise
+    except (OSError, PersistenceRecoveryError, ValidationError, ValueError) as error:
+        raise FleetReviewError(
+            "could not resolve an exact committed Stage 12 fleet review"
+        ) from error
     context = compile_fleet_review_context(
         persistence,
         fleet_state,
@@ -308,46 +337,78 @@ def resume_fleet_review_routing(
         )
         target_specs = store.load_target_specs()
         target_states = _load_target_states(store, target_specs)
-        if current.phase is FleetPhase.RUNNING:
-            review_refs = [
-                ref
-                for ref in current.open_finding_refs
-                if ref.origin is FindingOrigin.FLEET_REVIEW
-            ]
-            if not review_refs:
-                raise PersistenceRecoveryError(
-                    "running fleet lacks routed fleet-review findings"
-                )
-            finding = resolve_fleet_review_finding(store, review_refs[0].finding_id)
-            verdict = FleetReviewVerdict.model_validate_json(
-                store.paths.fleet_review_verdict(finding.fleet_review_id).read_bytes()
+        if current.phase not in {
+            FleetPhase.REVIEWING,
+            FleetPhase.REPAIRING,
+            FleetPhase.RUNNING,
+        }:
+            raise FleetReviewInvocationError(
+                "fleet review routing requires REVIEWING, REPAIRING, or RUNNING phase"
             )
+        accepted_refs = [
+            target_state.last_accepted_result_ref for target_state in target_states
+        ]
+        if any(reference is None for reference in accepted_refs):
+            raise PersistenceRecoveryError(
+                "fleet review routing has an incomplete accepted set"
+            )
+        report = resolve_fleet_validation_report(
+            store,
+            [reference for reference in accepted_refs if reference is not None],
+        )
+        if report is None or report.verdict is not ValidationVerdict.PASS:
+            raise PersistenceRecoveryError(
+                "fleet review routing lacks its exact Stage 11 PASS"
+            )
+        verdict = resolve_fleet_review_verdict(
+            store,
+            report.fleet_validation_report_id,
+        )
+        if verdict is None or verdict.verdict is not ReviewVerdict.NEEDS_WORK:
+            raise PersistenceRecoveryError(
+                "fleet review routing lacks a committed NEEDS_WORK verdict"
+            )
+        if current.phase is FleetPhase.RUNNING:
+            if _fleet_review_refs(current.open_finding_refs) != verdict.finding_refs:
+                raise PersistenceRecoveryError(
+                    "running fleet review projection does not match its verdict"
+                )
             _replace_model(fleet_state, current)
             return verdict
-        if current.phase is not FleetPhase.REPAIRING:
-            raise FleetReviewInvocationError(
-                "fleet review routing requires REPAIRING phase"
+        if any(
+            target_state.last_accepted_result_ref != accepted_ref
+            or target_state.phase not in {TargetPhase.ACCEPTED, TargetPhase.REPAIR}
+            for target_state, accepted_ref in zip(
+                target_states,
+                report.accepted_target_result_refs,
+                strict=True,
             )
-        review_refs = [
-            ref
-            for ref in current.open_finding_refs
-            if ref.origin is FindingOrigin.FLEET_REVIEW
-        ]
-        if not review_refs:
-            raise PersistenceRecoveryError(
-                "repairing fleet lacks committed fleet-review findings"
-            )
-        first = resolve_fleet_review_finding(store, review_refs[0].finding_id)
-        verdict = FleetReviewVerdict.model_validate_json(
-            store.paths.fleet_review_verdict(first.fleet_review_id).read_bytes()
-        )
-        if (
-            verdict.verdict is not ReviewVerdict.NEEDS_WORK
-            or verdict.finding_refs != review_refs
         ):
             raise PersistenceRecoveryError(
-                "fleet review repair projection does not match its verdict"
+                "fleet review routing no longer matches its accepted fleet"
             )
+        for target_spec, target_state, accepted_ref in zip(
+            target_specs,
+            target_states,
+            report.accepted_target_result_refs,
+            strict=True,
+        ):
+            result = resolve_accepted_target_result(
+                store,
+                target_spec,
+                accepted_ref,
+            )
+            completion_state = TargetCompletionState.model_validate_json(
+                store.paths.completion_state(target_spec).read_bytes()
+            )
+            if (
+                target_state.artifact_refs != result.artifact_refs
+                or target_state.evidence_refs != result.evidence_refs
+                or completion_state.items != result.completion_items
+            ):
+                raise PersistenceRecoveryError(
+                    "fleet review routing no longer matches its accepted results"
+                )
         _route_failed_review(
             store,
             fleet_state,
@@ -356,6 +417,102 @@ def resume_fleet_review_routing(
             target_states,
             verdict,
         )
+    return verdict
+
+
+def resume_fleet_review_pass_projection(
+    store: FleetRuntimeStore,
+    fleet_state: FleetRunState,
+) -> FleetReviewVerdict:
+    """Clear stale Stage 12 projection for the committed PASS verdict."""
+    with store.state_locks():
+        current = FleetRunState.model_validate_json(
+            store.paths.fleet_state.read_bytes()
+        )
+        if current.phase is not FleetPhase.REVIEWING:
+            raise FleetReviewInvocationError(
+                "fleet review PASS projection requires REVIEWING phase"
+            )
+        target_specs = store.load_target_specs()
+        target_states = _load_target_states(store, target_specs)
+        accepted_refs = [
+            target_state.last_accepted_result_ref for target_state in target_states
+        ]
+        if any(reference is None for reference in accepted_refs):
+            raise PersistenceRecoveryError(
+                "fleet review PASS has an incomplete accepted set"
+            )
+        report = resolve_fleet_validation_report(
+            store,
+            [reference for reference in accepted_refs if reference is not None],
+        )
+        if report is None or report.verdict is not ValidationVerdict.PASS:
+            raise PersistenceRecoveryError(
+                "fleet review PASS lacks its exact Stage 11 PASS"
+            )
+        verdict = resolve_fleet_review_verdict(
+            store,
+            report.fleet_validation_report_id,
+        )
+        if verdict is None or verdict.verdict is not ReviewVerdict.PASS:
+            raise PersistenceRecoveryError(
+                "fleet review PASS projection lacks a committed PASS verdict"
+            )
+        if any(
+            target_state.phase is not TargetPhase.ACCEPTED
+            or target_state.last_accepted_result_ref != accepted_ref
+            for target_state, accepted_ref in zip(
+                target_states,
+                report.accepted_target_result_refs,
+                strict=True,
+            )
+        ):
+            raise PersistenceRecoveryError(
+                "fleet review PASS no longer matches its accepted fleet"
+            )
+
+        after_fleet = current.model_copy(
+            deep=True,
+            update={
+                "open_finding_refs": _without_fleet_review(current.open_finding_refs)
+            },
+        )
+        writes = {}
+        if after_fleet != current:
+            writes[store.paths.fleet_state] = _model_bytes(after_fleet)
+        for target_spec, target_state in zip(
+            target_specs,
+            target_states,
+            strict=True,
+        ):
+            after_target = target_state.model_copy(
+                deep=True,
+                update={
+                    "open_finding_refs": _without_fleet_review(
+                        target_state.open_finding_refs
+                    )
+                },
+            )
+            if after_target != target_state:
+                writes[store.paths.target_state(target_spec)] = _model_bytes(
+                    after_target
+                )
+        if writes:
+            store.commit_operation(
+                operation_id=_operation_id(
+                    "fleet-review-pass-projection",
+                    verdict.fleet_review_id,
+                ),
+                writes=writes,
+                event_type="fleet_review_projection_reconciled",
+                payload={
+                    "fleet_review_id": verdict.fleet_review_id,
+                    "verdict": verdict.verdict.value,
+                    "from_phase": FleetPhase.REVIEWING.value,
+                    "to_phase": FleetPhase.REVIEWING.value,
+                },
+            )
+        _replace_model(fleet_state, after_fleet)
         return verdict
 
 
@@ -786,7 +943,7 @@ def _route_failed_review(
         target_states,
         strict=True,
     ):
-        if target_state.phase is not TargetPhase.ACCEPTED:
+        if target_state.phase not in {TargetPhase.ACCEPTED, TargetPhase.REPAIR}:
             raise PersistenceRecoveryError(
                 "fleet review repair routing requires accepted targets"
             )
@@ -802,7 +959,16 @@ def _route_failed_review(
             },
         )
         writes[store.paths.target_state(target_spec)] = _model_bytes(after_target)
-    after_fleet = current.model_copy(update={"phase": FleetPhase.RUNNING})
+    after_fleet = current.model_copy(
+        deep=True,
+        update={
+            "phase": FleetPhase.RUNNING,
+            "open_finding_refs": [
+                *_without_fleet_review(current.open_finding_refs),
+                *verdict.finding_refs,
+            ],
+        },
+    )
     writes[store.paths.fleet_state] = _model_bytes(after_fleet)
     store.commit_operation(
         operation_id=_operation_id("fleet-review-route", verdict.fleet_review_id),
@@ -815,7 +981,7 @@ def _route_failed_review(
                 for spec in target_specs
                 if spec.target_task_id in refs_by_target
             ],
-            "from_phase": FleetPhase.REPAIRING.value,
+            "from_phase": current.phase.value,
             "to_phase": FleetPhase.RUNNING.value,
         },
     )
@@ -843,6 +1009,14 @@ def _without_fleet_review(references: Sequence[FindingRef]) -> list[FindingRef]:
         reference
         for reference in references
         if reference.origin is not FindingOrigin.FLEET_REVIEW
+    ]
+
+
+def _fleet_review_refs(references: Sequence[FindingRef]) -> list[FindingRef]:
+    return [
+        reference
+        for reference in references
+        if reference.origin is FindingOrigin.FLEET_REVIEW
     ]
 
 
@@ -877,5 +1051,6 @@ __all__ = [
     "reconcile_fleet",
     "resolve_fleet_review_finding",
     "resolve_fleet_review_verdict",
+    "resume_fleet_review_pass_projection",
     "resume_fleet_review_routing",
 ]

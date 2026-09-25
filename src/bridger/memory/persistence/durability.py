@@ -206,6 +206,9 @@ _EVENT_REQUIRED_KEYS: dict[str, frozenset[str]] = {
             "to_phase",
         }
     ),
+    "fleet_review_projection_reconciled": frozenset(
+        {"fleet_review_id", "verdict", "from_phase", "to_phase"}
+    ),
     "fleet_accepted": frozenset(
         {
             "accepted_memory_fleet_result_id",
