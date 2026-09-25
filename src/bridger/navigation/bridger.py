@@ -99,6 +99,12 @@ class BridgerNavigator:
             warnings=warnings,
         )
 
+    @property
+    def repository_navigator(self) -> RepositoryNavigator:
+        """Return the repository authority already owned by this navigator."""
+        self._require_open()
+        return self._repository
+
     def close(self) -> None:
         if self._closed:
             return

@@ -109,9 +109,31 @@ async def test_tools_are_lazy_delegate_and_close_once(
     assert loaded == []
     async with Client(server) as client:
         tools = (await client.list_tools()).tools
-        assert {tool.name for tool in tools} == {"understand", "impact"}
-        assert all(tool.output_schema is None for tool in tools)
-        assert set(tools[0].input_schema["properties"]) in ({"query"}, {"symbols"})
+        tools_by_name = {tool.name: tool for tool in tools}
+        assert set(tools_by_name) == {
+            "understand",
+            "impact",
+            "query_graph",
+            "search_repository",
+            "get_graph_entity",
+            "get_graph_neighbors",
+            "get_graph_subgraph",
+            "get_graph_path",
+            "list_graph_communities",
+            "get_graph_community",
+        }
+        assert tools_by_name["understand"].output_schema is None
+        assert tools_by_name["impact"].output_schema is None
+        assert all(
+            tools_by_name[name].output_schema is not None
+            for name in tools_by_name.keys() - {"understand", "impact"}
+        )
+        assert set(tools_by_name["understand"].input_schema["properties"]) == {
+            "query"
+        }
+        assert set(tools_by_name["impact"].input_schema["properties"]) == {
+            "symbols"
+        }
         assert loaded == []
 
         for _ in range(2):
@@ -146,7 +168,7 @@ async def test_unused_navigator_is_never_opened_or_closed(
         adapter, "load_bridger_navigator", lambda _root: pytest.fail("loaded")
     )
     async with Client(adapter.create_mcp_server(repository)) as client:
-        assert len((await client.list_tools()).tools) == 2
+        assert len((await client.list_tools()).tools) == 10
 
 
 @pytest.mark.anyio
@@ -240,7 +262,18 @@ async def test_real_stdio_subprocess_lists_tools_and_returns_tool_error(
     )
     async with Client(parameters) as client:
         tools = (await client.list_tools()).tools
-        assert {tool.name for tool in tools} == {"understand", "impact"}
+        assert {tool.name for tool in tools} == {
+            "understand",
+            "impact",
+            "query_graph",
+            "search_repository",
+            "get_graph_entity",
+            "get_graph_neighbors",
+            "get_graph_subgraph",
+            "get_graph_path",
+            "list_graph_communities",
+            "get_graph_community",
+        }
         result = await client.call_tool("understand", {"query": "where"})
         assert result.is_error is True
         assert "no current Repository Brain publication" in result.content[0].text
