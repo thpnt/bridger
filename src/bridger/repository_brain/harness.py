@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -27,6 +29,7 @@ from bridger.contracts.memory.core import (
     TargetTaskSpec,
     TargetTaskState,
 )
+from bridger.contracts.memory.fleet_acceptance import AcceptedMemoryFleetResult
 from bridger.contracts.memory.fleet_review import FleetReviewVerdict
 from bridger.contracts.memory.hydration import (
     GraphOverview,
@@ -42,6 +45,7 @@ from bridger.contracts.memory.review import (
 )
 from bridger.contracts.memory.worker_cycle import EvidenceReference, OpenQuestion
 from bridger.contracts.repository import RepositoryContext
+from bridger.contracts.repository_brain import RepositoryBrainManifest
 from bridger.contracts.symbols import SymbolIndex
 from bridger.graph.enrichment import (
     enrich_graph_snapshot,
@@ -81,6 +85,9 @@ from bridger.memory import (
     validate_target_candidate,
 )
 from bridger.memory.errors import PersistenceRecoveryError, TargetReviewBudgetError
+from bridger.memory.evaluation.fleet_acceptance import (
+    resolve_accepted_memory_fleet_result,
+)
 from bridger.memory.evaluation.review import review_target
 from bridger.memory.runtime.worker_tools import WORKER_TOOL_IDS
 from bridger.navigation.navigator import RepositoryNavigator
@@ -91,11 +98,16 @@ from bridger.progress import (
     notify_stage_started,
 )
 from bridger.repository.reader import read_file
-from bridger.repository_brain.publication import publish_repository_brain
+from bridger.repository_brain.publication import (
+    completed_repository_brain_id,
+    is_repository_brain_superseded,
+    publish_repository_brain,
+)
 from bridger.repository_brain.token_usage import persist_token_usage_report
 from bridger.runtime_timing import current_collector
 
 _PROMPTS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "prompts"
+_LOGGER = logging.getLogger(__name__)
 _TARGETS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "default-targets"
 _TEST_TARGETS_ROOT = Path(__file__).resolve().parents[1] / "memory" / "test-targets"
 _INITIAL_PROVIDER_INPUT_HARD_CAP_TOKENS = 32_000
@@ -258,6 +270,22 @@ async def run_memory_harness(
     client: LLMClient | None = None
     active_error: BaseException | None = None
     try:
+        if fleet_state.phase is FleetPhase.ACCEPTED:
+            if fleet_state.accepted_result_ref is None:
+                raise PersistenceRecoveryError("ACCEPTED fleet has no accepted result")
+            accepted = resolve_accepted_memory_fleet_result(
+                store, fleet_state.accepted_result_ref
+            )
+            return _finalize_accepted_fleet(
+                configuration,
+                fleet_spec,
+                store,
+                graph_build,
+                enrichment,
+                accepted,
+                output_root,
+                progress,
+            )
         navigator = RepositoryNavigator(
             context,
             file_index,
@@ -354,40 +382,15 @@ async def run_memory_harness(
                         )
                     if fleet_review.verdict is ReviewVerdict.PASS:
                         accepted = accept_fleet(store, fleet_state)
-                        notify_stage_started(
+                        return _finalize_accepted_fleet(
+                            configuration,
+                            fleet_spec,
+                            store,
+                            graph_build,
+                            enrichment,
+                            accepted,
+                            output_root,
                             progress,
-                            InitStage.PUBLISH_REPOSITORY_BRAIN,
-                        )
-                        if metrics is None:
-                            token_usage_report_path = persist_token_usage_report(
-                                configuration.mode.value, fleet_spec, store, enrichment
-                            )
-                            publication_path = publish_repository_brain(
-                                graph_build,
-                                accepted,
-                                enrichment,
-                                output_root,
-                                runtime_root=Path(fleet_spec.runtime_root),
-                            )
-                        else:
-                            with metrics.span("token_report_persistence"):
-                                token_usage_report_path = persist_token_usage_report(
-                                    configuration.mode.value,
-                                    fleet_spec,
-                                    store,
-                                    enrichment,
-                                )
-                            with metrics.span("brain_publication"):
-                                publication_path = publish_repository_brain(
-                                    graph_build,
-                                    accepted,
-                                    enrichment,
-                                    output_root,
-                                    runtime_root=Path(fleet_spec.runtime_root),
-                                )
-                        return RepositoryBrainModelBuildResult(
-                            publication_path=publication_path,
-                            token_usage_report_path=token_usage_report_path,
                         )
             if fleet_state.phase in {
                 FleetPhase.BLOCKED,
@@ -473,6 +476,53 @@ async def run_memory_harness(
             else:
                 recovered.close()
     raise RepositoryBrainBuildError("memory fleet exited without publication")
+
+
+def _finalize_accepted_fleet(
+    configuration: InitRunConfiguration,
+    fleet_spec: MemoryFleetSpec,
+    store: FleetRuntimeStore,
+    graph_build: GraphBuildResult,
+    enrichment: GraphEnrichmentOverlay,
+    accepted: AcceptedMemoryFleetResult,
+    output_root: Path,
+    progress: InitProgressObserver | None,
+) -> RepositoryBrainModelBuildResult:
+    notify_stage_started(progress, InitStage.PUBLISH_REPOSITORY_BRAIN)
+    metrics = current_collector()
+    if metrics is None:
+        publication_path = publish_repository_brain(
+            graph_build,
+            accepted,
+            enrichment,
+            output_root,
+            runtime_root=Path(fleet_spec.runtime_root),
+        )
+    else:
+        with metrics.span("brain_publication"):
+            publication_path = publish_repository_brain(
+                graph_build,
+                accepted,
+                enrichment,
+                output_root,
+                runtime_root=Path(fleet_spec.runtime_root),
+            )
+    try:
+        if metrics is None:
+            report_path = persist_token_usage_report(
+                configuration.mode.value, fleet_spec, store, enrichment
+            )
+        else:
+            with metrics.span("token_report_persistence"):
+                report_path = persist_token_usage_report(
+                    configuration.mode.value, fleet_spec, store, enrichment
+                )
+    except Exception:
+        _LOGGER.exception("token usage report persistence failed")
+        report_path = None
+    return RepositoryBrainModelBuildResult(
+        publication_path=publication_path, token_usage_report_path=report_path
+    )
 
 
 async def _run_target_batch(
@@ -679,7 +729,7 @@ def discover_resumable_fleet(
     configuration: InitRunConfiguration,
     context: RepositoryContext,
 ) -> MemoryFleetSpec | None:
-    """Select the one compatible non-accepted Repository Brain fleet, if any."""
+    """Select the one compatible unfinished Repository Brain fleet, if any."""
     runtime_root = (configuration.bridger_root / "runtime").resolve()
     if not runtime_root.is_dir():
         return None
@@ -703,6 +753,8 @@ def discover_resumable_fleet(
             catalog,
         ):
             continue
+        if is_repository_brain_superseded(runtime_root, spec.fleet_run_id):
+            continue
         state_path = run_root / "initialization" / "fleet-state.json"
         try:
             fleet_state = FleetRunState.model_validate_json(state_path.read_bytes())
@@ -714,8 +766,28 @@ def discover_resumable_fleet(
             raise PersistenceRecoveryError(
                 f"compatible fleet state identity mismatch: {spec.fleet_run_id}"
             )
-        if fleet_state.phase is not FleetPhase.ACCEPTED:
-            candidates.append(spec)
+        if fleet_state.phase is FleetPhase.ACCEPTED:
+            completed_id = completed_repository_brain_id(
+                runtime_root, spec.fleet_run_id
+            )
+            if completed_id is not None:
+                publication_path = (
+                    configuration.bridger_root
+                    / "published"
+                    / completed_id
+                    / "repository-brain.json"
+                )
+                encoded = publication_path.read_bytes()
+                manifest = RepositoryBrainManifest.model_validate_json(encoded)
+                if (
+                    hashlib.sha256(encoded).hexdigest()[:16] != completed_id
+                    or manifest.fleet_run_id != spec.fleet_run_id
+                ):
+                    raise PersistenceRecoveryError(
+                        "completed fleet marker does not match its publication"
+                    )
+                continue
+        candidates.append(spec)
 
     if len(candidates) > 1:
         run_ids = ", ".join(spec.fleet_run_id for spec in candidates)

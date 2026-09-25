@@ -38,6 +38,14 @@ def test_v2_publication_is_typed_content_addressed_and_collision_safe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    synced: list[Path] = []
+    original_sync = publication_module._fsync_directory
+
+    def sync(directory: Path) -> None:
+        synced.append(directory)
+        original_sync(directory)
+
+    monkeypatch.setattr(publication_module, "_fsync_directory", sync)
     monkeypatch.setattr(publication_module, "validate_graph_snapshot", lambda *_: None)
     monkeypatch.setattr(
         publication_module,
@@ -96,6 +104,7 @@ def test_v2_publication_is_typed_content_addressed_and_collision_safe(
     )
     expected_id = hashlib.sha256(manifest_path.read_bytes()).hexdigest()[:16]
     assert manifest_path.parent.name == expected_id
+    assert synced == [manifest_path.parent.parent]
     assert not list(manifest_path.parent.parent.glob(f".{expected_id}-*"))
 
     manifest_path.write_text(json.dumps({"collision": True}), encoding="utf-8")

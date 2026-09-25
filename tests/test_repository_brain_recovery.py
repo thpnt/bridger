@@ -1,6 +1,8 @@
 """Repository Brain recovery composition regressions."""
 
 import asyncio
+import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +19,7 @@ from bridger.contracts.memory.core import (
 )
 from bridger.contracts.memory.review import ReviewVerdict
 from bridger.contracts.repository import RepositoryContext
+from bridger.contracts.repository_brain import RepositoryBrainManifest
 from bridger.init_pipeline import (
     InitMode,
     InitRunConfiguration,
@@ -25,6 +28,10 @@ from bridger.init_pipeline import (
 )
 from bridger.llm.profiles import LLMProfile
 from bridger.memory import WorkerCycleOutcome
+from bridger.repository_brain.publication import (
+    mark_repository_brain_complete,
+    supersede_existing_fleets,
+)
 
 
 def test_discovers_one_compatible_incomplete_fleet(tmp_path: Path) -> None:
@@ -47,7 +54,7 @@ def test_discovers_one_compatible_incomplete_fleet(tmp_path: Path) -> None:
     assert selected == compatible
 
 
-def test_discovery_ignores_an_accepted_fleet(tmp_path: Path) -> None:
+def test_discovery_resumes_an_unfinished_accepted_fleet(tmp_path: Path) -> None:
     configuration = resolve_init_configuration(
         InitMode.TEST,
         repository_root=tmp_path,
@@ -56,7 +63,150 @@ def test_discovery_ignores_an_accepted_fleet(tmp_path: Path) -> None:
     accepted = _fleet_spec(configuration, context, "accepted")
     _persist_discovery_state(accepted, FleetPhase.ACCEPTED)
 
-    assert harness.discover_resumable_fleet(configuration, context) is None
+    assert harness.discover_resumable_fleet(configuration, context) == accepted
+
+
+def test_discovery_skips_completed_historical_fleet_and_selects_unfinished(
+    tmp_path: Path,
+) -> None:
+    configuration = resolve_init_configuration(InitMode.TEST, repository_root=tmp_path)
+    context = _context(tmp_path)
+    historical = _fleet_spec(configuration, context, "historical")
+    unfinished = _fleet_spec(configuration, context, "unfinished")
+    _persist_discovery_state(historical, FleetPhase.ACCEPTED)
+    _persist_discovery_state(unfinished, FleetPhase.ACCEPTED)
+    manifest = RepositoryBrainManifest(
+        repository_id=context.repository_id,
+        repository_revision=context.revision,
+        graph_snapshot_id=historical.source.graph_snapshot_id,
+        graph_snapshot_root=str(configuration.graph_root / "graph"),
+        enrichment_overlay_id="overlay",
+        fleet_run_id=historical.fleet_run_id,
+        memory_runtime_root=historical.runtime_root,
+        memory_output_root=historical.output_root,
+        accepted_memory_fleet_result_id="accepted",
+        memory_target_catalog_id=historical.target_catalog_id,
+        memory_target_catalog_version=historical.target_catalog_version,
+        accepted_target_result_refs=["target"],
+    )
+    encoded = json.dumps(
+        manifest.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+    ).encode()
+    publication_id = hashlib.sha256(encoded).hexdigest()[:16]
+    published = configuration.bridger_root / "published" / publication_id
+    published.mkdir(parents=True)
+    (published / "repository-brain.json").write_bytes(encoded)
+    mark_repository_brain_complete(
+        Path(historical.runtime_root), historical.fleet_run_id, publication_id
+    )
+
+    assert harness.discover_resumable_fleet(configuration, context) == unfinished
+
+
+def test_accepted_recovery_publishes_without_model_work_and_tolerates_token_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    configuration = resolve_init_configuration(InitMode.TEST, repository_root=tmp_path)
+    context = _context(tmp_path)
+    spec = _fleet_spec(configuration, context, "accepted")
+    state = FleetRunState(
+        fleet_run_id=spec.fleet_run_id,
+        target_task_ids=[],
+        phase=FleetPhase.ACCEPTED,
+        accepted_result_ref="accepted-result",
+    )
+    publication = (
+        tmp_path / ".bridger" / "published" / "brain" / "repository-brain.json"
+    )
+    accepted = object()
+    calls: list[str] = []
+
+    class Store:
+        def append_event(self, *_args: object) -> None:
+            pass
+
+    class Recovered:
+        fleet_spec = spec
+        fleet_state = state
+        target_specs: dict[str, object] = {}
+        target_states: dict[str, object] = {}
+        completion_states: dict[str, object] = {}
+        store = Store()
+
+        def close(self) -> None:
+            pass
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("accepted recovery repeated model-driven work")
+
+    monkeypatch.setattr(
+        harness,
+        "load_target_artifacts",
+        lambda _root: (SimpleNamespace(targets=[object()]), []),
+    )
+    monkeypatch.setattr(
+        harness,
+        "_profiles",
+        lambda *_args: (
+            SimpleNamespace(profile_id="worker"),
+            SimpleNamespace(profile_id="reviewer"),
+        ),
+    )
+    monkeypatch.setattr(harness, "recover_fleet", lambda *_args, **_kwargs: Recovered())
+    monkeypatch.setattr(harness, "notify_fleet_initialized", lambda *_args: None)
+    monkeypatch.setattr(
+        harness,
+        "resolve_accepted_memory_fleet_result",
+        lambda _store, ref: accepted if ref == "accepted-result" else forbidden(),
+    )
+
+    def publish(*_args: object, **_kwargs: object) -> Path:
+        calls.append("publish")
+        if len(calls) == 1:
+            raise OSError("publication interrupted")
+        return publication
+
+    monkeypatch.setattr(harness, "publish_repository_brain", publish)
+    monkeypatch.setattr(
+        harness,
+        "persist_token_usage_report",
+        lambda *_args: (_ for _ in ()).throw(OSError("report failed")),
+    )
+    for name in (
+        "bind_memory_run",
+        "initialize_fleet",
+        "create_llm_client_from_profile",
+        "build_graph_overview",
+        "_run_target_batch",
+        "validate_fleet",
+        "reconcile_fleet",
+        "accept_fleet",
+        "prepare_model_layers",
+    ):
+        monkeypatch.setattr(harness, name, forbidden)
+
+    def resume() -> harness.RepositoryBrainModelBuildResult:
+        return asyncio.run(
+            harness.run_memory_harness(
+                configuration,
+                context,
+                SimpleNamespace(),
+                SimpleNamespace(),
+                SimpleNamespace(),
+                LLMProfile(name="test", provider="openai", model="test-model"),
+                SimpleNamespace(),
+                recovery_spec=spec,
+            )
+        )
+
+    with pytest.raises(OSError, match="publication interrupted"):
+        resume()
+    result = resume()
+
+    assert result.publication_path == publication
+    assert result.token_usage_report_path is None
+    assert calls == ["publish", "publish"]
+    assert "report failed" in caplog.text
 
 
 def test_discovery_rejects_multiple_compatible_incomplete_fleets(
@@ -77,6 +227,32 @@ def test_discovery_rejects_multiple_compatible_incomplete_fleets(
         match="multiple compatible incomplete memory fleets",
     ):
         harness.discover_resumable_fleet(configuration, context)
+
+
+def test_discovery_rejects_two_unfinished_accepted_fleets(tmp_path: Path) -> None:
+    configuration = resolve_init_configuration(InitMode.TEST, repository_root=tmp_path)
+    context = _context(tmp_path)
+    for run_id in ("first", "second"):
+        _persist_discovery_state(
+            _fleet_spec(configuration, context, run_id), FleetPhase.ACCEPTED
+        )
+
+    with pytest.raises(
+        RepositoryBrainBuildError, match="multiple compatible incomplete"
+    ):
+        harness.discover_resumable_fleet(configuration, context)
+
+
+def test_fresh_supersedes_previous_incomplete_fleet(tmp_path: Path) -> None:
+    configuration = resolve_init_configuration(InitMode.TEST, repository_root=tmp_path)
+    context = _context(tmp_path)
+    previous = _fleet_spec(configuration, context, "previous")
+    _persist_discovery_state(previous, FleetPhase.RUNNING)
+    supersede_existing_fleets(configuration.bridger_root / "runtime")
+    replacement = _fleet_spec(configuration, context, "replacement")
+    _persist_discovery_state(replacement, FleetPhase.RUNNING)
+
+    assert harness.discover_resumable_fleet(configuration, context) == replacement
 
 
 def test_resume_loads_exact_bound_graph_and_enrichment(
@@ -208,6 +384,7 @@ def test_init_resume_skips_new_graph_enrichment_and_memory_binding(
         "set_current_repository_brain",
         lambda *_args: None,
     )
+    monkeypatch.setattr(init_pipeline, "_mark_publication_complete", lambda _path: None)
 
     result = init_pipeline.build_repository_brain(configuration)
 

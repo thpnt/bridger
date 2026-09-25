@@ -17,6 +17,8 @@ from bridger.graph.lifecycle import validate_graph_snapshot
 from bridger.memory.persistence.store import require_path_segment
 
 _MANIFEST_NAME = "repository-brain.json"
+_COMPLETED_NAME = "repository-brain-complete"
+_SUPERSEDED_NAME = "repository-brain-superseded"
 
 
 def publish_repository_brain(
@@ -74,6 +76,7 @@ def publish_repository_brain(
         with manifest_path.open("rb") as stream:
             os.fsync(stream.fileno())
         staging.replace(destination)
+        _fsync_directory(destination.parent)
     except BaseException:
         if staging.exists():
             for child in staging.iterdir():
@@ -132,6 +135,76 @@ def set_current_repository_brain(
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def clear_current_repository_brain(bridger_root: Path) -> None:
+    """Durably invalidate the selected Brain before a fresh replacement build."""
+    current_path = bridger_root / "current"
+    if current_path.exists() or current_path.is_symlink():
+        current_path.unlink()
+        _fsync_directory(bridger_root)
+
+
+def mark_repository_brain_complete(
+    runtime_root: Path, fleet_run_id: str, publication_id: str
+) -> None:
+    """Record that final promotion completed for a fleet run."""
+    marker = runtime_root / fleet_run_id / _COMPLETED_NAME
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    completed_id = completed_repository_brain_id(runtime_root, fleet_run_id)
+    if completed_id is not None:
+        if completed_id != publication_id:
+            raise ValueError("fleet completion refers to another publication")
+        return
+    _write_durable_marker(marker, f"{publication_id}\n".encode("ascii"))
+
+
+def supersede_existing_fleets(runtime_root: Path) -> None:
+    """Exclude earlier runs from recovery when starting an explicit fresh build."""
+    if not runtime_root.is_dir():
+        return
+    for run_root in runtime_root.iterdir():
+        if (
+            run_root.is_dir()
+            and not run_root.is_symlink()
+            and (run_root / "fleet-spec.json").is_file()
+        ):
+            _write_durable_marker(run_root / _SUPERSEDED_NAME, b"fresh\n")
+
+
+def is_repository_brain_superseded(runtime_root: Path, fleet_run_id: str) -> bool:
+    marker = runtime_root / fleet_run_id / _SUPERSEDED_NAME
+    if not marker.exists():
+        return False
+    if marker.read_bytes() != b"fresh\n":
+        raise ValueError("fleet supersession marker is invalid")
+    return True
+
+
+def _write_durable_marker(marker: Path, content: bytes) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=marker.parent, prefix=f".{marker.name}.", delete=False
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, marker)
+        _fsync_directory(marker.parent)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def completed_repository_brain_id(runtime_root: Path, fleet_run_id: str) -> str | None:
+    marker = runtime_root / fleet_run_id / _COMPLETED_NAME
+    if not marker.exists():
+        return None
+    publication_id = marker.read_text(encoding="ascii").removesuffix("\n")
+    require_path_segment(publication_id, "publication_id")
+    return publication_id
 
 
 def _publication_id_from_path(bridger_root: Path, publication_path: Path) -> str:
